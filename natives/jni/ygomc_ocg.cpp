@@ -121,14 +121,9 @@ bool is_safe_rel(const std::string& s) {
 
 bool read_file(const std::string& path, std::vector<byte>& out) {
     std::ifstream f(path, std::ios::binary | std::ios::ate);
-    if (!f) {
-        std::string hx; char b[8]; for (unsigned char ch : path) { std::snprintf(b, sizeof b, "%02X ", ch); hx += b; }
-        std::fprintf(stderr, "[read_file] OPENFAIL errno=%d len=%zu hex=%s\n", errno, path.size(), hx.c_str());
-        return false; }
+    if (!f) return false;
     std::streamoff n = f.tellg();
-    if (n < 0) { std::fprintf(stderr, "[read_file] TELLGFAIL path=[%s]\n", path.c_str()); return false; }
-    std::fprintf(stderr, "[read_file] OK n=%lld path=[%s]\n", (long long)n, path.c_str());
-    { std::string hx; char b[8]; for (unsigned char ch : path) { std::snprintf(b, sizeof b, "%02X ", ch); hx += b; } std::fprintf(stderr, "[read_file] HEX %s\n", hx.c_str()); }
+    if (n < 0) return false;
     f.seekg(0, std::ios::beg);
     out.resize(static_cast<size_t>(n));
     if (n > 0 && !f.read(reinterpret_cast<char*>(out.data()), n)) {
@@ -173,7 +168,6 @@ byte* cb_read_script(const char* name, int* out_len) {
     }
 
     g_script_miss.fetch_add(1, std::memory_order_relaxed);
-    std::fprintf(stderr, "[cb_read_script] MISS rel=%s path=%s\n", rel.c_str(), path.c_str());
     g_scripts.emplace(rel, std::vector<byte>{});    // 记住不存在，避免反复打盘
     return nullptr;
 }

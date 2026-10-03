@@ -421,12 +421,25 @@ public final class MsgCodec {
     }
 
     /**
-     * {@code MSG_CONFIRM_DECKTOP} / {@code MSG_CONFIRM_EXTRATOP} / {@code MSG_CONFIRM_CARDS}
-     * 三者布局相同：{@code u8 player, u8 skipPanel, u8 count, count × (u32 code, u8 + u8 + u8)}。
+     * {@code MSG_CONFIRM_DECKTOP} / {@code MSG_CONFIRM_EXTRATOP} / {@code MSG_CONFIRM_CARDS}。
+     *
+     * <p><b>三者的版式并不相同</b>，差别就在那个 {@code skipPanel} 字节：
+     * <ul>
+     *   <li>{@code MSG_CONFIRM_DECKTOP}（{@code libduel.cpp:1008-1015}）：
+     *       {@code u8 player, u8 count, count × (u32 code, u8 + u8 + u8)} —— <b>没有 skipPanel</b>；</li>
+     *   <li>{@code MSG_CONFIRM_EXTRATOP}（{@code libduel.cpp:1030-1038}）：同上，<b>没有 skipPanel</b>；</li>
+     *   <li>{@code MSG_CONFIRM_CARDS}（{@code libduel.cpp:1067-1072}）：
+     *       {@code u8 player, u8 skipPanel, u8 count, count × (...)} —— 只有它有。</li>
+     * </ul>
+     *
+     * <p>把三者当成同一种版式，会把 {@code count} 误读成 {@code skipPanel}，
+     * 再拿紧随其后的第一个卡号低字节当数量，于是读出个位数倍于真实长度的候选表，
+     * 直接把缓冲区读穿。实测量：{@code CONFIRM_DECKTOP} 的
+     * {@code 1E 00 03 ...}(count=3) 被读成 count=7，随即越界。
      */
     private static Msg decodeConfirmCards(Cursor c, int t) {
         int player = c.u8("player");
-        int skipPanel = c.u8("skipPanel");
+        int skipPanel = (t == MsgType.CONFIRM_CARDS) ? c.u8("skipPanel") : 0;
         Msg.CardEntry[] cards = c.cardEntries("cards");
         int len = c.position() - c.messageOffset();
         return switch (t) {
