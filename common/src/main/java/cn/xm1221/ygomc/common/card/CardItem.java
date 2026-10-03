@@ -1,11 +1,15 @@
 package cn.xm1221.ygomc.common.card;
 
+import cn.xm1221.ygomc.common.data.CardDataDb;
+import cn.xm1221.ygomc.common.data.DataPacks;
+import net.minecraft.ChatFormatting;
 import net.minecraft.core.component.DataComponentType;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.TooltipFlag;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -62,25 +66,167 @@ public class CardItem extends Item {
     }
 
     /**
-     * 卡牌的名称由数据包解析出来的卡名决定，而不是物品的固定译名。
+     * 卡牌的名称来自数据包，而不是物品的固定译名。
      *
-     * <p>现在还没有加载数据包（M3 做），所以先返回默认名，
-     * 让物品在创造模式里至少看得出是什么。
+     * <p>这正是「一个物品 + 数据组件区分全部卡」这个决策能成立的原因：
+     * 一万五千多张卡不需要一万五千多个物品，它们的区别只在于组件里的卡号，
+     * 而名字、卡文、卡图都能由卡号反查出来。
+     *
+     * <p>查不到时回落到 {@code super.getName}，而不是抛异常或显示空串。
+     * 原因：数据包缺失是<b>预期情况</b>（卡图与卡文有版权，不随模组分发），
+     * 这时应当看到一个能认出来的兜底名，而不是一个崩服或者一片空白。
      */
-    // TODO(M3): 接入 CardTextDb，按 CardRef.cardCode 返回真实卡名；
-    //           译名缺失时回落到 cdb 里的原始名，再回落到默认名。
     @Override
     public Component getName(ItemStack stack) {
+        CardRef ref = ref(stack);
+        if (ref != null) {
+            String name = DataPacks.get().nameOf(ref.cardCode());
+            if (name != null && !name.isBlank()) {
+                return Component.literal(name);
+            }
+        }
         return super.getName(stack);
     }
 
     /**
-     * 悬停提示：以后要把卡文（效果文本）以及稀有度/异画信息放在这里。
+     * 悬停提示：稀有度、数值、卡文。
+     *
+     * <p>卡文是<b>在这里手工折行</b>的，而不是交给客户端。原因：
+     * 按像素宽度折行要用 {@code Minecraft.getInstance().font}，那是个客户端专属类，
+     * 在公共代码里引用它会让专用服务器在类加载阶段崩掉。而按「显示宽度」折行
+     * （CJK 记 2 列、其余记 1 列）不需要任何客户端类，服务端也能算，
+     * 结果与游戏内实际渲染相差很小。
+     *
+     * <p>换行要同时处理 {@code \n} 与 cdb 里常见的 {@code \r}——后者如果漏掉，
+     * 会在提示里渲染成一个方块。
      */
-    // TODO(M3): 追加卡文（按行折行）、稀有度档位、异画版本；数据缺失时给出可诊断的提示。
     @Override
     public void appendHoverText(ItemStack stack, TooltipContext context, List<Component> tooltip, TooltipFlag flag) {
         super.appendHoverText(stack, context, tooltip, flag);
+
+        CardRef ref = ref(stack);
+        if (ref == null) {
+            return;
+        }
+        int code = ref.cardCode();
+
+        // 稀有度与异画版本只在非默认值时才显示，免得每张卡都挂一行废话。
+        if (ref.rarity() != CardRarity.COMMON) {
+            tooltip.add(Component.literal("稀有度：" + ref.rarity().getSerializedName())
+                    .withStyle(ChatFormatting.GOLD));
+        }
+        if (ref.variant() != 0) {
+            tooltip.add(Component.literal("异画版本 " + ref.variant())
+                    .withStyle(ChatFormatting.LIGHT_PURPLE));
+        }
+
+        String stats = describeStats(code);
+        if (stats != null) {
+            tooltip.add(Component.literal(stats).withStyle(ChatFormatting.GRAY));
+        }
+
+        String desc = DataPacks.get().descOf(code);
+        if (desc == null || desc.isBlank()) {
+            // 区分「卡不存在」和「卡存在但没有卡文」——两者的处理方式完全不同。
+            boolean known = DataPacks.get().statsOf(code) != null;
+            tooltip.add(Component.literal(known ? "（数据包里没有这张卡的卡文）"
+                            : "（数据包里找不到卡号 " + code + "）")
+                    .withStyle(ChatFormatting.DARK_GRAY, ChatFormatting.ITALIC));
+            return;
+        }
+        for (String line : wrap(desc, DESC_WIDTH)) {
+            tooltip.add(Component.literal(line).withStyle(ChatFormatting.DARK_GRAY));
+        }
+    }
+
+    /** 卡文折行宽度（显示列数）。大约是一行中文 24 字。 */
+    private static final int DESC_WIDTH = 48;
+
+    /** 数值行。魔法/陷阱没有攻防与等级，就不显示这一行。 */
+    private static String describeStats(int code) {
+        CardDataDb.Stats s = DataPacks.get().statsOf(code);
+        if (s == null) {
+            return null;
+        }
+        int type = s.type();
+        if ((type & CardDataDb.CardTypes.TYPE_MONSTER) == 0) {
+            return (type & CardDataDb.CardTypes.TYPE_SPELL) != 0 ? "魔法卡" : "陷阱卡";
+        }
+        StringBuilder sb = new StringBuilder();
+        if ((type & CardDataDb.CardTypes.TYPE_XYZ) != 0) {
+            sb.append("阶级 ").append(s.level());
+        } else if ((type & CardDataDb.CardTypes.TYPE_LINK) != 0) {
+            // 连接怪兽没有等级也没有守备力，用 LINK 值代替
+            sb.append("连接 ").append(s.level()).append("    ATK ").append(s.attack());
+            return sb.toString();
+        } else {
+            sb.append("等级 ").append(s.level());
+        }
+        return sb.append("    ATK ").append(s.attack())
+                .append(" / DEF ").append(s.defense()).toString();
+    }
+
+    /**
+     * 按显示宽度折行。
+     *
+     * <p>先按已有换行符切段，再对每段按宽度切。刻意<b>不</b>在单词中间断开——
+     * 英文卡文里断在词中间很难读，所以放不下时回退到最后一个空格；
+     * 找不到空格（例如一长串中文）才硬断。
+     */
+    private static List<String> wrap(String text, int width) {
+        List<String> out = new ArrayList<>();
+        for (String paragraph : text.split("\\r\\n|\\r|\\n")) {
+            String rest = paragraph.trim();
+            while (displayWidth(rest) > width) {
+                int cut = Math.max(1, fitIndex(rest, width));
+                out.add(rest.substring(0, cut).stripTrailing());
+                rest = rest.substring(cut).stripLeading();
+            }
+            if (!rest.isEmpty()) {
+                out.add(rest);
+            }
+        }
+        return out;
+    }
+
+    /** 最多能放下多少个字符；能退到空格就退，避免劈开英文单词。 */
+    private static int fitIndex(String s, int width) {
+        int used = 0;
+        int lastSpace = -1;
+        for (int i = 0; i < s.length(); i++) {
+            int w = charWidth(s.charAt(i));
+            if (used + w > width) {
+                return lastSpace > 0 ? lastSpace : i;
+            }
+            used += w;
+            if (s.charAt(i) == ' ') {
+                lastSpace = i;
+            }
+        }
+        return s.length();
+    }
+
+    private static int displayWidth(String s) {
+        int w = 0;
+        for (int i = 0; i < s.length(); i++) {
+            w += charWidth(s.charAt(i));
+        }
+        return w;
+    }
+
+    /** CJK 与全角标点占两列，其余占一列。够用，且不需要客户端字体。 */
+    private static int charWidth(char c) {
+        if (c < 0x1100) {
+            return 1;
+        }
+        boolean wide = (c <= 0x115F)                    // 韩文字母
+                || (c >= 0x2E80 && c <= 0xA4CF)         // CJK 部首、假名、汉字
+                || (c >= 0xAC00 && c <= 0xD7A3)         // 谚文音节
+                || (c >= 0xF900 && c <= 0xFAFF)         // CJK 兼容汉字
+                || (c >= 0xFE30 && c <= 0xFE6F)         // CJK 兼容形式
+                || (c >= 0xFF00 && c <= 0xFF60)         // 全角
+                || (c >= 0xFFE0 && c <= 0xFFE6);
+        return wide ? 2 : 1;
     }
 
     // 卡牌本身没有右键行为：对局交互走决斗盘/决斗台，开包走卡包物品。
