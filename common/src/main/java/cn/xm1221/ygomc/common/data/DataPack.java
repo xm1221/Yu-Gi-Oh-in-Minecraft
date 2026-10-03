@@ -42,11 +42,43 @@ import java.util.List;
  * <p>所以本类<b>不做任何 alias 重定向</b>：{@link #nameOf} / {@link #descOf} /
  * {@link #imageOf} 全部直接用调用方给的卡号。全库只有 2 张卡（19144623 妖精王子、
  * 77571455 不明）确实没有卡图，渲染端对它们回退到通用卡背即可。
+ *
+ * <h2>数据包放在哪儿：不能相对「当前工作目录」找</h2>
+ * 原先这里写的是 {@code Path.of("local-data/datapack")}，那在命令行工具里能用，
+ * 在 Minecraft 里<b>必然找不到</b>——游戏的工作目录是<b>实例目录</b>，
+ * 不是项目根：
+ * <ul>
+ *   <li>开发环境跑 {@code :neoforge:runServer} 时，工作目录是
+ *       {@code <项目根>/neoforge/run/}（Fabric 侧同理）；</li>
+ *   <li>正式环境是用户自己的 {@code .minecraft} 或服务端目录，离项目根更远。</li>
+ * </ul>
+ * 所以相对路径必须相对于<b>游戏目录</b>来解析，而且要为「开发时数据在项目里、
+ * 发布后数据在游戏目录里」这两种完全不同的布局都留位置。
+ *
+ * <p>查找顺序见 {@link #candidates}：显式属性 → {@code <游戏目录>/ygomc/datapack}
+ * → 从游戏目录逐级向上找 {@code local-data/datapack}（开发用，能命中项目根）。
+ * 都没找到时会把<b>找过的每一个位置</b>都列进 {@link #problems()}——
+ * 只报「目录不存在」而不说找过哪儿，用户根本不知道该把文件放哪。
  */
 public final class DataPack implements Closeable {
 
-    /** 数据包默认位置（相对仓库根/工作目录）。该目录已被 .gitignore 挡掉。 */
-    public static final String DEFAULT_DIR = "local-data/datapack";
+    /**
+     * 显式指定数据包目录的系统属性：{@code -Dygomc.datapack=<目录>}。
+     *
+     * <p>一旦设置就<b>只用它</b>，不再回退到别的位置：用户明确写了路径却写错时，
+     * 应当立刻看到错误，而不是被「恰好还有个默认位置能打开」掩盖过去。
+     */
+    public static final String PROPERTY = "ygomc.datapack";
+
+    /** 正式位置：游戏目录下的 {@code ygomc/datapack}。 */
+    public static final String NESTED_DIR = "ygomc/datapack";
+
+    /** 开发位置：项目根下的 {@code local-data/datapack}（已被 .gitignore 挡掉）。 */
+    public static final String DEV_DIR = "local-data/datapack";
+
+    /** 从游戏目录向上回溯的层数。开发时游戏目录是 {@code <项目根>/neoforge/run}，需要 2 层。 */
+    private static final int DEV_WALK_UP = 3;
+
 
     private final Path dir;
     private final CardDataDb cardData;
@@ -87,9 +119,56 @@ public final class DataPack implements Closeable {
         return new DataPack(dir, data, text, images, problems);
     }
 
-    /** 打开默认位置。 */
-    public static DataPack openDefault() {
-        return open(Path.of(DEFAULT_DIR));
+    /**
+     * 按顺序列出所有可能的数据包位置。
+     *
+     * <p>设置过 {@link #PROPERTY} 时只返回那一个位置（原因见该常量的注释）。
+     *
+     * <p>本方法<b>不碰文件系统</b>，只做路径拼接，因此可以脱离 Minecraft 单独测试。
+     * 需要游戏目录的调用方传 {@code dev.architectury.platform.Platform.getGameFolder()}。
+     *
+     * @param gameDir 游戏实例目录（开发时是 {@code <项目根>/<平台>/run}）
+     */
+    public static List<Path> candidates(Path gameDir) {
+        String override = System.getProperty(PROPERTY);
+        if (override != null && !override.isBlank()) {
+            return List.of(Path.of(override).toAbsolutePath().normalize());
+        }
+
+        List<Path> out = new ArrayList<>();
+        Path dir = gameDir.toAbsolutePath().normalize();
+        out.add(dir.resolve(NESTED_DIR));
+
+        // 从游戏目录逐级向上找开发用的 local-data/datapack。
+        // 上限是必要的：否则一个放在盘符根附近的实例会让这里一路走到 C:\ 再往上。
+        for (int up = 0; up <= DEV_WALK_UP && dir != null; up++) {
+            out.add(dir.resolve(DEV_DIR));
+            dir = dir.getParent();
+        }
+        return out;
+    }
+
+    /**
+     * 从 {@link #candidates} 里挑第一个真正存在的目录打开。
+     *
+     * <p>一个都不存在时返回一个空的实例，{@link #problems()} 里会列出<b>找过的每个位置</b>
+     * 和生成数据包的命令。
+     */
+    public static DataPack openDefault(Path gameDir) {
+        List<Path> candidates = candidates(gameDir);
+        for (Path c : candidates) {
+            if (Files.isDirectory(c)) {
+                return open(c);
+            }
+        }
+
+        StringBuilder sb = new StringBuilder("找不到数据包目录，已依次查找:");
+        for (Path c : candidates) {
+            sb.append("\n  - ").append(c);
+        }
+        sb.append("\n请运行 tools/mkdatapack.py 与 tools/mkpics.py 生成，")
+                .append("或用 -D").append(PROPERTY).append("=<目录> 指定。");
+        return new DataPack(candidates.get(0), null, null, null, List.of(sb.toString()));
     }
 
     private interface Loader<T> {

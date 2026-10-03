@@ -11,3 +11,24 @@ dependencies {
     // Architectury API. This is optional, and you can comment it out if you don't need it.
     modImplementation "dev.architectury:architectury:$rootProject.architectury_api_version"
 }
+
+// ── 原生库打包 ────────────────────────────────────────────────────────────
+// ocgcore 是 C++ 规则引擎，没有原生动态库就跑不起来。这两个 DLL 都是构建产物
+// （natives/build/ 与 natives/vendor/ocgcore/build/ 都被 .gitignore 挡掉），
+// 所以全新 clone 里可能还没有：那种情况下**只是不打包**，让其余模块照常编译，
+// 等 natives 构建好之后再跑一次 Gradle 即可。
+// 运行时由 cn.xm1221.ygomc.common.ocg.Natives 从这些资源里解出来再 System.load。
+def nativeLibs = [
+        'ocgcore.dll'  : file("${rootProject.projectDir}/natives/vendor/ocgcore/build/bin/x64/Release/ocgcore.dll"),
+        'ygomc_ocg.dll': file("${rootProject.projectDir}/natives/build/Release/ygomc_ocg.dll"),
+]
+
+tasks.named('processResources') {
+    nativeLibs.each { name, dll ->
+        if (dll.exists()) {
+            from(dll) { into 'ygomc/natives/win-x64' }
+        } else {
+            logger.warn("ygomc: 找不到原生库 {}，本次不打包（先构建 natives 再重跑）", dll)
+        }
+    }
+}

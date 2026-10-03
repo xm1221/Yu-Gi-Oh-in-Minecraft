@@ -1,6 +1,10 @@
 package cn.xm1221.ygomc.common;
 
 import cn.xm1221.ygomc.common.card.CardComponents;
+import cn.xm1221.ygomc.common.command.YgomcCommand;
+import cn.xm1221.ygomc.common.data.DataPacks;
+import cn.xm1221.ygomc.common.ocg.Natives;
+import cn.xm1221.ygomc.common.ocg.OcgEngine;
 import cn.xm1221.ygomc.common.registry.YgomcBlocks;
 import cn.xm1221.ygomc.common.registry.YgomcItems;
 import cn.xm1221.ygomc.common.registry.YgomcTabs;
@@ -54,5 +58,19 @@ public final class Ygomc {
         YgomcItems.init();
         YgomcTabs.init();
         LOGGER.info("ygomc：内容登记完成");
+
+        // 命令要在注册表之后登记：它本身不动注册表，但玩家可能立刻就敲 /ygomc。
+        YgomcCommand.init();
+
+        // 数据包不是加载的前提（缺文件是正常情况），这里只是让状态在日志里可见。
+        DataPacks.init();
+
+        // 原生库同理：缺了也能进游戏，只是开不了局。提前加载是为了让失败原因
+        // 出现在启动日志里，而不是等玩家点了「开始决斗」才报错。
+        Natives.init();
+
+        // 引擎装配是「原生库 → 脚本根 → 卡表」三步，成功会把卡张数与脚本根写进日志，
+        // 失败只记日志不抛——缺 Lua 脚本是预期情况（脚本是 GPLv2，不能随模组分发）。
+        OcgEngine.prepare();
     }
 }

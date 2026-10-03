@@ -121,9 +121,14 @@ bool is_safe_rel(const std::string& s) {
 
 bool read_file(const std::string& path, std::vector<byte>& out) {
     std::ifstream f(path, std::ios::binary | std::ios::ate);
-    if (!f) return false;
+    if (!f) {
+        std::string hx; char b[8]; for (unsigned char ch : path) { std::snprintf(b, sizeof b, "%02X ", ch); hx += b; }
+        std::fprintf(stderr, "[read_file] OPENFAIL errno=%d len=%zu hex=%s\n", errno, path.size(), hx.c_str());
+        return false; }
     std::streamoff n = f.tellg();
-    if (n < 0) return false;
+    if (n < 0) { std::fprintf(stderr, "[read_file] TELLGFAIL path=[%s]\n", path.c_str()); return false; }
+    std::fprintf(stderr, "[read_file] OK n=%lld path=[%s]\n", (long long)n, path.c_str());
+    { std::string hx; char b[8]; for (unsigned char ch : path) { std::snprintf(b, sizeof b, "%02X ", ch); hx += b; } std::fprintf(stderr, "[read_file] HEX %s\n", hx.c_str()); }
     f.seekg(0, std::ios::beg);
     out.resize(static_cast<size_t>(n));
     if (n > 0 && !f.read(reinterpret_cast<char*>(out.data()), n)) {
@@ -168,6 +173,7 @@ byte* cb_read_script(const char* name, int* out_len) {
     }
 
     g_script_miss.fetch_add(1, std::memory_order_relaxed);
+    std::fprintf(stderr, "[cb_read_script] MISS rel=%s path=%s\n", rel.c_str(), path.c_str());
     g_scripts.emplace(rel, std::vector<byte>{});    // 记住不存在，避免反复打盘
     return nullptr;
 }
@@ -551,18 +557,37 @@ const JNINativeMethod kMethods[] = {
     {const_cast<char*>("clearErrors"),    const_cast<char*>("()V"),                    reinterpret_cast<void*>(j_clearErrors)},
     {const_cast<char*>("buildInfo"),      const_cast<char*>("()Ljava/lang/String;"),   reinterpret_cast<void*>(j_buildInfo)},
 };
-constexpr char kClassName[] = "cn/xm1221/ygomc/ocg/Ocg";
+
+// 这个字符串必须与 Java 侧 cn.xm1221.ygomc.common.ocg.Ocg 的包名逐字一致。
+// JNI 的 RegisterNatives 是按「类的二进制名」找类的，改 Java 包名而不同步改这里，
+// 症状是启动时抛 NoClassDefFoundError: cn/xm1221/ygomc/... —— 看起来像缺 class 文件，
+// 实际是原生库找不到宿主类。注意：这里的包名是 .../ygomc/common/ocg/Ocg。
+constexpr char kClassName[] = "cn/xm1221/ygomc/common/ocg/Ocg";
 }  // namespace
 
 JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
     JNIEnv* env = nullptr;
     if (vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_8) != JNI_OK || !env) {
+        std::fprintf(stderr, "[ygomc_ocg] JNI_OnLoad: GetEnv 失败\n");
         return JNI_ERR;
     }
     jclass cls = env->FindClass(kClassName);
-    if (!cls) return JNI_ERR;
+    if (!cls) {
+        // 这里刻意打印完整类名：JNI_ERR 会让 Java 侧把它包装成一个极难定位的
+        // NoClassDefFoundError，而真正的原因（包名不一致 / 原生库版本与 jar 不配套）
+        // 只有在这一行里才看得出来。
+        std::fprintf(stderr,
+                     "[ygomc_ocg] JNI_OnLoad: 找不到宿主类 \"%s\"。"
+                     "请确认 natives/jni/ygomc_ocg.cpp 的 kClassName 与 Java 侧 Ocg 的包名一致，"
+                     "且原生库是用当前代码重新构建的。\n",
+                     kClassName);
+        return JNI_ERR;
+    }
     const jint rc = env->RegisterNatives(
         cls, kMethods, static_cast<jint>(sizeof(kMethods) / sizeof(kMethods[0])));
-    if (rc != JNI_OK) return JNI_ERR;
+    if (rc != JNI_OK) {
+        std::fprintf(stderr, "[ygomc_ocg] RegisterNatives 失败 (rc=%d)\n", static_cast<int>(rc));
+        return JNI_ERR;
+    }
     return JNI_VERSION_1_8;
 }

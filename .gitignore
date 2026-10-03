@@ -43,6 +43,12 @@ natives/vendor/ocgcore/build/
 .eclipse/
 bin/
 
+# ── JVM 崩溃日志 ──
+# 调原生库时经常要强杀被 fork 出来的游戏进程，JVM 会往工作目录丢 hs_err_pid*.log。
+# 这些是诊断线索，但属于一次性的本地产物，不入库。
+hs_err_pid*.log
+replay_pid*.log
+
 # ── 操作系统 ──
 Thumbs.db
 Desktop.ini
