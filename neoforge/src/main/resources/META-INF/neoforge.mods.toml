@@ -1,15 +1,15 @@
 modLoader = "javafml"
 loaderVersion = "[4,)"
 #issueTrackerURL = ""
-license = "Insert License Here"
+license = "GPL-3.0-or-later"
 
 [[mods]]
 modId = "ygomc"
 version = "${version}"
 displayName = "Yu-Gi-Oh in Minecraft"
-authors = "Me!"
+authors = "xm1221"
 description = '''
-This is an example description! Tell everyone what your mod is about!
+在 Minecraft 里打游戏王：ocgcore 引擎驱动的对局、卡牌与组卡。
 '''
 #logoFile = ""
 

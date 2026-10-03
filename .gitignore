@@ -20,6 +20,17 @@ natives/**/*.ilk
 natives/**/*.exp
 natives/**/*.lib
 
+# premake 生成的 VS 工程：可随时用 premake5 重新生成，不入库
+natives/vendor/ocgcore/build/
+
+# 链接器默认会把导入库/导出文件写到当前工作目录；渲染兜底，
+# 防止构建时又在仓库根留下 *.exp / *.lib
+/*.exp
+/*.lib
+/*.obj
+/*.dll
+/*.pdb
+
 # ── IDE ──
 .idea/
 *.iml

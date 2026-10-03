@@ -3,23 +3,20 @@
   "id": "ygomc",
   "version": "${version}",
   "name": "Yu-Gi-Oh in Minecraft",
-  "description": "This is an example description! Tell everyone what your mod is about!",
+  "description": "在 Minecraft 里打游戏王：ocgcore 引擎驱动的对局、卡牌与组卡。",
   "authors": [
-    "Me!"
+    "xm1221"
   ],
-  "contact": {
-    "homepage": "https://fabricmc.net/",
-    "sources": "https://github.com/FabricMC/fabric-example-mod"
-  },
-  "license": "CC0-1.0",
+  "contact": {},
+  "license": "GPL-3.0-or-later",
   "icon": "assets/ygomc/icon.png",
   "environment": "*",
   "entrypoints": {
     "main": [
-      "cn.xm1221.fabric.ExampleModFabric"
+      "cn.xm1221.ygomc.YgomcFabric"
     ],
     "client": [
-      "cn.xm1221.fabric.client.ExampleModFabricClient"
+      "cn.xm1221.ygomc.client.YgomcFabricClient"
     ]
   },
   "mixins": [

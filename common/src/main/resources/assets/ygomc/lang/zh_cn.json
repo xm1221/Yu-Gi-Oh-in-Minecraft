@@ -1,0 +1,9 @@
+{
+  "itemGroup.ygomc.main": "游戏王",
+  "item.ygomc.card": "卡片",
+  "item.ygomc.duel_disk": "决斗盘",
+  "item.ygomc.deck_box": "卡组盒",
+  "item.ygomc.card_pack": "卡包",
+  "item.ygomc.card_binder": "卡册",
+  "block.ygomc.duel_table": "决斗台"
+}

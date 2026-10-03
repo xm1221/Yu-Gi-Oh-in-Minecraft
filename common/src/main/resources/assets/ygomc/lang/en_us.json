@@ -1,0 +1,9 @@
+{
+  "itemGroup.ygomc.main": "Yu-Gi-Oh",
+  "item.ygomc.card": "Card",
+  "item.ygomc.duel_disk": "Duel Disk",
+  "item.ygomc.deck_box": "Deck Box",
+  "item.ygomc.card_pack": "Card Pack",
+  "item.ygomc.card_binder": "Card Binder",
+  "block.ygomc.duel_table": "Duel Table"
+}

@@ -1,6 +1,12 @@
 /.vscode/
 /build/
-/lua/
 /temp/
 /premake-5/
 /premake5.exe
+
+# 与上游不同的一处：上游把 /lua/ 也忽略了（它假定 Lua 需要另外去取）。
+# 本项目**故意**把 vendored 的 Lua 源码纳入版本控制，原因有二：
+#   1. Lua 是被静态链接进 ocgcore.dll 一起分发的，MIT 要求随分发保留版权声明，
+#      忽略掉它就等于把版权声明从仓库里拿掉了；
+#   2. 忽略掉它就没法从仓库重建出 ocgcore.dll。
+# 因此这里不再忽略 /lua/。详见 natives/vendor/VENDOR.md。
