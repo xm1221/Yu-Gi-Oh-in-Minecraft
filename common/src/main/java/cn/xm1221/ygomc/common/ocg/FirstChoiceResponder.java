@@ -15,12 +15,14 @@ import cn.xm1221.ygomc.common.ocg.msg.MsgType;
  * <p>所以这里每个分支都优先读消息里带的「合法范围」，而不是写死常量：
  * 选址读禁止位掩码、表示形式读允许位、宣言读可选集合、进阶段先看该阶段是否允许。
  *
- * <h2>哪些分支是对着真实流验证过的</h2>
- * 已由 {@code .agent/m1} 的两条录制流回放验证过的询问类型只有
- * {@code SELECT_IDLECMD} / {@code SELECT_BATTLECMD} / {@code SELECT_CHAIN} /
- * {@code SELECT_CARD} / {@code SELECT_PLACE} / {@code SELECT_POSITION} /
- * {@code SELECT_OPTION} 这几种（见 {@code .agent/reference/08-codec-coverage.md}）。
- * 其余分支是按内核语义推出来的，尚未被真实流触发过，代码里逐条标注了。
+ * <h2>哪些分支是被真实对局触发过的</h2>
+ * 用内置的 40 张相同卡只能碰到十来种询问。换成卡组目录里的<b>真实卡组</b>之后，
+ * 一局就走到 33 种消息类型（{@code CHAINING}/{@code CHAIN_SOLVING}/{@code SPSUMMONING}/
+ * {@code BECOME_TARGET}/{@code SHUFFLE_HAND}/{@code CARD_HINT}/{@code CONFIRM_CARDS} 等
+ * 内置卡组从没触发过）。所以「自检用真实卡组」不只是好看——它是这套策略的覆盖面测试。
+ *
+ * <p>尚未被触发过的分支每个都在下面单独标注了。一旦某个分支第一次被触发，
+ * 应当回到这里把标注去掉，并说明是哪一局触发的。
  */
 public final class FirstChoiceResponder implements Responder {
 
@@ -61,6 +63,7 @@ public final class FirstChoiceResponder implements Responder {
             case Msg.SelectPosition m -> Response.of(firstPosition(m));
             case Msg.SelectCard m -> selectCards(m);
             case Msg.SelectTribute m -> selectTributes(m);
+            case Msg.SelectUnselectCard m -> selectUnselectCard(m);
             case Msg.SelectPlace m -> selectPlaces(m);
             case Msg.AnnounceRace m -> Response.of(lowestBit(m.available()));
             case Msg.AnnounceAttrib m -> Response.of(lowestBit(m.available()));
@@ -166,6 +169,34 @@ public final class FirstChoiceResponder implements Responder {
             return Response.of(-1);
         }
         return Response.of(prefixIndices(m.min(), count));
+    }
+
+    /**
+     * 「选一些、取消选一些」的询问（内核 {@code playerop.cpp:284-332}）。
+     *
+     * <h2>下标是两个列表合并后算的</h2>
+     * 消息里带 select 与 unselect 两张表，而应答的下标在<b>合并列表</b>里取：
+     * 小于 {@code selectCount} 落到 select 表，否则落到 unselect 表
+     * （{@code libgroup.cpp:319-323} 就是这么分的）。所以下标 0 永远是 select 表的第一张。
+     *
+     * <h2>min/max 是给人看的，内核只认「恰好 1 个」</h2>
+     * 消息里的 {@code min}/{@code max} 看起来像「要选几个」，但内核的校验是
+     * {@code check_response(total, 1, 1)}——<b>写死的 1 到 1</b>。多回一个下标就会被
+     * {@code MSG_RETRY} 打回。也就是说这两个字段只是给客户端做进度提示用的，
+     * 真正的「选够几个」由 Lua 脚本自己循环调用若干次来实现。
+     * 照 {@code min}/{@code max} 去回多个下标是个很难查的错。
+     *
+     * <p>{@code -1}（取消/结束）只在 {@code finishable}/{@code cancelable} 为真时被接受，
+     * 否则同样是 {@code MSG_RETRY}。
+     */
+    private static Response selectUnselectCard(Msg.SelectUnselectCard m) {
+        int total = m.selectCount() + m.unselectCount();
+        if (total == 0) {
+            // 走不到这里：内核在 step 0 发现两张表都空时会直接返回 TRUE，不发这条消息。
+            // 留着是为了万一哪天内核改了，得到一个明确的结果而不是越界。
+            return Response.of(-1);
+        }
+        return Response.of(prefixIndices(1, total));
     }
 
     /**

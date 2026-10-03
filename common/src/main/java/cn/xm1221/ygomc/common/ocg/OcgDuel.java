@@ -83,7 +83,7 @@ public final class OcgDuel implements AutoCloseable {
     }
 
     /**
-     * 给某一方灌卡组。必须在 {@link #start()} 之前。
+     * 给某一方灌主卡组。必须在 {@link #start()} 之前。
      *
      * <p>卡号必须已经在 {@link OcgEngine} 里灌过；未知卡号不会崩，但那张卡在
      * 对局里没有效果也没有数值（内核会按全零处理）。
@@ -92,6 +92,21 @@ public final class OcgDuel implements AutoCloseable {
         requireNotStarted("灌卡组");
         for (int code : codes) {
             Ocg.newCard(handle, code, player, player, Ocg.LOCATION_DECK, 0, Ocg.POS_FACEDOWN_DEFENSE);
+        }
+        return this;
+    }
+
+    /**
+     * 给某一方灌额外卡组。必须在 {@link #start()} 之前。
+     *
+     * <p>额外卡组必须用 {@link Ocg#LOCATION_EXTRA} 单独灌，不能混进主卡组——
+     * 融合/同调/超量/连接怪兽只有在额外卡组里才能被特殊召唤，
+     * 混进主卡组的话它们会变成「抽得到、永远出不来」的死牌。
+     */
+    public OcgDuel addExtraDeck(int player, int[] codes) {
+        requireNotStarted("灌额外卡组");
+        for (int code : codes) {
+            Ocg.newCard(handle, code, player, player, Ocg.LOCATION_EXTRA, 0, Ocg.POS_FACEDOWN_DEFENSE);
         }
         return this;
     }
@@ -216,17 +231,39 @@ public final class OcgDuel implements AutoCloseable {
     public static final int DEFAULT_MAX_STEPS = 200_000;
 
     /**
+     * 一方要用的牌。主卡组与额外卡组必须分开给——额外卡组要灌进
+     * {@link Ocg#LOCATION_EXTRA}，混进主卡组会让那些卡永远无法出场。
+     *
+     * @param main  主卡组卡号
+     * @param extra 额外卡组卡号；没有就给空数组
+     */
+    public record DeckLoadout(int[] main, int[] extra) {
+
+        public DeckLoadout {
+            main = main.clone();
+            extra = extra.clone();
+        }
+
+        /** 只有主卡组。 */
+        public static DeckLoadout of(int[] main) {
+            return new DeckLoadout(main, new int[0]);
+        }
+    }
+
+    /**
      * 用给定策略把一局跑到底。<b>会阻塞当前线程</b>。
      *
-     * @param decks {@code decks[0]} 是先手方的卡组，{@code decks[1]} 是后手方
+     * @param decks {@code decks[0]} 是先手方的牌，{@code decks[1]} 是后手方
      */
-    public static Outcome playOut(int[] seeds, int[][] decks, Responder responder, int maxSteps) {
+    public static Outcome playOut(int[] seeds, DeckLoadout[] decks, Responder responder, int maxSteps) {
         Map<Integer, Integer> counts = new LinkedHashMap<>();
         int steps = 0;
         int queries = 0;
         try (OcgDuel duel = OcgDuel.create(seeds)) {
-            duel.addDeck(0, decks[0]);
-            duel.addDeck(1, decks[1]);
+            duel.addDeck(0, decks[0].main());
+            duel.addExtraDeck(0, decks[0].extra());
+            duel.addDeck(1, decks[1].main());
+            duel.addExtraDeck(1, decks[1].extra());
             duel.start();
 
             int winner = -1;
@@ -236,6 +273,11 @@ public final class OcgDuel implements AutoCloseable {
             int repeatStreak = 0;
 
             while (steps++ < maxSteps && winner < 0) {
+                // 内核自己不响应中断，所以「中止」只能落在消息边界上——
+                // DuelSession.abort() 打的中断标记就是靠这一句生效的。
+                if (Thread.currentThread().isInterrupted()) {
+                    return new Outcome(-1, -1, steps, queries, counts, "被中止");
+                }
                 Step step = duel.advance();
                 for (Msg m : step.messages()) {
                     counts.merge(m.type(), 1, Integer::sum);

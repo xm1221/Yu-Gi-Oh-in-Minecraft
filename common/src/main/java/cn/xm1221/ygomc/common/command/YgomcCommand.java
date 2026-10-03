@@ -1,12 +1,18 @@
 package cn.xm1221.ygomc.common.command;
 
+import cn.xm1221.ygomc.common.card.DeckData;
 import cn.xm1221.ygomc.common.data.DataPack;
 import cn.xm1221.ygomc.common.data.DataPacks;
+import cn.xm1221.ygomc.common.deck.DeckLibrary;
+import cn.xm1221.ygomc.common.deck.DeckValidator;
+import cn.xm1221.ygomc.common.ocg.DuelSession;
+import cn.xm1221.ygomc.common.ocg.DuelSessions;
 import cn.xm1221.ygomc.common.ocg.FirstChoiceResponder;
 import cn.xm1221.ygomc.common.ocg.Natives;
 import cn.xm1221.ygomc.common.ocg.OcgDuel;
 import cn.xm1221.ygomc.common.ocg.OcgEngine;
 import com.mojang.brigadier.CommandDispatcher;
+import com.mojang.brigadier.arguments.StringArgumentType;
 import dev.architectury.event.events.common.CommandRegistrationEvent;
 import dev.architectury.event.events.common.LifecycleEvent;
 import net.minecraft.commands.CommandSourceStack;
@@ -15,54 +21,38 @@ import net.minecraft.network.chat.Component;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.List;
 
 /**
  * {@code /ygomc} 命令。
  *
- * <p>M1 阶段只有两个子命令，作用都是「把引擎链路的状态和连通性变得可观测」：
+ * <p>用途都是把「引擎链路」变得可观测、可操作，而不是给玩家玩的界面：
  * <ul>
- *   <li>{@code /ygomc status} —— 数据包、原生库、引擎各自是否就绪，缺什么、去哪儿找；</li>
- *   <li>{@code /ygomc selftest} —— 真的起一局打到收局，报出推进步数、应答次数和
- *       消息类型直方图。这是 M1 的验收动作：它跑通就说明「引擎消息能推着对局走」。</li>
+ *   <li>{@code /ygomc status} —— 数据包、原生库、引擎各自是否就绪，正在跑哪几局；</li>
+ *   <li>{@code /ygomc deck list} / {@code deck <名字>} —— 列出可用卡组、读一副并校验；</li>
+ *   <li>{@code /ygomc selftest [名字]} —— 真的起一局打到收局并报出消息类型直方图；</li>
+ *   <li>{@code /ygomc duel [名字]} —— 与 selftest 相同的开局路径，但不去刷日志，
+ *       只把结果发回给发起者。留着它是因为它和决斗盘物品走的是同一条路。</li>
  * </ul>
  *
- * <h2>为什么 selftest 要另开线程</h2>
- * 一局要推进几千步、应答几百次，全在服务端主线程上跑会把整个服务器卡住
- * （M0 实测单局约 6 ms，但那是空载；真实服务器上不能赌）。
- * 内核本身是「每局一个专用线程」的模型，所以另开线程是它希望的用法。
- *
- * <p>结果要发回玩家时必须绕回主线程——{@link CommandSourceStack} 不是线程安全的。
- * 这里用 {@code source.getServer().execute(...)} 把回包排队到服务端线程上。
+ * <h2>为什么对局不在这里同步跑</h2>
+ * 一局要推进几千步、应答几百次。放在服务端主线程上跑会把整个服务器卡住。
+ * 所以这里一律交给 {@link DuelSessions}，它每局一个专用线程（内核推荐用法），
+ * 结果通过回调回来。要发回玩家时再绕回主线程——{@link CommandSourceStack}
+ * 不是线程安全的，必须用 {@code source.getServer().execute(...)} 排队回去。
  */
 public final class YgomcCommand {
 
     private static final Logger LOGGER = LoggerFactory.getLogger("ygomc/command");
 
-    /**
-     * 自检用的卡组：40 张 4 星通常怪兽（卡号 14575467，2000/0，类型 {@code 0x11} = 怪兽|通常）。
-     *
-     * <p><b>为什么不是「随便挑一张强力怪兽」</b>：最初这里用的是 40 张青眼白龙
-     * （89631139，8 星）。它能打完整局，但 8 星需要 2 个祭品，所以
-     * {@code SELECT_IDLECMD} 的 summonable 列表<b>永远是空的</b>——
-     * 场上永远没有怪兽 → {@code SELECT_BATTLECMD} 的 attackable 也永远是空的 →
-     * 整局只能靠抽爆卡组收场。自检照样「通过」，可战斗、伤害、召唤、表示形式变更
-     * 这一整条路径一条都没走到。换成能通常召唤的 4 星怪之后，对局才会真的打起来。
-     *
-     * <p>卡号是照着 {@code cards.bin} 筛出来的（{@code .agent/m1/findbeater.py}），
-     * 筛选时特意排除了连接/超量/同调/融合/祭品/衍生物——这些的类型位里也有
-     * 「怪兽」，只看这一个位会把它们当成能通常召唤的怪兽。
-     */
-    private static final int SELFTEST_CARD = 14575467;
+    /** 没有指定卡组、也找不到卡组目录时用的兜底卡组。 */
+    private static final int FALLBACK_CARD = 14575467;
 
-    private static final int[] SELFTEST_DECK = new int[40];
+    private static final int[] FALLBACK_DECK = new int[40];
 
     static {
-        java.util.Arrays.fill(SELFTEST_DECK, SELFTEST_CARD);
+        java.util.Arrays.fill(FALLBACK_DECK, FALLBACK_CARD);
     }
-
-    /** 同一时刻只允许一个自检在跑：内核允许并发，但日志会互相穿插，不好读。 */
-    private static final AtomicBoolean RUNNING = new AtomicBoolean();
 
     private YgomcCommand() {
     }
@@ -71,35 +61,14 @@ public final class YgomcCommand {
         CommandRegistrationEvent.EVENT.register((dispatcher, registryAccess, selection) ->
                 register(dispatcher));
 
-        // 服务器一启动就自动跑一局。给开发/CI 用：dedicated server 上敲命令要占 stdin，
-        // 自动化验证不方便，而「启动完就有一行自检结果」是可以直接从日志里断言的。
-        LifecycleEvent.SERVER_STARTED.register(server -> autoSelftest());
-    }
-
-    /**
-     * 环境变量 {@code YGOMC_SELFTEST} 非空时自动跑一次自检。
-     *
-     * <p>这里用<b>环境变量</b>而不是系统属性是刻意的：Gradle 的 {@code runServer} 会把
-     * 环境变量原样传给被 fork 出来的游戏进程，而 {@code -D} 系统属性只作用于 Gradle
-     * 自己的 JVM，传不进游戏。用 {@code -D} 会得到一个「设了但没用」的假象。
-     */
-    private static void autoSelftest() {
-        if (System.getenv("YGOMC_SELFTEST") == null) {
-            return;
-        }
-        if (!RUNNING.compareAndSet(false, true)) {
-            LOGGER.warn("已有自检在跑，跳过自动自检");
-            return;
-        }
-        Thread worker = new Thread(() -> {
-            try {
-                LOGGER.info("自动自检结果：\n{}", runSelftest());
-            } finally {
-                RUNNING.set(false);
-            }
-        }, "ygomc-selftest-auto");
-        worker.setDaemon(true);
-        worker.start();
+        // 服务器一启动就自动跑一局，给开发/CI 用：dedicated server 上敲命令要占 stdin，
+        // 自动化验证不方便，而「启动完就有一行自检结果」可以直接从日志里断言。
+        LifecycleEvent.SERVER_STARTED.register(server -> {
+            autoDeckAudit();
+            autoSelftest();
+        });
+        // 停机时把在跑的对局都中止掉，免得守护线程被硬切断在半途。
+        LifecycleEvent.SERVER_STOPPING.register(server -> DuelSessions.abortAll());
     }
 
     private static void register(CommandDispatcher<CommandSourceStack> dispatcher) {
@@ -108,32 +77,230 @@ public final class YgomcCommand {
                     ctx.getSource().sendSuccess(() -> Component.literal(statusText()), false);
                     return 1;
                 }))
-                .then(Commands.literal("selftest").executes(ctx -> {
-                    CommandSourceStack source = ctx.getSource();
-                    if (!RUNNING.compareAndSet(false, true)) {
-                        source.sendSuccess(() -> Component.literal("已经有一个自检在跑了"), false);
-                        return 0;
-                    }
-                    source.sendSuccess(() -> Component.literal("自检开始，结果会发在这里…"), false);
-                    Thread worker = new Thread(() -> {
-                        String report;
-                        try {
-                            report = runSelftest();
-                        } finally {
-                            RUNNING.set(false);
-                        }
-                        LOGGER.info("自检结果：\n{}", report);
-                        source.getServer().execute(
-                                () -> source.sendSuccess(() -> Component.literal(report), false));
-                    }, "ygomc-selftest");
-                    // 守护线程：服务器关停时不该被一个还在跑的对局拖住。
-                    worker.setDaemon(true);
-                    worker.start();
-                    return 1;
-                })));
+                .then(Commands.literal("deck")
+                        .then(Commands.literal("list").executes(ctx -> {
+                            ctx.getSource().sendSuccess(() -> Component.literal(deckListText()), false);
+                            return 1;
+                        }))
+                        .then(Commands.argument("name", StringArgumentType.greedyString())
+                                .executes(ctx -> {
+                                    // greedyString 是刻意的：本机 526 副卡组里大量名字带中文、
+                                    // 空格和括号（例如「阿莱中庸之道(既要韧性差也要多废件)」），
+                                    // Brigadier 的 word()/string() 都读不了这些。
+                                    String name = StringArgumentType.getString(ctx, "name");
+                                    CommandSourceStack source = ctx.getSource();
+                                    source.sendSuccess(() -> Component.literal(describeDeck(name)), false);
+                                    return 1;
+                                })))
+                .then(Commands.literal("selftest")
+                        .executes(ctx -> launch(ctx.getSource(), null, true))
+                        .then(Commands.argument("name", StringArgumentType.greedyString())
+                                .executes(ctx -> launch(ctx.getSource(),
+                                        StringArgumentType.getString(ctx, "name"), true))))
+                .then(Commands.literal("duel")
+                        .executes(ctx -> launch(ctx.getSource(), null, false))
+                        .then(Commands.argument("name", StringArgumentType.greedyString())
+                                .executes(ctx -> launch(ctx.getSource(),
+                                        StringArgumentType.getString(ctx, "name"), false)))));
     }
 
-    /** 一行一条，拼成给玩家看的纯文本。 */
+    // ── 开局 ──────────────────────────────────────────────────────────────
+
+    /**
+     * 校验卡组、开局。
+     *
+     * @param verbose 是否连消息类型直方图一起报（自检要，普通对局不要）
+     */
+    private static int launch(CommandSourceStack source, String deckName, boolean verbose) {
+        if (!OcgEngine.prepare()) {
+            reply(source, "引擎不可用，无法开局：\n" + OcgEngine.problem());
+            return 0;
+        }
+
+        DeckData deck;
+        String label;
+        if (deckName == null) {
+            deck = new DeckData(toList(FALLBACK_DECK), List.of(), List.of());
+            label = "内置兜底卡组";
+        } else {
+            try {
+                deck = DeckLibrary.load(deckName);
+                label = deckName;
+            } catch (Exception e) {
+                reply(source, "读取卡组失败：" + e.getMessage());
+                return 0;
+            }
+        }
+
+        // 有错就不开：内核收到未知卡号不会报错，只会把它当成一张全零属性的空卡，
+        // 之后的对局行为无从预期——那种「能跑但结果没意义」比直接拒绝更糟。
+        DeckValidator.Report report = DeckValidator.validate(deck, DataPacks.get());
+        if (!report.ok()) {
+            reply(source, "「" + label + "」不能用于开局：\n" + report.describe());
+            return 0;
+        }
+
+        OcgDuel.DeckLoadout loadout = toLoadout(deck);
+        try {
+            DuelSessions.start(label, new OcgDuel.DeckLoadout[]{loadout, loadout},
+                    new FirstChoiceResponder(), session -> {
+                        String text = format(session, verbose);
+                        LOGGER.info("对局结束：\n{}", text);
+                        reply(source, text);
+                    });
+        } catch (IllegalStateException e) {
+            reply(source, e.getMessage());
+            return 0;
+        }
+
+        StringBuilder sb = new StringBuilder("已开局「").append(label).append("」")
+                .append("（主 ").append(deck.main().size())
+                .append(" / 额外 ").append(deck.extra().size()).append("）");
+        if (!report.warnings().isEmpty()) {
+            sb.append("，有 ").append(report.warnings().size()).append(" 项提示，用 /ygomc deck ")
+              .append(label).append(" 查看");
+        }
+        sb.append("\n双方都用同一副卡组，由「第一个合法项」策略自动应答——");
+        sb.append("这是 M1 的观战形态，真正的双人对战在 M2。");
+        reply(source, sb.toString());
+        return 1;
+    }
+
+    /** 结算回调可能跑在自动对局线程上，所以必须排队回主线程再碰 {@link CommandSourceStack}。 */
+    private static void reply(CommandSourceStack source, String text) {
+        try {
+            source.getServer().execute(
+                    () -> source.sendSuccess(() -> Component.literal(text), false));
+        } catch (RuntimeException e) {
+            // 服务器正在关停时 execute 会拒绝新任务。此时命令源已经没意义了，
+            // 结果本身已经写进日志，所以吞掉即可。
+            LOGGER.debug("回包失败（服务器可能正在关停）：{}", e.toString());
+        }
+    }
+
+    /**
+     * 环境变量 {@code YGOMC_DECKAUDIT} 非空时，把卡组目录里每一副卡组都读一遍并校验，
+     * 汇总打进日志。
+     *
+     * <p>放在游戏里而不是做一个独立命令行工具，是因为 {@code DeckData} 带着 Minecraft 的
+     * 编解码器（存档与网络同步要用），脱开游戏就加载不了。与其为测试去拼一份
+     * MC 的 classpath，不如直接走它真正运行的那条路——这样验的就是真代码。
+     */
+    private static void autoDeckAudit() {
+        if (System.getenv("YGOMC_DECKAUDIT") == null) {
+            return;
+        }
+        List<String> names = DeckLibrary.list();
+        if (names.isEmpty()) {
+            LOGGER.warn("卡组审计：卡组目录为空。查找过：{}",
+                    DeckLibrary.candidates(dev.architectury.platform.Platform.getGameFolder()));
+            return;
+        }
+        DataPack pack = DataPacks.get();
+        int ok = 0;
+        int warned = 0;
+        List<String> rejected = new java.util.ArrayList<>();
+        for (String name : names) {
+            DeckData deck;
+            try {
+                deck = DeckLibrary.load(name);
+            } catch (Exception e) {
+                rejected.add(name + " —— 读取失败：" + e.getMessage());
+                continue;
+            }
+            DeckValidator.Report report = DeckValidator.validate(deck, pack);
+            if (!report.ok()) {
+                rejected.add(name + " —— " + String.join("；", report.errors()));
+            } else {
+                ok++;
+                if (!report.warnings().isEmpty()) {
+                    warned++;
+                }
+            }
+        }
+        LOGGER.info("卡组审计：{} 副，可用 {}，带提示 {}，不可用 {}",
+                names.size(), ok, warned, rejected.size());
+        for (String line : rejected) {
+            LOGGER.info("  ✗ {}", line);
+        }
+    }
+
+    /**
+     * 环境变量 {@code YGOMC_SELFTEST} 非空时自动跑一次自检。
+     *
+     * <p>这里用<b>环境变量</b>而不是系统属性是刻意的：Gradle 的 {@code runServer} 会把
+     * 环境变量原样传给被 fork 出来的游戏进程，而 {@code -D} 系统属性只作用于 Gradle
+     * 自己的 JVM，传不进游戏。用 {@code -D} 会得到一个「设了但没用」的假象。
+     *
+     * <p>不指定卡组名时优先用卡组目录里的第一副真实卡组——那比内置的 40 张相同卡
+     * 有说服力得多（内置卡组走不到需要祭品/额外卡组的路径）。
+     */
+    private static void autoSelftest() {
+        if (System.getenv("YGOMC_SELFTEST") == null) {
+            return;
+        }
+        if (!OcgEngine.prepare()) {
+            LOGGER.warn("自动自检跳过，引擎不可用：{}", OcgEngine.problem());
+            return;
+        }
+        String name = firstRealDeck();
+        DeckData deck;
+        String label;
+        try {
+            deck = name == null
+                    ? new DeckData(toList(FALLBACK_DECK), List.of(), List.of())
+                    : DeckLibrary.load(name);
+            label = name == null ? "内置兜底卡组" : name;
+        } catch (Exception e) {
+            LOGGER.warn("自动自检读取卡组失败，改用内置卡组：{}", e.toString());
+            deck = new DeckData(toList(FALLBACK_DECK), List.of(), List.of());
+            label = "内置兜底卡组";
+        }
+
+        DeckValidator.Report report = DeckValidator.validate(deck, DataPacks.get());
+        if (!report.ok()) {
+            LOGGER.warn("自动自检：卡组「{}」校验不过，改用内置卡组\n{}", label, report.describe());
+            deck = new DeckData(toList(FALLBACK_DECK), List.of(), List.of());
+            label = "内置兜底卡组";
+        }
+
+        OcgDuel.DeckLoadout loadout = toLoadout(deck);
+        try {
+            DuelSessions.start("selftest", new OcgDuel.DeckLoadout[]{loadout, loadout},
+                    new FirstChoiceResponder(),
+                    session -> LOGGER.info("自动自检结果：\n{}", format(session, true)));
+        } catch (IllegalStateException e) {
+            LOGGER.warn("自动自检无法开局：{}", e.getMessage());
+        }
+    }
+
+    /** 卡组目录里的第一副卡组名；没有目录或目录为空时返回 null。 */
+    private static String firstRealDeck() {
+        List<String> names = DeckLibrary.list();
+        return names.isEmpty() ? null : names.get(0);
+    }
+
+    // ── 报告 ──────────────────────────────────────────────────────────────
+
+    private static String format(DuelSession session, boolean verbose) {
+        OcgDuel.Outcome outcome = session.outcome();
+        if (outcome == null || !outcome.won()) {
+            String why = outcome == null ? session.failure() : outcome.error();
+            return "「" + session.label() + "」未完成：" + why
+                    + (outcome == null ? "" : "\n推进 " + outcome.steps() + " 步，应答 "
+                    + outcome.queries() + " 次\n消息：" + outcome.histogram());
+        }
+        StringBuilder sb = new StringBuilder();
+        sb.append("「").append(session.label()).append("」收局：玩家 ").append(outcome.winner())
+          .append(" 获胜（胜因 ").append(outcome.reason()).append("）")
+          .append("\n推进 ").append(outcome.steps()).append(" 步，应答 ")
+          .append(outcome.queries()).append(" 次，").append(session.millis()).append(" ms");
+        if (verbose) {
+            sb.append("\n消息：").append(outcome.histogram());
+        }
+        return sb.toString();
+    }
+
     private static String statusText() {
         StringBuilder sb = new StringBuilder("ygomc 状态：");
 
@@ -144,10 +311,11 @@ public final class YgomcCommand {
             sb.append("\n  - ").append(problem);
         }
 
-        sb.append("\n原生库：").append(Natives.isBundled() ? "已打包" : "未打包")
-          .append("，").append(Natives.problem() == null ? "已加载" : "加载失败");
+        // 「已打包」和「已加载」是两件事：isBundled() 说 jar 里有没有原生库资源，
+        // directory() 说有没有真的解出来过。分开报，否则「没打包」会被误读成「加载失败」。
+        sb.append("\n原生库：").append(Natives.isBundled() ? "已打包进 jar" : "未打包（需外部提供）");
         if (Natives.directory() != null) {
-            sb.append("（").append(Natives.directory()).append("）");
+            sb.append("，已解出到 ").append(Natives.directory());
         }
         if (Natives.problem() != null) {
             sb.append("\n  - ").append(Natives.problem());
@@ -157,31 +325,75 @@ public final class YgomcCommand {
         if (OcgEngine.problem() != null) {
             sb.append("\n  - ").append(OcgEngine.problem());
         }
+
+        sb.append("\n卡组目录：").append(DeckLibrary.directory() == null
+                ? "未找到（查找过 " + DeckLibrary.candidates(
+                        dev.architectury.platform.Platform.getGameFolder()) + "）"
+                : DeckLibrary.directory() + "，" + DeckLibrary.list().size() + " 副");
+
+        List<DuelSession> active = DuelSessions.active();
+        sb.append("\n正在进行的对局：").append(active.isEmpty() ? "无" : active.size() + " 局");
+        for (DuelSession session : active) {
+            sb.append("\n  - ").append(session.describe());
+        }
+        for (DuelSession session : DuelSessions.recent(3)) {
+            if (!session.isRunning()) {
+                sb.append("\n  · 最近：").append(session.describe());
+            }
+        }
         return sb.toString();
     }
 
-    /** 起一局打到收局，返回人类可读的报告。任何失败都以文本形式返回，不抛给命令层。 */
-    private static String runSelftest() {
-        if (!OcgEngine.prepare()) {
-            return "引擎不可用，无法自检：\n" + OcgEngine.problem();
+    private static String deckListText() {
+        List<String> names = DeckLibrary.list();
+        if (names.isEmpty()) {
+            return "没有可用卡组。查找过："
+                    + DeckLibrary.candidates(dev.architectury.platform.Platform.getGameFolder());
         }
-        long startedAt = System.nanoTime();
-        OcgDuel.Outcome outcome = OcgDuel.playOut(
-                new int[]{1, 2, 3, 4, 5, 6, 7, 8},
-                new int[][]{SELFTEST_DECK, SELFTEST_DECK},
-                new FirstChoiceResponder(),
-                OcgDuel.DEFAULT_MAX_STEPS);
-        long millis = (System.nanoTime() - startedAt) / 1_000_000;
+        StringBuilder sb = new StringBuilder("可用卡组 ").append(names.size()).append(" 副：");
+        int shown = 0;
+        for (String name : names) {
+            if (shown++ == 20) {
+                sb.append(" …（用 /ygomc deck list 的完整输出见日志）");
+                break;
+            }
+            sb.append("\n  ").append(name);
+        }
+        return sb.toString();
+    }
 
-        if (!outcome.won()) {
-            return "自检失败：" + outcome.error()
-                    + "\n推进 " + outcome.steps() + " 步，应答 " + outcome.queries() + " 次，"
-                    + millis + " ms"
-                    + "\n消息：" + outcome.histogram();
+    private static String describeDeck(String name) {
+        DeckData deck;
+        try {
+            deck = DeckLibrary.load(name);
+        } catch (Exception e) {
+            return "读取卡组失败：" + e.getMessage();
         }
-        return "自检通过：玩家 " + outcome.winner() + " 获胜（胜因 " + outcome.reason() + "）"
-                + "\n推进 " + outcome.steps() + " 步，应答 " + outcome.queries() + " 次，"
-                + millis + " ms"
-                + "\n消息：" + outcome.histogram();
+        return "「" + name + "」主 " + deck.main().size()
+                + " / 额外 " + deck.extra().size()
+                + " / 副 " + deck.side().size() + "\n"
+                + DeckValidator.validate(deck, DataPacks.get()).describe();
+    }
+
+    // ── 小工具 ────────────────────────────────────────────────────────────
+
+    private static OcgDuel.DeckLoadout toLoadout(DeckData deck) {
+        return new OcgDuel.DeckLoadout(toArray(deck.main()), toArray(deck.extra()));
+    }
+
+    private static int[] toArray(List<Integer> codes) {
+        int[] out = new int[codes.size()];
+        for (int i = 0; i < out.length; i++) {
+            out[i] = codes.get(i);
+        }
+        return out;
+    }
+
+    private static List<Integer> toList(int[] codes) {
+        List<Integer> out = new java.util.ArrayList<>(codes.length);
+        for (int code : codes) {
+            out.add(code);
+        }
+        return out;
     }
 }
