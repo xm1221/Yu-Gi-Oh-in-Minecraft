@@ -1,6 +1,6 @@
 {
   "required": true,
-  "package": "cn.xm1221.mixin",
+  "package": "cn.xm1221.ygomc.common.mixin",
   "compatibilityLevel": "JAVA_21",
   "minVersion": "0.8",
   "client": [

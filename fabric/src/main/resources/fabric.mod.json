@@ -13,10 +13,10 @@
   "environment": "*",
   "entrypoints": {
     "main": [
-      "cn.xm1221.ygomc.YgomcFabric"
+      "cn.xm1221.ygomc.fabric.YgomcFabric"
     ],
     "client": [
-      "cn.xm1221.ygomc.client.YgomcFabricClient"
+      "cn.xm1221.ygomc.fabric.client.YgomcFabricClient"
     ]
   },
   "mixins": [
