@@ -1,0 +1,38 @@
+modLoader = "javafml"
+loaderVersion = "[4,)"
+#issueTrackerURL = ""
+license = "Insert License Here"
+
+[[mods]]
+modId = "ygomc"
+version = "${version}"
+displayName = "Yu-Gi-Oh in Minecraft"
+authors = "Me!"
+description = '''
+This is an example description! Tell everyone what your mod is about!
+'''
+#logoFile = ""
+
+[[dependencies.ygomc]]
+modId = "neoforge"
+type = "required"
+versionRange = "[21.1,)"
+ordering = "NONE"
+side = "BOTH"
+
+[[dependencies.ygomc]]
+modId = "minecraft"
+type = "required"
+versionRange = "[1.21.1,)"
+ordering = "NONE"
+side = "BOTH"
+
+[[dependencies.ygomc]]
+modId = "architectury"
+type = "required"
+versionRange = "[13.0.11,)"
+ordering = "AFTER"
+side = "BOTH"
+
+[[mixins]]
+config = "ygomc.mixins.json"

@@ -1,0 +1,42 @@
+# ── Agent 工作目录：不纳入版本控制 ──
+.agent/
+
+# ── Gradle ──
+.gradle/
+build/
+out/
+!gradle/wrapper/gradle-wrapper.jar
+
+# ── Loom / Minecraft run 目录 ──
+run/
+runs/
+.loom-cache/
+
+# ── 原生库构建中间产物 ──
+natives/build/
+natives/**/*.obj
+natives/**/*.pdb
+natives/**/*.ilk
+natives/**/*.exp
+natives/**/*.lib
+
+# ── IDE ──
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+.settings/
+.classpath
+.project
+.eclipse/
+bin/
+
+# ── 操作系统 ──
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# ── 本地数据（cdb / 脚本 / 卡图缓存的拷贝，禁止入库） ──
+local-data/
+*.cdb
