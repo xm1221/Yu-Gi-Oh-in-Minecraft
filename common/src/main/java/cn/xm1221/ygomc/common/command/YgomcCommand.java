@@ -5,8 +5,10 @@ import cn.xm1221.ygomc.common.data.DataPack;
 import cn.xm1221.ygomc.common.data.DataPacks;
 import cn.xm1221.ygomc.common.deck.DeckLibrary;
 import cn.xm1221.ygomc.common.deck.DeckValidator;
+import cn.xm1221.ygomc.common.duel.AutoPlayer;
 import cn.xm1221.ygomc.common.duel.DuelSnapshotProbe;
 import cn.xm1221.ygomc.common.ocg.DuelSession;
+import cn.xm1221.ygomc.common.ocg.PlayerResponder;
 import cn.xm1221.ygomc.common.ocg.DuelSessions;
 import cn.xm1221.ygomc.common.ocg.FirstChoiceResponder;
 import cn.xm1221.ygomc.common.ocg.Natives;
@@ -278,6 +280,39 @@ public final class YgomcCommand {
                     });
         } catch (IllegalStateException e) {
             LOGGER.warn("自动自检无法开局：{}", e.getMessage());
+        }
+
+        if (System.getenv("YGOMC_PLAYER") != null) {
+            startPlayerDriven(loadout);
+        }
+    }
+
+    /**
+     * 玩家驱动的自检：同一个卡组、同一副牌序，但应答改由「界面侧」给出——
+     * 引擎侧完全不知道有界面，只是把 {@link Responder} 换成了会阻塞的那个。
+     *
+     * <p><b>期望结果与贪心自检逐字相同</b>（步数 / 应答次数 / 胜者 / 胜因）。
+     * 理由是 {@code AutoPlayer} 用 {@code defaultChoice}，而它刻意对齐了贪心的优先序，
+     * 所以这是一条<b>完全不同的代码路径</b>通往同一个终局：阻塞层、跨线程唤醒、
+     * 问题建模、应答回拼全都参与了，任何一处丢问题或答错，终局就会不一样。
+     * 两个数字不一样，就说明这条链路有问题。
+     */
+    private static void startPlayerDriven(OcgDuel.DeckLoadout loadout) {
+        PlayerResponder player = new PlayerResponder(new FirstChoiceResponder());
+        AutoPlayer auto = new AutoPlayer(player, "selftest");
+        auto.start();
+        try {
+            DuelSessions.start("player", new OcgDuel.DeckLoadout[]{loadout, loadout},
+                    player, new DuelSnapshotProbe(),
+                    session -> {
+                        auto.close();
+                        LOGGER.info("玩家驱动自检结果：\n{}", format(session, true));
+                        LOGGER.info(player.report());
+                        LOGGER.info("自动玩家：作答 {} 次，被拒 {} 次", auto.answered(), auto.failed());
+                    });
+        } catch (IllegalStateException e) {
+            auto.close();
+            LOGGER.warn("玩家驱动自检无法开局：{}", e.getMessage());
         }
     }
 

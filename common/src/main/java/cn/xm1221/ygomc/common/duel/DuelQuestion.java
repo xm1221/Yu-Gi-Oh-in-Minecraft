@@ -575,7 +575,7 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
 
     // ── 小工具 ────────────────────────────────────────────────────────────
 
-    /** 单选类的默认取向；见 {@link #defaultChoice} 为什么行动类要特殊对待。 */
+    /** 单选类的默认取向；见 {@link #defaultChoice} 为什么不能一律取第一项。 */
     private int singleDefault() {
         if (type == MsgType.SELECT_IDLECMD) {
             return actionDefault(IDLE_SUMMON, IDLE_ACTIVATE_EFFECT, IDLE_TO_BP, IDLE_TO_EP);
@@ -585,7 +585,23 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
             // 这里也照着来，好让两边可比。玩家界面上连锁当然是要摆出来的。
             return actionDefault(BATTLE_ATTACK, BATTLE_TO_M2, BATTLE_TO_EP);
         }
+        if (type == MsgType.SELECT_YESNO || type == MsgType.SELECT_EFFECTYN) {
+            // 是/否必须【反查】而不是取第一项：界面上「是」在前更自然，
+            // 而贪心一律回 0（否）。取第一项就等于把所有是/否都答成「是」——
+            // 这不是小差别，它会让整局走向完全不同（实测步数 718→658）。
+            return indexOfValue(0);
+        }
         return 0;
+    }
+
+    /** 找出取值等于 {@code v} 的第一个选项；找不到就明确失败，不退回 0。 */
+    private int indexOfValue(int v) {
+        for (int i = 0; i < options.size(); i++) {
+            if (options.get(i).value() == v) {
+                return i;
+            }
+        }
+        throw new IllegalStateException("选项表里没有取值为 " + v + " 的项：" + describe());
     }
 
     /** 在选项里找第一个「行动种类」为 {@code kinds} 中之一的项。 */
