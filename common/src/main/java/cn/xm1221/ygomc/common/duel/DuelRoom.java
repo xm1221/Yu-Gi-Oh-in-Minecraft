@@ -53,6 +53,13 @@ public final class DuelRoom implements OcgDuel.Observer {
     private final PlayerResponder responder;
     private final OcgDuel.DeckLoadout loadout;
     /**
+     * 这一局的会话句柄，用来中止它。
+     *
+     * <p>没有它的话，「玩家走开导致对局卡住」就只能靠重启服务器解决——
+     * 而内核不响应中断，等它自己结束是等不到的。
+     */
+    private volatile DuelSession session;
+    /**
      * 最近一次回调里的对局句柄。
      *
      * <p>只在<b>对局线程</b>上写、也只在对局线程上读（listener 是从
@@ -60,6 +67,9 @@ public final class DuelRoom implements OcgDuel.Observer {
      * 所以不需要同步，更不能跨线程用——内核不能在对局线程之外碰。
      */
     private OcgDuel currentDuel;
+
+    /** 本「步」里是否已经发过牌桌（{@link #onQuestion} 发的是带问题的那一份）。 */
+    private boolean boardSentThisStep;
 
     private DuelRoom(ServerPlayer player, PlayerResponder responder, OcgDuel.DeckLoadout loadout) {
         this.player = player;
@@ -77,10 +87,14 @@ public final class DuelRoom implements OcgDuel.Observer {
     /**
      * 为玩家开一局，对手是本地贪心。
      *
-     * @param loadout 双方都用这一副（单人测试的简化；换成选项卡组是下一步的事）
+     * @param loadout 玩家自己的卡组
+     * @param opponentLoadout 对手（AI）的卡组。刻意与玩家那副分开：
+     *        两边同一副时对手的牌路完全由玩家的卡组决定，
+     *        测试时「换了玩家卡组」和「引擎行为变了」两件事就分不清了。
      * @return 开局失败的原因；成功返回 null
      */
-    public static String startFor(ServerPlayer player, OcgDuel.DeckLoadout loadout) {
+    public static String startFor(ServerPlayer player, OcgDuel.DeckLoadout loadout,
+                                  OcgDuel.DeckLoadout opponentLoadout) {
         UUID id = player.getUUID();
         if (ACTIVE.containsKey(id)) {
             return "你已有一局在进行中";
@@ -90,11 +104,14 @@ public final class DuelRoom implements OcgDuel.Observer {
         responder.setSeat(HUMAN_SEAT);
         DuelRoom room = new DuelRoom(player, responder, loadout);
         responder.setListener(room::onQuestion);
+        // 超时兜底要在聊天栏说出来。这条通知来自守护调度线程，
+        // 而给玩家发消息不是线程安全的，所以必须排回服务器主线程。
+        responder.setNotice(room::notice);
         ACTIVE.put(id, room);
 
         try {
-            DuelSessions.start("room-" + player.getName().getString(),
-                    new OcgDuel.DeckLoadout[]{loadout, loadout},
+            room.session = DuelSessions.start("room-" + player.getName().getString(),
+                    new OcgDuel.DeckLoadout[]{loadout, opponentLoadout},
                     responder, room, s -> room.finish(s));
         } catch (IllegalStateException e) {
             // 开局失败必须把房间撤掉，否则这个玩家会被永久记成「正在对局中」，
@@ -113,31 +130,107 @@ public final class DuelRoom implements OcgDuel.Observer {
         currentDuel = duel;
     }
 
+    /**
+     * 一步走完就同步一片牌桌——<b>不论是谁的回合、不论有没有问到真人</b>。
+     *
+     * <p>以前只有「真人席位诞生新问题」时才发牌桌（{@link #onQuestion} 那一处），
+     * 于是对手回合里整段时间一个包都不发：{@link PlayerResponder} 把对手席位的询问
+     * 直接交给兜底应答并 return，根本不通知 listener。玩家的观感就是
+     * 「对手干了什么完全看不到，轮到自己时画面一下子跳过去」。
+     *
+     * <p>同步只挂在这一处，不逐条消息发：一次 {@code advance()} 可能带回十几条消息，
+     * 而客户端只画最后一帧。一步一片，正好。
+     */
+    @Override
+    public void onStepEnd(OcgDuel duel) {
+        if (boardSentThisStep) {
+            // 这一步末尾问到了真人，那一份已经连牌桌一起发过了，不重复发。
+            boardSentThisStep = false;
+            return;
+        }
+        YgomcNet.sendBoard(player, snapshot(duel), null);
+    }
+
     /** 由 {@link PlayerResponder} 在问题诞生时同步调出，跑在对局线程上。 */
     private void onQuestion(DuelQuestion question) {
-        OcgDuel duel = currentDuel;
-        DuelBoard board = null;
-        if (duel != null) {
-            try {
-                board = DuelBoard.of(duel.snapshot());
-            } catch (RuntimeException e) {
-                // 取快照失败不该把对局打死：牌桌这一帧画不出来，
-                // 但问题本身是好的，玩家仍然能作答。
-                LOGGER.warn("取牌桌快照失败，这一帧只发问题：{}", e.toString());
-            }
-            if (board != null) {
-                try {
-                    // 快照只有形状没有卡号，卡号必须在这里、在对局线程上另查。
-                    // 界面能画出一张具体的卡，全靠这一步。
-                    board = FieldCodes.attach(duel, board, HUMAN_SEAT);
-                } catch (RuntimeException e) {
-                    // 卡号填不上就退回「只有形状的牌桌」：界面画卡背，
-                    // 总好过画一张错位的卡（两条路径对不上时 FieldCodes 会抛）。
-                    LOGGER.warn("查卡号失败，这一帧只发牌桌形状：{}", e.toString());
-                }
-            }
+        boardSentThisStep = true;
+        YgomcNet.sendBoard(player, snapshot(currentDuel), question);
+    }
+
+    /**
+     * 取一份「本地玩家视角」的牌桌快照；取不到就返回 null（只发问题，不发牌桌）。
+     *
+     * <p>必须跑在对局线程上：卡号是另外查出来的，内核句柄不能跨线程用。
+     */
+    private DuelBoard snapshot(OcgDuel duel) {
+        if (duel == null) {
+            return null;
         }
-        YgomcNet.sendBoard(player, board, question);
+        DuelBoard board;
+        try {
+            board = DuelBoard.of(duel.snapshot());
+        } catch (RuntimeException e) {
+            // 取快照失败不该把对局打死：牌桌这一帧画不出来，
+            // 但问题本身是好的，玩家仍然能作答。
+            LOGGER.warn("取牌桌快照失败，这一帧只发问题：{}", e.toString());
+            return null;
+        }
+        try {
+            // 快照只有形状没有卡号，卡号必须在这里、在对局线程上另查。
+            // 界面能画出一张具体的卡，全靠这一步。
+            return FieldCodes.attach(duel, board, HUMAN_SEAT);
+        } catch (RuntimeException e) {
+            // 卡号填不上就退回「只有形状的牌桌」：界面画卡背，
+            // 总好过画一张错位的卡（两条路径对不上时 FieldCodes 会抛）。
+            LOGGER.warn("查卡号失败，这一帧只发牌桌形状：{}", e.toString());
+            return board;
+        }
+    }
+
+    /**
+     * 中止某个玩家正在进行的对局。返回是否真的中止了。
+     *
+     * <p>中止的方式是让阻塞中的应答器带着异常解开，而不是去杀线程——
+     * 内核不响应中断，杀线程只会把它留在半途中；让它从 {@code answer} 里抛出去，
+     * 对局线程才有机会走完整的收尾路径。
+     */
+    public static boolean abortFor(ServerPlayer player) {
+        DuelRoom room = ACTIVE.get(player.getUUID());
+        if (room == null) {
+            return false;
+        }
+        DuelSession s = room.session;
+        if (s == null) {
+            return false;
+        }
+        // 先解开可能正挂着的等待，再让会话停下；两步都做是因为
+        // 「正卡在等玩家」与「正在跑」这两种状态都要能收场。
+        room.responder.cancel();
+        s.abort();
+        return true;
+    }
+
+    /** 是否有玩家正在对局中。 */
+    public static boolean isDueling(ServerPlayer player) {
+        return ACTIVE.containsKey(player.getUUID());
+    }
+
+    /**
+     * 对玩家说一句话（超时提醒、超时代答）。
+     *
+     * <p>调用方可能在守护调度线程上，所以只是把动作排回服务器主线程；
+     * 服务器已经停了就什么都不做——给一个已经断开的人发消息没有意义。
+     */
+    private void notice(String message) {
+        var server = player.getServer();
+        if (server == null) {
+            return;
+        }
+        server.execute(() -> {
+            if (!player.hasDisconnected()) {
+                player.displayClientMessage(Component.literal(message), false);
+            }
+        });
     }
 
     private void finish(DuelSession session) {

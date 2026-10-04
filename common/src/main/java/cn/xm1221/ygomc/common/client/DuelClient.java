@@ -42,11 +42,11 @@ public final class DuelClient {
             screen = null;
             return;
         }
-        if (screen == null || mc.screen != screen) {
+        if (screen == null) {
             screen = new DuelScreen(update.board(), update.question());
-            mc.setScreen(screen);
-            return;
+        } else {
+            screen.update(update.board(), update.question());
         }
-        screen.update(update.board(), update.question());
+        if (update.question() != null && mc.screen != screen) mc.setScreen(screen);
     }
 }

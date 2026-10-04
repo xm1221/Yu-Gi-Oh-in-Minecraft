@@ -119,10 +119,48 @@ public final class OcgDuel implements AutoCloseable {
      */
     public OcgDuel addDeck(int player, int[] codes) {
         requireNotStarted("灌卡组");
-        for (int code : codes) {
+        for (int code : shuffled(codes)) {
             Ocg.newCard(handle, code, player, player, Ocg.LOCATION_DECK, 0, Ocg.POS_FACEDOWN_DEFENSE);
         }
         return this;
+    }
+
+    /**
+     * 洗牌——**这一步不能省**。
+     *
+     * <p>内核只在效果要求时才洗牌（{@code field::shuffle}），开局时它<b>照单全收宿主给的顺序</b>。
+     * 也就是说「卡组顺序」这件事完全是宿主的责任：ygopro 客户端就是在把卡组交给内核
+     * <b>之前</b>自己先洗一遍（{@code single_duel.cpp:429-431}、{@code tag_duel.cpp:399-403}
+     * 里的 {@code rnd.shuffle_vector(pdeck[i].main)}）。
+     *
+     * <p>我们以前是照着 {@code .ydk} 的文件顺序逐张灌进去的，等于<b>永远不洗牌</b>：
+     * 每局的开局手牌、每次抽牌的顺序都一模一样。对玩家来说是「测不出东西」，
+     * 对测试来说更糟——它会让「换一副卡组重跑」这种对照失去意义。
+     *
+     * <p>用 Fisher-Yates，并且<b>不改动传进来的数组</b>（公开出来是为了能在离线自检里直接断言）：调用方常常直接传自己的常量表。
+     */
+    public static int[] shuffled(int[] codes) {
+        int[] out = codes.clone();
+        for (int i = out.length - 1; i > 0; i--) {
+            int j = SHUFFLE_RNG.nextInt(i + 1);
+            int t = out[i];
+            out[i] = out[j];
+            out[j] = t;
+        }
+        return out;
+    }
+
+    /**
+     * 洗牌用的随机源。
+     *
+     * <p>默认每次对局都不一样（玩家要的就是这个）。但要能<b>钉死</b>：
+     * 回归测试需要可复现的开局，否则「上一次跑出来的 837 步」这种对照就没法比。
+     */
+    private static final java.util.Random SHUFFLE_RNG = new java.util.Random();
+
+    /** 用固定种子钉住洗牌，供离线回归测试复现同一局。 */
+    public static void seedShuffle(long seed) {
+        SHUFFLE_RNG.setSeed(seed);
     }
 
     /**
@@ -404,6 +442,19 @@ public final class OcgDuel implements AutoCloseable {
          */
         default void onRawMessage(byte[] buffer, int offset, int length) {
         }
+
+        /**
+         * 一个「步」的消息全部处理完之后调用一次（{@code duel.advance()} 的边界）。
+         *
+         * <p>存在的理由是<b>逐步同步</b>：一次 {@code advance()} 可能带回十几条消息
+         * （见本文件开头那段实测），逐条发给客户端既浪费也没意义——客户端只画最后一帧。
+         * 按「步」发，正好是「一步一片牌桌」。
+         *
+         * <p>与 {@link #onMessage} 的分工：{@code onMessage} 是「每条消息」，
+         * 用来观察/计数；这里是「一步的末尾」，用来做状态同步。
+         */
+        default void onStepEnd(OcgDuel duel) {
+        }
     }
 
     /**
@@ -547,6 +598,11 @@ public final class OcgDuel implements AutoCloseable {
                     duel.lastResponse = response;
                     queries++;
                     duel.respond(response);
+                }
+                // 一步的消息处理完了。逐步同步挂在这里：此处是 advance() 的边界，
+                // 牌桌状态这时才是自洽的（不会发到「移动了一半」的中间态）。
+                if (observer != null) {
+                    observer.onStepEnd(duel);
                 }
             }
 

@@ -136,7 +136,14 @@ public final class OcgEngine {
     }
 
     private static Path findScriptRoot() {
-        List<Path> candidates = scriptCandidates(Platform.getGameFolder());
+        // 只在没有显式指定时才去问 Architectury 要游戏目录。
+        // `Platform.getGameFolder()` 在脱离 Minecraft 时会直接抛断言，
+        // 而它以前是**无条件**求值的——于是「生产路径能不能离线跑」这件事
+        // 被一个本来无关的调用卡死：整条 `OcgDuel.playOut` 在测试里起不来，
+        // 那些「点了没反应的静默 bug」就只能靠玩家进游戏一个个撞出来。
+        String override = System.getProperty(SCRIPTS_PROPERTY);
+        boolean explicit = override != null && !override.isBlank();
+        List<Path> candidates = scriptCandidates(explicit ? null : Platform.getGameFolder());
         for (Path c : candidates) {
             if (Files.isRegularFile(c.resolve(SENTINEL_SCRIPT))) {
                 return c;

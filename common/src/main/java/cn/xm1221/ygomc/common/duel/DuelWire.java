@@ -30,8 +30,14 @@ import java.util.List;
  */
 public final class DuelWire {
 
-    /** 问题 / 应答的格式版本。字段有任何增删都要 +1，让新旧两端明确不兼容而不是错位解读。 */
-    public static final int VERSION = 1;
+    /**
+     * 问题 / 应答的格式版本。字段有任何增删都要 +1，让新旧两端明确不兼容而不是错位解读。
+     *
+     * <p>v2 起问题多了两个「求和选择」专用字段（目标合计值与强制卡参数表）。
+     * 它们只在 {@code Mode.SUM} 下非零，但必须一起编进来：客户端要拿它们
+     * 校验玩家的选择并拼出应答，缺了就只能自己再猜一遍。
+     */
+    public static final int VERSION = 2;
 
     /**
      * 牌桌快照的格式版本，<b>独立于 {@link #VERSION}</b>。
@@ -58,6 +64,11 @@ public final class DuelWire {
             out.writeInt(q.min());
             out.writeInt(q.max());
             out.writeBoolean(q.cancelable());
+            out.writeInt(q.sumTarget());
+            out.writeInt(q.forcedParams().length);
+            for (int v : q.forcedParams()) {
+                out.writeInt(v);
+            }
             out.writeInt(q.options().size());
             for (DuelQuestion.Option o : q.options()) {
                 out.writeUTF(o.label());
@@ -84,13 +95,20 @@ public final class DuelWire {
             int min = in.readInt();
             int max = in.readInt();
             boolean cancelable = in.readBoolean();
+            int sumTarget = in.readInt();
+            int forcedCount = in.readInt();
+            int[] forcedParams = new int[forcedCount];
+            for (int i = 0; i < forcedCount; i++) {
+                forcedParams[i] = in.readInt();
+            }
             int n = in.readInt();
             List<DuelQuestion.Option> options = new ArrayList<>(n);
             for (int i = 0; i < n; i++) {
                 options.add(new DuelQuestion.Option(in.readUTF(), in.readInt(), in.readInt(),
                         in.readInt(), in.readInt(), in.readInt(), in.readInt()));
             }
-            return new DuelQuestion(type, player, mode, title, options, min, max, cancelable);
+            return new DuelQuestion(type, player, mode, title, options, min, max, cancelable,
+                    sumTarget, forcedParams);
         } catch (IOException e) {
             throw new UncheckedIOException("解码问题失败", e);
         }

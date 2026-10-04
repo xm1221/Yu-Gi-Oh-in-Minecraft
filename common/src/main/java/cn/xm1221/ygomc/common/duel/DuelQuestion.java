@@ -2,6 +2,7 @@ package cn.xm1221.ygomc.common.duel;
 
 import cn.xm1221.ygomc.common.ocg.DeclareCardName;
 import cn.xm1221.ygomc.common.ocg.Responder;
+import cn.xm1221.ygomc.common.ocg.SumSelect;
 import cn.xm1221.ygomc.common.ocg.msg.Msg;
 import cn.xm1221.ygomc.common.ocg.msg.MsgType;
 
@@ -40,7 +41,54 @@ import java.util.List;
  * </ul>
  */
 public record DuelQuestion(int type, int player, Mode mode, String title,
-                           List<Option> options, int min, int max, boolean cancelable) {
+                           List<Option> options, int min, int max, boolean cancelable,
+                           int sumTarget, int[] forcedParams) {
+
+    /**
+     * 除 {@link Mode#SUM} 之外的询问都用的构造器。
+     *
+     * <p>求和类的两个附加字段只对它自己有含义，所以给一个缺省的重载，
+     * 免得十八处构建点每处都写一遍 {@code 0, EMPTY}——
+     * 那种噪声会让「这个字段到底谁在用」变得看不出来。
+     */
+    public DuelQuestion(int type, int player, Mode mode, String title,
+                        List<Option> options, int min, int max, boolean cancelable) {
+        this(type, player, mode, title, options, min, max, cancelable, 0, EMPTY_PARAMS);
+    }
+
+    /** 空的强制卡参数表（不可变，供上面的缺省构造器共用）。 */
+    private static final int[] EMPTY_PARAMS = new int[0];
+
+    /**
+     * 逐字段比较，其中 {@code forcedParams} 比的是<b>内容</b>而不是引用。
+     *
+     * <p>record 自动生成的 {@code equals} 对数组用引用相等，于是「同一道求和题」
+     * 每次解码出来都不相等。界面靠 {@code equals} 判断「还是不是同一题」
+     * （见 {@code DuelScreen.update}），判断不出来就会在每次牌桌刷新时
+     * 把玩家已经选好的卡清空——这正是刚修掉的那个毛病，不能在求和类上重新长回来。
+     */
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) {
+            return true;
+        }
+        if (!(o instanceof DuelQuestion q)) {
+            return false;
+        }
+        return type == q.type && player == q.player && mode == q.mode
+                && min == q.min && max == q.max && cancelable == q.cancelable
+                && sumTarget == q.sumTarget
+                && java.util.Objects.equals(title, q.title)
+                && java.util.Objects.equals(options, q.options)
+                && java.util.Arrays.equals(forcedParams, q.forcedParams);
+    }
+
+    @Override
+    public int hashCode() {
+        int h = java.util.Objects.hash(type, player, mode, title, options, min, max,
+                cancelable, sumTarget);
+        return 31 * h + java.util.Arrays.hashCode(forcedParams);
+    }
 
     /** 询问的作答形状。 */
     public enum Mode {
@@ -54,6 +102,13 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
         COUNTERS,
         /** 排序：应答是<b>裸排列</b>，没有数量前缀（本类型是例外）。 */
         SORT,
+        /**
+         * 求和选择：选若干张使合计值恰好等于 {@link DuelQuestion#sumTarget()}。
+         *
+         * <p>应答形状与 {@link #MULTI} 相似但<b>多一段占位</b>，见
+         * {@link DuelQuestion#response} 里 SUM 分支的说明。
+         */
+        SUM,
         /** 本项目还没实现应答的询问。调用方应显式回退并记录，不要静默当作已处理。 */
         UNSUPPORTED
     }
@@ -167,6 +222,7 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
             case Msg.SelectPosition m -> position(m);
             case Msg.SelectCounter m -> counter(m);
             case Msg.SortCard m -> sort(m);
+            case Msg.SelectSum m -> sum(m);
             case Msg.AnnounceRace m -> announceBits(msg.type(), m.player(), "宣言种族", m.available());
             case Msg.AnnounceAttrib m -> announceBits(msg.type(), m.player(), "宣言属性", m.available());
             case Msg.AnnounceCard m -> announceCard(m);
@@ -178,6 +234,37 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
 
     // ── 各类 ──────────────────────────────────────────────────────────────
 
+    /**
+     * 这个询问是不是「让玩家挑一项行动」——主要阶段/战斗阶段的指令菜单，以及连锁询问。
+     *
+     * <p>ygo 靠卡上的 {@code cmdFlag} 区分两件事：这张卡<b>有得选</b>（点卡弹
+     * {@code ShowMenu}，`event_handler.cpp:2260-2299`）与这张卡<b>可以被选</b>
+     * （{@code selectable_cards}，点卡直接勾选）。我们这里按询问类型区分。
+     *
+     * <p>之所以要单独抽成静态方法而不是写在界面里：它是纯逻辑，
+     * 写在 {@code DuelScreen} 里就只能靠肉眼保证，抽出来才能离线断言。
+     * 本轮前面两个「不报错、改动完全没生效」的 bug 都栽在这类地方。
+     */
+    /**
+     * 这个询问要不要<b>弹窗</b>问——「是否发动效果」这一类。
+     *
+     * <p>包含 {@code SELECT_EFFECTYN}（单独一张卡问要不要发动效果）、
+     * {@code SELECT_CHAIN}（连锁时问发动哪个效果）、{@code SELECT_YESNO}（一般的是/否）。
+     * 三者的共同点是「答案是几个固定选项、跟牌桌上的位置无关」——
+     * ygo 对这类询问也是弹对话框，而不是让玩家去场地上点。
+     *
+     * <p>与 {@link #isAction} 的关系：{@code SELECT_CHAIN} 两边都算。
+     * 弹窗优先——它根本不会走到「点卡出菜单」那条路上，所以这个重叠是无害的，
+     * 但必须写清楚，否则以后有人会以为其中一个是死代码。
+     */
+    public static boolean isPopup(int type) {
+        return type == MsgType.SELECT_EFFECTYN || type == MsgType.SELECT_CHAIN
+                || type == MsgType.SELECT_YESNO;
+    }
+    public static boolean isAction(int type) {
+        return type == MsgType.SELECT_IDLECMD || type == MsgType.SELECT_BATTLECMD
+                || type == MsgType.SELECT_CHAIN;
+    }
     private static DuelQuestion idle(Msg.SelectIdleCmd m) {
         List<Option> opts = new ArrayList<>();
         addActions(opts, "召唤", IDLE_SUMMON, m.summon());
@@ -187,7 +274,9 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
         addActions(opts, "盖放魔陷", IDLE_SPELL_SET, m.spellSet());
         for (int i = 0; i < m.chains().length; i++) {
             Msg.SelectChainEntry e = m.chains()[i];
-            opts.add(Option.ofValue("发动效果", e.code(), (i << 16) | IDLE_ACTIVATE_EFFECT));
+            // select_idle_command: low 16 bits 5 = activate effect; high bits index chains[].
+            opts.add(Option.ofAction("发动效果", e.code(), (i << 16) | IDLE_ACTIVATE_EFFECT,
+                    e.controller(), e.location(), e.sequence()));
         }
         if (m.toBp() != 0) {
             opts.add(Option.ofValue("进入战斗阶段", 0, IDLE_TO_BP));
@@ -209,7 +298,7 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
         }
         for (int i = 0; i < m.chains().length; i++) {
             Msg.SelectChainEntry e = m.chains()[i];
-            opts.add(Option.ofAction("发动效果", e.code(), (i << 16) | IDLE_ACTIVATE_EFFECT,
+            opts.add(Option.ofAction("发动效果", e.code(), i << 16,
                     e.controller(), e.location(), e.sequence()));
         }
         if (m.toM2() != 0) {
@@ -244,7 +333,7 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
             Msg.SelectChain.ChainEntry e = entries.get(i);
             String label = e.isForced() ? "发动（强制）" : "发动";
             // 带位置：对手发动效果后，玩家应当能【点自己的那张卡】来连锁它
-            opts.add(Option.ofIndexAt(label, e.code(), i,
+            opts.add(new Option(label, e.code(), i, i,
                     e.location().controller(), e.location().location(), e.location().sequence()));
         }
         boolean forced = m.hasForced();
@@ -290,8 +379,8 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
         int[] locations = m.locations();
         int[] sequences = m.sequences();
         for (int i = 0; i < codes.length; i++) {
-            opts.add(Option.ofIndexAt(zoneLabel(controllers[i], locations[i], sequences[i]),
-                    codes[i], i, controllers[i], locations[i], sequences[i]));
+            opts.add(new Option(zoneLabel(controllers[i], locations[i], sequences[i]),
+                    codes[i], i, m.releaseParam(i), controllers[i], locations[i], sequences[i]));
         }
         boolean canCancel = m.cancelable() != 0;
         if (canCancel) {
@@ -370,7 +459,23 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
                 }
             }
         }
-        int need = Math.max(0, count);
+        // ── count == 0 不是「一格都不选」──
+        //
+        // 这是把「盖放魔陷点不动」照出来的那一处。盖放时内核用 **count = 0**
+        // 发这条询问（`operations.cpp:2448` 的 add_process 最后一个参数就是 0），
+        // 然后照 `returns.bvalue[1]` 判结果：
+        //     case 1: if(returns.bvalue[1] == 0) return TRUE;   // 当作没选位置，静默取消
+        //             target->to_field_param = returns.bvalue[2];
+        // （`operations.cpp:2451-2454`）
+        // 而 bvalue[1] 是 **LOCATION**，`[0,0,0]` 正好让它等于 0。
+        //
+        // 所以 count==0 时若按「需要选 0 格」建题，界面就不会要求玩家点格子，
+        // 应答落到 `[0,0,0]`，内核收下、不报 RETRY、也**什么都不做**——
+        // 表现为「点了没反应、可以一直点」，实测能空转 998 次询问不收局。
+        // 它恰恰是【必须选一格】的意思。
+        //
+        // 只有 SelectDisField（禁用区域）在 count==0 时才是真的「不用选」。
+        int need = count > 0 ? count : (type == MsgType.SELECT_PLACE ? 1 : 0);
         return new DuelQuestion(type, player, Mode.PLACES,
                 disable ? "选择要禁用的区域" : "选择放置的位置",
                 opts, need, need, need == 0);
@@ -385,6 +490,49 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
     @FunctionalInterface
     private interface ZoneDisabled {
         boolean test(int owner, int location, int sequence);
+    }
+
+    /**
+     * 求和选择（{@code SELECT_SUM}）：选若干张，使合计值<b>恰好</b>等于目标值。
+     *
+     * <p>内核出处 {@code playerop.cpp:650-717 select_with_sum_limit}。
+     * 每张候选卡带一个 {@code sum_param}，拆开来是两个可选值
+     * （{@code get_sum_params}，{@code field.cpp:2926}），所以「这张卡的值」
+     * 本身可能有两种取法——界面只能把两个都写出来，让玩家自己看。
+     *
+     * <h2>为什么以前玩家看不到这条询问</h2>
+     * 它的应答形状既不是单选值、也不是普通多选，塞不进原先的模型，
+     * 于是被归到 {@link Mode#UNSUPPORTED} 由自动求解器代答。
+     * 结果是「引擎要你送 6 张卡去墓地，界面却自己替你送了」。
+     *
+     * <h2>计数口径</h2>
+     * {@code min}/{@code max} 是<b>可选张数</b>（不含强制卡），
+     * 强制卡另计在 {@link #forcedParams()} 里。应答里的总数要把强制卡算进去，
+     * 见 {@link #response} 的 SUM 分支。
+     */
+    private static DuelQuestion sum(Msg.SelectSum m) {
+        if (m.unlimited()) {
+            // flag != 0 = 内核的 max == 0 分支，校验规则是「落在区间内」而不是「恰好等于」，
+            // 还没逐行核实。不能让玩家去答一条我还不确定对错的问题。
+            return unsupported(m);
+        }
+        List<Option> opts = new ArrayList<>();
+        for (int i = 0; i < m.selectableCount(); i++) {
+            Msg.SelectSumEntry e = m.selectable()[i];
+            int[] v = SumSelect.params(e.sumParam());
+            String label = v[1] > 0 ? ("合计 " + v[0] + " 或 " + v[1]) : ("合计 " + v[0]);
+            opts.add(new Option(label, e.pureCode(), i, e.sumParam(),
+                    e.controller(), e.location(), e.sequence()));
+        }
+        int mcount = m.mustCount();
+        int[] forced = new int[mcount];
+        for (int i = 0; i < mcount; i++) {
+            forced[i] = m.mustSelect()[i].sumParam();
+        }
+        String title = "选择合计值恰好为 " + m.acc() + " 的卡"
+                + (mcount > 0 ? "（另有 " + mcount + " 张已被强制计入）" : "");
+        return new DuelQuestion(MsgType.SELECT_SUM, m.player(), Mode.SUM, title,
+                opts, m.min(), m.max(), false, m.acc(), forced);
     }
 
     private static DuelQuestion position(Msg.SelectPosition m) {
@@ -417,8 +565,8 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
         int n = m.candidateCount();
         for (int i = 0; i < n; i++) {
             int max = m.cardCounter(i);
-            Option base = Option.ofIndex("可放 " + max + " 个", m.codes()[i], i);
-            opts.add(new Option(base.label(), base.cardCode(), i, max, 0, 0, 0));
+            opts.add(new Option("可移除 " + max + " 个", m.codes()[i], i, max,
+                    m.controllers()[i], m.locations()[i], m.sequences()[i]));
         }
         return new DuelQuestion(MsgType.SELECT_COUNTER, m.player(), Mode.COUNTERS,
                 "分配 " + m.count() + " 个指示物", opts, m.count(), m.count(), false);
@@ -574,6 +722,52 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
      *         宁可在这里明确失败，也不要拼出一个形状不对的字节串——
      *         引擎对形状错的应答只会回 {@code MSG_RETRY}，然后表现为「卡住」。
      */
+    /**
+     * 排序类：按<b>点击顺序</b>作答。
+     *
+     * <p>应答不是「点击顺序」而是「每张原候选卡排到第几位」——内核收下的是一个
+     * <b>排列</b>：{@code sort_list[i]} 是原候选 {@code i} 的最终次序
+     * （ygopro 客户端 {@code event_handler.cpp:777-778} 发的就是它）。
+     * 界面上玩家点出来的是一串卡的先后，两者正好互为逆排列，
+     * 少转这一步的症状是「排好的顺序和显示的不一样」，而且只在 3 张以上时看得出来。
+     *
+     * @param clickOrder 按点击先后排列的选项下标
+     */
+    public Responder.Response sortResponse(int[] clickOrder) {
+        require(mode == Mode.SORT, "不是排序类询问");
+        require(clickOrder.length == options.size(),
+                "排序要有 " + options.size() + " 项，实得 " + clickOrder.length);
+        int[] ranks = new int[clickOrder.length];
+        boolean[] used = new boolean[clickOrder.length];
+        for (int rank = 0; rank < clickOrder.length; rank++) {
+            int idx = clickOrder[rank];
+            require(idx >= 0 && idx < ranks.length && !used[idx], "排序下标无效或重复");
+            used[idx] = true;
+            ranks[idx] = rank;
+        }
+        return response(ranks);
+    }
+
+    public Responder.Response counterResponse(int[] amounts) {
+        require(mode == Mode.COUNTERS && amounts.length == options.size(), "指示物数组长度不符");
+        byte[] result = new byte[amounts.length * 2];
+        long total = 0;
+        for (int i = 0; i < amounts.length; i++) {
+            int n = amounts[i];
+            require(n >= 0 && n <= options.get(i).value() && n <= 65535, "指示物数量越界");
+            total += n;
+            result[2 * i] = (byte) n;
+            result[2 * i + 1] = (byte) (n >>> 8);
+        }
+        require(total == min, "指示物总量须为 " + min);
+        return Responder.Response.of(result);
+    }
+
+    public boolean canSubmit(int... chosen) {
+        try { response(chosen); return true; }
+        catch (RuntimeException e) { return false; }
+    }
+
     public Responder.Response response(int... chosen) {
         return switch (mode) {
             case SINGLE -> {
@@ -585,6 +779,14 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
                 if (chosen.length == 1 && options.get(chosen[0]).isCancel()) {
                     yield Responder.Response.of(-1);
                 }
+                java.util.Set<Integer> unique = new java.util.HashSet<>();
+                int weight = 0;
+                for (int c : chosen) {
+                    require(c >= 0 && c < options.size() && !options.get(c).isCancel()
+                            && unique.add(c), "选卡下标无效或重复");
+                    weight += type == MsgType.SELECT_TRIBUTE ? options.get(c).value() : 1;
+                }
+                require(weight >= min && chosen.length <= max, "选卡数量或解放值不符合要求");
                 byte[] resp = new byte[1 + chosen.length];
                 resp[0] = (byte) chosen.length;
                 for (int i = 0; i < chosen.length; i++) {
@@ -595,9 +797,11 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
                 yield Responder.Response.of(resp);
             }
             case PLACES -> {
-                if (min == 0 && chosen.length == 0) {
+                if (chosen.length == 0 && (min == 0 || options.isEmpty())) {
                     // 「不选」用全 0 三元组表示，而不是空数组：内核的校验对
-                    // (count==0, i==0, location==0) 这一组开绿灯（playerop.cpp:452-474）。
+                    // (count==0, i==0, location==0) 这一组开绿灯（playerop.cpp:461-467），
+                    // 而盖放类询问又靠 bvalue[1]==0 判「没选位置」（operations.cpp:2452）。
+                    // options 为空时也只能这样回——否则 require 会直接抛，把整局打断。
                     yield Responder.Response.of(new byte[]{0, 0, 0});
                 }
                 require(chosen.length == min, "要选 " + min + " 个格子，实得 " + chosen.length);
@@ -607,6 +811,32 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
                     resp[3 * i] = (byte) o.controller();
                     resp[3 * i + 1] = (byte) o.location();
                     resp[3 * i + 2] = (byte) o.sequence();
+                }
+                yield Responder.Response.of(resp);
+            }
+            case SUM -> {
+                java.util.Set<Integer> unique = new java.util.HashSet<>();
+                int[] all = new int[forcedParams.length + chosen.length];
+                System.arraycopy(forcedParams, 0, all, 0, forcedParams.length);
+                for (int i = 0; i < chosen.length; i++) {
+                    int c = chosen[i];
+                    require(c >= 0 && c < options.size() && unique.add(c),
+                            "选卡下标无效或重复");
+                    all[forcedParams.length + i] = options.get(c).value();
+                }
+                // 计数口径：内核比的是 bvalue[0] 与 [min+mcount, max+mcount]（playerop.cpp:697），
+                // 而 min/max 是【可选张数】，所以玩家选几张就比几张。
+                require(chosen.length >= min && chosen.length <= max,
+                        "要选 " + min + "~" + max + " 张，实得 " + chosen.length);
+                // 合计值必须是「恰好等于」，不是「不超过」——用内核那个校验函数判定。
+                require(SumSelect.check(all, sumTarget), "合计值凑不出 " + sumTarget);
+                // 形状：总数含强制卡，随后 mcount 个占位字节（内核不读），再是候选下标。
+                byte[] resp = new byte[1 + forcedParams.length + chosen.length];
+                resp[0] = (byte) (forcedParams.length + chosen.length);
+                for (int i = 0; i < chosen.length; i++) {
+                    int idx = options.get(chosen[i]).index();
+                    require(idx >= 0 && idx <= 0xFF, "下标越界：" + idx);
+                    resp[1 + forcedParams.length + i] = (byte) idx;
                 }
                 yield Responder.Response.of(resp);
             }
@@ -678,6 +908,19 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
                     out[i] = i;
                 }
                 yield out;
+            }
+            case SUM -> {
+                // 求和类没有「照第一项」这一说：随便选一张几乎必然凑不出目标值，
+                // 只会拿到 MSG_RETRY 然后被重问，表现为「卡住」。
+                // 所以这里调用【和自动求解器同一个】搜索函数——
+                // 两边共用一个 pickIndices，构造上就不可能出现分歧。
+                int[] cand = new int[options.size()];
+                for (int i = 0; i < cand.length; i++) {
+                    cand[i] = options.get(i).value();
+                }
+                int[] pick = SumSelect.pickIndices(forcedParams, cand, sumTarget, min, max);
+                require(pick != null, "求和类找不到合计值恰好为 " + sumTarget + " 的组合");
+                yield pick;
             }
             case COUNTERS -> {
                 int[] out = new int[options.size()];

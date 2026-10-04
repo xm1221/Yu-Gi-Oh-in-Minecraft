@@ -3,9 +3,11 @@ package cn.xm1221.ygomc.common.command;
 import cn.xm1221.ygomc.common.card.DeckData;
 import cn.xm1221.ygomc.common.data.DataPack;
 import cn.xm1221.ygomc.common.data.DataPacks;
+import cn.xm1221.ygomc.common.deck.BuiltinDecks;
 import cn.xm1221.ygomc.common.deck.DeckLibrary;
 import cn.xm1221.ygomc.common.deck.DeckValidator;
 import cn.xm1221.ygomc.common.duel.AutoPlayer;
+import cn.xm1221.ygomc.common.duel.DuelRoom;
 import cn.xm1221.ygomc.common.duel.DuelSnapshotProbe;
 import cn.xm1221.ygomc.common.duel.DuelStreamRecorder;
 import cn.xm1221.ygomc.common.ocg.DeclareCardName;
@@ -14,6 +16,7 @@ import cn.xm1221.ygomc.common.ocg.PlayerResponder;
 import java.io.IOException;
 import java.nio.file.Path;
 import cn.xm1221.ygomc.common.ocg.DuelSessions;
+import cn.xm1221.ygomc.common.ocg.DuelOptions;
 import cn.xm1221.ygomc.common.ocg.FirstChoiceResponder;
 import cn.xm1221.ygomc.common.ocg.Natives;
 import cn.xm1221.ygomc.common.ocg.OcgDuel;
@@ -25,6 +28,7 @@ import dev.architectury.event.events.common.LifecycleEvent;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.network.chat.Component;
+import net.minecraft.server.level.ServerPlayer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -52,14 +56,18 @@ public final class YgomcCommand {
 
     private static final Logger LOGGER = LoggerFactory.getLogger("ygomc/command");
 
-    /** 没有指定卡组、也找不到卡组目录时用的兜底卡组。 */
-    private static final int FALLBACK_CARD = 14575467;
+    /**
+     * 询问策略的落盘位置。
+     *
+     * <p>服务器启动时定下来（世界目录下的 {@code ygomc-duel.properties}）；
+     * 没启动过（例如纯客户端）时为 {@code null}，那时 {@code save} 会如实回报
+     * 「只在本次运行内有效」，而不是假装写成功。
+     */
+    private static volatile java.nio.file.Path optionFile;
 
-    private static final int[] FALLBACK_DECK = new int[40];
-
-    static {
-        java.util.Arrays.fill(FALLBACK_DECK, FALLBACK_CARD);
-    }
+    // 兜底卡组已挪到 {@link cn.xm1221.ygomc.common.deck.BuiltinDecks}：
+    // 原先这里是「同一张卡填满 40 格」，能开局但测试价值几乎为零
+    // （没有召唤链、没有魔陷互动、没有额外卡组，很多询问根本触发不到）。
 
     private YgomcCommand() {
     }
@@ -71,6 +79,11 @@ public final class YgomcCommand {
         // 服务器一启动就自动跑一局，给开发/CI 用：dedicated server 上敲命令要占 stdin，
         // 自动化验证不方便，而「启动完就有一行自检结果」可以直接从日志里断言。
         LifecycleEvent.SERVER_STARTED.register(server -> {
+            // 询问策略存在世界目录里：它是【服务器侧】的行为（谁来答那条询问），
+            // 而不是客户端的观感设置，所以跟着存档走、而不是跟着客户端配置目录走。
+            optionFile = server.getWorldPath(net.minecraft.world.level.storage.LevelResource.ROOT)
+                    .resolve("ygomc-duel.properties");
+            LOGGER.info("询问策略：{}", DuelOptions.load(optionFile));
             autoDeckAudit();
             autoSelftest();
         });
@@ -99,6 +112,58 @@ public final class YgomcCommand {
                                     source.sendSuccess(() -> Component.literal(describeDeck(name)), false);
                                     return 1;
                                 })))
+                .then(Commands.literal("option")
+                        .executes(ctx -> {
+                            ctx.getSource().sendSuccess(() -> Component.literal(
+                                    "当前询问策略：" + DuelOptions.describe()
+                                            + "\n/ygomc option chain <skip|always|never>"
+                                            + "\n    skip=没有可发动的效果就不问（默认）"
+                                            + "　always=每个时点都问　never=一律不问"
+                                            + "\n/ygomc option autoforced <on|off>"
+                                            + "\n    on=必发效果自动发动，不再询问"), false);
+                            return 1;
+                        })
+                        .then(Commands.literal("chain")
+                                .then(Commands.argument("mode", StringArgumentType.word())
+                                        .executes(ctx -> {
+                                            String mode = StringArgumentType.getString(ctx, "mode");
+                                            DuelOptions.ChainPrompt v = switch (mode) {
+                                                case "skip" -> DuelOptions.ChainPrompt.SKIP_EMPTY;
+                                                case "always" -> DuelOptions.ChainPrompt.ALWAYS;
+                                                case "never" -> DuelOptions.ChainPrompt.NEVER;
+                                                default -> null;
+                                            };
+                                            if (v == null) {
+                                                ctx.getSource().sendFailure(Component.literal(
+                                                        "chain 只接受 skip / always / never，收到：" + mode));
+                                                return 0;
+                                            }
+                                            DuelOptions.setChainPrompt(v);
+                                            String saved = DuelOptions.save(optionFile);
+                                            ctx.getSource().sendSuccess(() -> Component.literal(
+                                                    "已设置：" + DuelOptions.describe() + "　" + saved), false);
+                                            return 1;
+                                        })))
+                        .then(Commands.literal("autoforced")
+                                .then(Commands.argument("mode", StringArgumentType.word())
+                                        .executes(ctx -> {
+                                            String mode = StringArgumentType.getString(ctx, "mode");
+                                            boolean on;
+                                            if (mode.equals("on")) {
+                                                on = true;
+                                            } else if (mode.equals("off")) {
+                                                on = false;
+                                            } else {
+                                                ctx.getSource().sendFailure(Component.literal(
+                                                        "autoforced 只接受 on / off，收到：" + mode));
+                                                return 0;
+                                            }
+                                            DuelOptions.setAutoForcedChain(on);
+                                            String saved = DuelOptions.save(optionFile);
+                                            ctx.getSource().sendSuccess(() -> Component.literal(
+                                                    "已设置：" + DuelOptions.describe() + "　" + saved), false);
+                                            return 1;
+                                        }))))
                 .then(Commands.literal("selftest")
                         .executes(ctx -> launch(ctx.getSource(), null, true))
                         .then(Commands.argument("name", StringArgumentType.greedyString())
@@ -106,9 +171,32 @@ public final class YgomcCommand {
                                         StringArgumentType.getString(ctx, "name"), true))))
                 .then(Commands.literal("duel")
                         .executes(ctx -> launch(ctx.getSource(), null, false))
+                        .then(Commands.literal("abort")
+                                .executes(ctx -> abort(ctx.getSource())))
                         .then(Commands.argument("name", StringArgumentType.greedyString())
                                 .executes(ctx -> launch(ctx.getSource(),
                                         StringArgumentType.getString(ctx, "name"), false)))));
+    }
+
+    /**
+     * 中止自己正在进行的对局。
+     *
+     * <p>这是唯一的退出阀门：对局线程可能正卡在「等人作答」上，
+     * 而内核不响应中断——没有这个命令，卡住的局只能靠重启服务器回收，
+     * 期间它还一直占着 {@code MAX_CONCURRENT} 的名额。
+     */
+    private static int abort(CommandSourceStack source) {
+        ServerPlayer player = source.getPlayer();
+        if (player == null) {
+            reply(source, "这条命令要由玩家执行");
+            return 0;
+        }
+        if (!DuelRoom.abortFor(player)) {
+            reply(source, "你现在没有正在进行的对局");
+            return 0;
+        }
+        reply(source, "已请求中止对局；卡在等你操作的那一步会带着异常解开。");
+        return 1;
     }
 
     // ── 开局 ──────────────────────────────────────────────────────────────
@@ -127,8 +215,8 @@ public final class YgomcCommand {
         DeckData deck;
         String label;
         if (deckName == null) {
-            deck = new DeckData(toList(FALLBACK_DECK), List.of(), List.of());
-            label = "内置兜底卡组";
+            deck = BuiltinDecks.testPool();
+            label = BuiltinDecks.TEST_POOL_LABEL;
         } else {
             try {
                 deck = DeckLibrary.load(deckName);
@@ -288,25 +376,40 @@ public final class YgomcCommand {
         return toLoadout(pickDeck("决斗盘").deck());
     }
 
+    /**
+     * 人机对抗里<b>对手（AI）</b>用的卡组。
+     *
+     * <p>刻意固定成内置测试卡池，而不是跟着玩家那副走：
+     * <ul>
+     *   <li>牌路丰富——40 张全不重复 + 8 张额外，能摸到的卡种远多于任何一副预组；
+     *   <li>可复现——对手的行为不随玩家选了什么卡组而变，
+     *       出了问题先怀疑引擎或界面，而不是「这次对手抽到了什么」；
+     *   <li>玩家那副仍然由玩家/卡组目录决定，改的只是对手。
+     * </ul>
+     *
+     * <p>玩家想换掉对手的卡组时，改这一处即可。
+     */
+    public static OcgDuel.DeckLoadout opponentLoadoutForDuel() {
+        return toLoadout(BuiltinDecks.testPool());
+    }
+
     private static DeckPick pickDeck(String who) {
         String name = firstRealDeck();
         DeckData deck;
         String label;
         try {
-            deck = name == null
-                    ? new DeckData(toList(FALLBACK_DECK), List.of(), List.of())
-                    : DeckLibrary.load(name);
-            label = name == null ? "内置兜底卡组" : name;
+            deck = name == null ? BuiltinDecks.testPool() : DeckLibrary.load(name);
+            label = name == null ? BuiltinDecks.TEST_POOL_LABEL : name;
         } catch (Exception e) {
             LOGGER.warn("{}：读取卡组失败，改用内置卡组：{}", who, e.toString());
-            deck = new DeckData(toList(FALLBACK_DECK), List.of(), List.of());
-            label = "内置兜底卡组";
+            deck = BuiltinDecks.testPool();
+            label = BuiltinDecks.TEST_POOL_LABEL;
         }
         DeckValidator.Report report = DeckValidator.validate(deck, DataPacks.get());
         if (!report.ok()) {
             LOGGER.warn("{}：卡组「{}」校验不过，改用内置卡组\n{}", who, label, report.describe());
-            deck = new DeckData(toList(FALLBACK_DECK), List.of(), List.of());
-            label = "内置兜底卡组";
+            deck = BuiltinDecks.testPool();
+            label = BuiltinDecks.TEST_POOL_LABEL;
         }
         return new DeckPick(deck, label);
     }

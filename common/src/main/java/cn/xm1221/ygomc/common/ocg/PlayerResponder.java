@@ -1,8 +1,8 @@
 package cn.xm1221.ygomc.common.ocg;
 
 import cn.xm1221.ygomc.common.duel.DuelQuestion;
-import cn.xm1221.ygomc.common.duel.SumSelect;
 import cn.xm1221.ygomc.common.ocg.msg.Msg;
+import java.util.List;
 
 /**
  * 把「引擎问一句」变成「挂起这局，等玩家点一下，再答回去」。
@@ -37,6 +37,14 @@ public final class PlayerResponder implements Responder {
      */
     private volatile java.util.function.Consumer<DuelQuestion> listener;
 
+    /**
+     * 「要对玩家说一句话」的通知口，由对局房间装入（发聊天栏）。
+     *
+     * <p>超时兜底必须<b>说出来</b>：玩家走开一趟回来发现对局已经自己走了一步，
+     * 如果界面上没有任何痕迹，那就和「界面点不动/答错卡」完全分不开。
+     */
+    private volatile java.util.function.Consumer<String> notice;
+
     // 以下全部只在持有 lock 时读写。
     private DuelQuestion pending;
     private Response answer;
@@ -44,7 +52,50 @@ public final class PlayerResponder implements Responder {
     private boolean cancelled;
     private long asked;
     private long autoAnswered;
+    /**
+     * 超时替真人作答的次数。
+     *
+     * <p>与 {@link #autoAnswered} <b>分开计数</b>：那个数的是「本来就不该问真人」的询问
+     * （对手席位、界面未实现），这个数的是「问了真人但没等到」。
+     * 混在一起时，一局里出现大量自动应答根本分不清是哪种原因——
+     * 前者正常，后者说明玩家在走开或者界面卡住了。
+     */
+    private long timeoutAnswers;
     private long rejectedSubmits;
+
+    /**
+     * 因为「问了也白问」而被静默放过的连锁询问次数。
+     *
+     * <p>在 {@code autoAnswered} 之外单独再记一笔，是为了让「玩家被反复询问」
+     * 这件事在自检报告里<em>看得见</em>：只看总数分不清那些应答是真人点的
+     * 还是被策略挡掉的。策略见 {@link DuelOptions}。
+     */
+    private long chainSkipped;
+    /** 待答期间的定时任务，答完/取消后必须撤掉，否则会拿旧题去答新题。 */
+    private java.util.concurrent.ScheduledFuture<?> warnTask;
+    private java.util.concurrent.ScheduledFuture<?> timeoutTask;
+    /** 超时后才允许替玩家作答，用来把「提醒」与「代答」分成两段（D22）。 */
+    private java.util.concurrent.atomic.AtomicLong timeoutSeq =
+            new java.util.concurrent.atomic.AtomicLong();
+
+    /**
+     * 共享的守护调度器。
+     *
+     * <p>一局一个线程已经够重了，再给每局配一个 Timer 是浪费；超时任务只做
+     * 「唤醒对局线程」这一件小事，所以全局一个线程足够。
+     * 线程设为 daemon，免得服务器退出时被一个睡着的超时任务拖住。
+     */
+    private static final java.util.concurrent.ScheduledExecutorService TIMERS =
+            java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "ygomc-duel-timeout");
+                t.setDaemon(true);
+                return t;
+            });
+
+    /** 等玩家作答的秒数（D22）。 */
+    private volatile long timeoutSeconds = 300;
+    /** 超时提醒之后再宽限多久才代答（D22）。 */
+    private volatile long graceSeconds = 60;
 
     /**
      * @param fallback 无法建模的询问交给谁；null 表示遇到就抛异常（让对局明确失败）
@@ -71,17 +122,32 @@ public final class PlayerResponder implements Responder {
         this.seat = seat;
     }
 
+    /**
+     * 第一个必发连锁项的下标；一个都没有时退到 0。
+     *
+     * <p>调用方只在 {@code hasForced()} 为真时才走这里，所以「一个都没有」是
+     * 内核字段自相矛盾的异常情况——那时回 0 仍然会被内核校验，比抛异常
+     * 把整局打崩要好：这一手最多是选错一项，而抛异常会让对局直接结束。
+     */
+    private static int firstForcedIndex(Msg.SelectChain m) {
+        List<Msg.SelectChain.ChainEntry> entries = m.entryList();
+        for (int i = 0; i < entries.size(); i++) {
+            if (entries.get(i).isForced()) {
+                return i;
+            }
+        }
+        return 0;
+    }
+
     @Override
     public Response answer(Msg msg) {
         DuelQuestion question = DuelQuestion.of(msg);
         if (question.mode() == DuelQuestion.Mode.UNSUPPORTED) {
             if (msg instanceof Msg.SelectSum s) {
-                // SELECT_SUM 的应答是「一组下标」而不是「一个数值」，塞不进当前的问题模型
-                // （选项表 + 一个取值），所以先在这里直接求解。
-                //
-                // 待清理：这形成了 ocg → duel 的包间环（DuelQuestion 本来就在 duel → ocg）。
-                // 正确的归宿是把 SumSelect 挪进 ocg（它只依赖 Responder/Msg），
-                // 再让 DuelQuestion 反向调用它来给界面摆选项。现在先保证功能可用。
+                // 走到这里说明是 SELECT_SUM 的【无上限分支】（flag != 0）：
+                // 有上限的那一支已经由 DuelQuestion 建成 SUM 类询问、交给玩家点了。
+                // 这一支的校验规则还没逐行核实，只能明确失败——宁可报错，
+                // 也不要发一个必然被 MSG_RETRY 打回的应答，那会变成「卡住」。
                 synchronized (lock) {
                     autoAnswered++;
                 }
@@ -110,21 +176,51 @@ public final class PlayerResponder implements Responder {
             return fallback.answer(msg);
         }
 
+        // 「明明没有可以发动的效果也要问一遍」——官方客户端在这种时点是【静默回 -1】的
+        // （duelclient.cpp:1836-1844：没有候选项且没开「显示时点」时直接 SendResponse，
+        // 一个像素都不画）。这里照做，并且做成可调项（DuelOptions）。
+        if (msg instanceof Msg.SelectChain sc) {
+            DuelOptions.ChainAction action =
+                    DuelOptions.chainAction(sc.hasForced(), sc.entryList().size());
+            if (action != DuelOptions.ChainAction.ASK) {
+                synchronized (lock) {
+                    autoAnswered++;
+                    chainSkipped++;
+                }
+                return Responder.Response.of(action == DuelOptions.ChainAction.PICK_FIRST
+                        ? firstForcedIndex(sc) : -1);
+            }
+        }
+
         synchronized (lock) {
             pending = question;
             answer = null;
             answered = false;
             cancelled = false;
             asked++;
-            // 通知放在【持锁区内】是有意的：此时 pending 已经就位，玩家就算立刻
-            // 应答，也会在 submit 里等这把锁，直到下面进入 wait() 才继续，
-            // 于是不可能出现「应答比等待先到」而被丢掉的真空窗口。
-            // 放到锁外就正好有这么一个窗口，而且它只在玩家手速快时出现。
-            java.util.function.Consumer<DuelQuestion> l = listener;
-            if (l != null) {
-                l.accept(question);
+            // 超时兜底必须按【这一道题】挂号：拿一个自增序号把提醒与代答绑到当前问题，
+            // 否则玩家答完 A 题、引擎又问 B 题时，A 的定时器醒来会把 B 答掉。
+            long seq = timeoutSeq.incrementAndGet();
+            cancelTimers();
+            if (timeoutSeconds > 0) {
+                warnTask = TIMERS.schedule(() -> onTimeoutWarn(seq, question),
+                        timeoutSeconds, java.util.concurrent.TimeUnit.SECONDS);
+                timeoutTask = TIMERS.schedule(() -> onTimeoutAnswer(seq, question),
+                        timeoutSeconds + Math.max(0, graceSeconds),
+                        java.util.concurrent.TimeUnit.SECONDS);
             }
             lock.notifyAll();
+        }
+        // Publish after installing pending. An immediate submit is retained by answered,
+        // even when it arrives before this thread starts waiting.
+        try {
+            var l = listener;
+            if (l != null) l.accept(question);
+        } catch (RuntimeException e) {
+            synchronized (lock) { pending = null; }
+            throw e;
+        }
+        synchronized (lock) {
             while (!answered) {
                 try {
                     lock.wait();
@@ -132,11 +228,13 @@ public final class PlayerResponder implements Responder {
                     // 对局被中止。必须抛出去让对局线程解开，不能吞掉当作已作答——
                     // 吞掉的话内核会拿着上一次的应答继续跑，局面就串了。
                     pending = null;
+                    cancelTimers();
                     Thread.currentThread().interrupt();
                     throw new IllegalStateException(
                             "对局被中止，问题未作答：" + question.describe(), e);
                 }
             }
+            cancelTimers();
             if (cancelled) {
                 pending = null;
                 throw new IllegalStateException("问题已被取消：" + question.describe());
@@ -145,6 +243,82 @@ public final class PlayerResponder implements Responder {
             pending = null;
             answer = null;
             return r;
+        }
+    }
+
+    /**
+     * 超时提醒：只提醒，不代答（D22）。
+     *
+     * <p>先提醒再宽限，是为了让「走开一下」和「卡住了」分开：如果一超时就代答，
+     * 玩家回来只会看到局面莫名其妙地走了一步，完全没有介入的机会。
+     */
+    private void onTimeoutWarn(long seq, DuelQuestion question) {
+        synchronized (lock) {
+            if (timeoutSeq.get() != seq || answered || pending != question) {
+                return;
+            }
+        }
+        say("已经等了 " + timeoutSeconds + " 秒还没有收到你的操作；"
+                + (graceSeconds > 0 ? graceSeconds + " 秒后将按默认取向代答" : "现在按默认取向代答"));
+    }
+
+    /**
+     * 超时候答：把这一题按默认取向答掉，让对局线程解开。
+     *
+     * <p>这是兜底而不是常态逻辑。没有它的时候，玩家一收起界面走开，
+     * 对局线程就永远挂在这一行上——那一局的并发名额再也回不来，
+     * 而且因为内核不响应中断，停服也只能等它。
+     */
+    private void onTimeoutAnswer(long seq, DuelQuestion question) {
+        synchronized (lock) {
+            if (timeoutSeq.get() != seq || answered || pending != question) {
+                return;
+            }
+        }
+        boolean done;
+        try {
+            done = answerWithDefault();
+        } catch (RuntimeException e) {
+            // 兜底自己失败时<b>必须让对局明确结束</b>，不能就这么放着。
+            // 这不是假想的：defaultChoice() 里对「凑不出合计值」之类的非法局面是
+            // 明确抛异常的（宁可报错也不要发一个必被 RETRY 打回的应答），
+            // 而异常抛在这条守护线程上会被调度器吞掉——症状是
+            // 「超时了、聊天栏说了要代答、然后什么都没有发生」，对局永远挂在那儿。
+            synchronized (lock) {
+                timeoutAnswers++;
+            }
+            say("超时后无法按默认取向作答（" + e.getMessage() + "），已中止这一局");
+            cancel();
+            return;
+        }
+        if (done) {
+            synchronized (lock) {
+                timeoutAnswers++;
+            }
+            say("等待超时，已按默认取向替你作答");
+        }
+    }
+
+    /** 撤掉挂着的定时任务。必须在持有 {@code lock} 时调用。 */
+    private void cancelTimers() {
+        if (warnTask != null) {
+            warnTask.cancel(false);
+            warnTask = null;
+        }
+        if (timeoutTask != null) {
+            timeoutTask.cancel(false);
+            timeoutTask = null;
+        }
+    }
+
+    private void say(String message) {
+        var n = notice;
+        if (n != null) {
+            try {
+                n.accept(message);
+            } catch (RuntimeException ignored) {
+                // 通知失败不能反过来影响对局：它只是聊天栏里的一行字。
+            }
         }
     }
 
@@ -209,6 +383,7 @@ public final class PlayerResponder implements Responder {
             }
             answer = r;
             answered = true;
+            cancelTimers();
             lock.notifyAll();
             return true;
         }
@@ -222,8 +397,25 @@ public final class PlayerResponder implements Responder {
             }
             cancelled = true;
             answered = true;
+            cancelTimers();
             lock.notifyAll();
         }
+    }
+
+    /** 装入「要对玩家说一句话」的通知口（由对局房间调用）。 */
+    public void setNotice(java.util.function.Consumer<String> notice) {
+        this.notice = notice;
+    }
+
+    /**
+     * 设置等待玩家的时限（秒），以及超时提醒之后的宽限时间。
+     *
+     * <p>0 或负数表示不限时。默认 300 + 60（D22）。
+     * 测试要能在几秒内跑完，所以不能把时限写死。
+     */
+    public void setTimeouts(long timeoutSeconds, long graceSeconds) {
+        this.timeoutSeconds = timeoutSeconds;
+        this.graceSeconds = graceSeconds;
     }
 
     /**
@@ -258,13 +450,34 @@ public final class PlayerResponder implements Responder {
         }
     }
 
+    /** 超时替真人作答的次数。 */
+    public long timeoutAnswers() {
+        synchronized (lock) {
+            return timeoutAnswers;
+        }
+    }
+
+    /**
+     * 按询问策略静默放过的连锁次数（见 {@link DuelOptions}）。
+     *
+     * <p>单独暴露出来是为了在自检本里能断言「策略确实生效了」：
+     * 只有它非零，才说明那些空询问真的没有摆到玩家面前。
+     */
+    public long chainSkipped() {
+        synchronized (lock) {
+            return chainSkipped;
+        }
+    }
+
     public String report() {
         DuelQuestion q;
         synchronized (lock) {
             q = pending;
         }
-        return "玩家应答器：提问 " + asked() + " 次，自动兜底 " + autoAnswered()
-                + " 次，被挡下的提交 " + rejectedSubmits() + " 次"
+        return "玩家应答器：提问 " + asked() + " 次，非真人兜底 " + autoAnswered()
+                + " 次，超时代答 " + timeoutAnswers() + " 次，被挡下的提交 " + rejectedSubmits() + " 次" + "，按询问策略静默放过 " + chainSkipped() + " 次"
+                + "（等 " + timeoutSeconds + "s" + (graceSeconds > 0 ? "+" + graceSeconds + "s" : "")
+                + "）"
                 + (q != null ? "（末次提问后仍在待答）" : "");
     }
 }

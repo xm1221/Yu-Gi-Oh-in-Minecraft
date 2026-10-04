@@ -6,6 +6,7 @@ import cn.xm1221.ygomc.common.data.CardImageDb;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import net.minecraft.client.renderer.MultiBufferSource;
+import net.minecraft.client.renderer.LightTexture;
 import net.minecraft.client.renderer.RenderType;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.item.ItemDisplayContext;
@@ -92,14 +93,25 @@ public final class CardItemRender {
         // z 取 0.5：物品模型空间里 0.5 就是「方块中心」那一层，与其它 BEWLR 的惯例一致。
         float z = 0.5F;
 
+        // 恒定满亮度，<b>不用</b>传入的 light。
+        //
+        // 卡面是要「读」的东西——卡名、数值、卡文都在上面——而掉落物通常落在地上，
+        // 采集的是方块光照，暗处就变成一块看不清的黑卡。玩家要的是认出这是哪张卡，
+        // 不是「这张卡所在位置的亮度」。地图、告示牌这类需要阅读的平面物品
+        // 走的是同一条思路（可见性优先于光照真实感）。
+        //
+        // 代价是卡片在暗处也会亮着。对一张要读的卡来说这是对的取舍：
+        // 亮度信息在这里没有传达任何玩家关心的东西。
+        int readLight = LightTexture.FULL_BRIGHT;
+
         // 绕序按「从 +Z 看是逆时针」排，UV 左上角贴 (x0, y1)——
         // 即 u 沿 +X 增、v 沿 -Y 增。正面朝 +Z，也就是 GUI / 手持时朝向玩家。
         VertexConsumer vc = buffers.getBuffer(RenderType.entityCutoutNoCull(texture));
         PoseStack.Pose p = pose.last();
-        vertex(vc, p, x0, y1, z, 0.0F, 0.0F, light, overlay, 0.0F, 0.0F, 1.0F);
-        vertex(vc, p, x1, y1, z, 1.0F, 0.0F, light, overlay, 0.0F, 0.0F, 1.0F);
-        vertex(vc, p, x1, y0, z, 1.0F, 1.0F, light, overlay, 0.0F, 0.0F, 1.0F);
-        vertex(vc, p, x0, y0, z, 0.0F, 1.0F, light, overlay, 0.0F, 0.0F, 1.0F);
+        vertex(vc, p, x0, y1, z, 0.0F, 0.0F, readLight, overlay, 0.0F, 0.0F, 1.0F);
+        vertex(vc, p, x1, y1, z, 1.0F, 0.0F, readLight, overlay, 0.0F, 0.0F, 1.0F);
+        vertex(vc, p, x1, y0, z, 1.0F, 1.0F, readLight, overlay, 0.0F, 0.0F, 1.0F);
+        vertex(vc, p, x0, y0, z, 0.0F, 1.0F, readLight, overlay, 0.0F, 0.0F, 1.0F);
     }
 
     private static void vertex(VertexConsumer vc, PoseStack.Pose pose,

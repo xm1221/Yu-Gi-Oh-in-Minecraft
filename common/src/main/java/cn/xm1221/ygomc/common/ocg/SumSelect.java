@@ -1,6 +1,5 @@
-package cn.xm1221.ygomc.common.duel;
+package cn.xm1221.ygomc.common.ocg;
 
-import cn.xm1221.ygomc.common.ocg.Responder;
 import cn.xm1221.ygomc.common.ocg.msg.Msg;
 
 import java.util.ArrayList;
@@ -9,8 +8,15 @@ import java.util.List;
 /**
  * {@code SELECT_SUM}（按合计值选卡）的求解与校验。
  *
- * <p>内核出处 {@code playerop.cpp:640-725}。每张候选卡带一个 {@code sum_param}，
+ * <p>内核出处 {@code playerop.cpp:640-725}（{@code select_sum_check1} 在 640-648，
+ * 应答解析在 692-717）。每张候选卡带一个 {@code sum_param}，
  * 要选出若干张，使<b>所有计入项各取一个值后的总和恰好等于 {@code acc}</b>。
+ *
+ * <h2>问题模型与自动应答共用同一个求解器</h2>
+ * 这个类同时服务两条路：{@link PlayerResponder} 在界面答不了时拿它兜底，
+ * {@link cn.xm1221.ygomc.common.duel.DuelQuestion} 拿它算「默认取向」。
+ * 两边共用一个 {@link #pickIndices}，所以「默认答哪个」与「求解器会答哪个」
+ * 在构造上就不可能不一致——而这正是离线交叉验证能成立的前提。
  *
  * <h2>三个容易写错的点</h2>
  * <ol>
@@ -19,9 +25,12 @@ import java.util.List;
  *       {@code op2 = 0}（{@code field.cpp:2926}）。所以「这张卡的和是 6」可能只是
  *       它两个可选值之一。</li>
  *   <li><b>强制选的卡不出现在应答里，但要占位</b>：内核读应答是从
- *       {@code bvalue[mcount + 1]} 开始（{@code mcount} = 强制卡数），
- *       前 {@code mcount} 个字节<b>被忽略但仍要被读过</b>；数量校验是
- *       {@code [min + mcount, max + mcount]}，即 {@code count} 把强制卡也算进去。</li>
+ *       {@code bvalue[mcount + 1]} 开始（{@code playerop.cpp:704-705}，
+ *       {@code mcount} = 强制卡数），{@code bvalue[1..mcount]} 这 mcount 个字节
+ *       <b>根本没被读过</b>；数量校验是 {@code [min + mcount, max + mcount]}
+ *       （{@code playerop.cpp:697}），即 {@code bvalue[0]} 把强制卡也算进去。
+ *       当 {@code mcount == 0} 时它才退化成「普通多选」{@code [数量, 下标…]}——
+ *       只在没有任何强制卡的局面上验证过的话，这个坑完全看不出来。</li>
  *   <li><b>合法性是「恰好等于 acc」而不是「不超过 acc」</b>，且要存在一种逐项取
  *       {@code op1}/{@code op2} 的取法。所以不能贪心累加，必须真找一个组合。</li>
  * </ol>
@@ -81,6 +90,60 @@ public final class SumSelect {
     }
 
     /**
+     * 找一组可选的候卡下标，使总和恰好为 {@code acc}。
+     *
+     * @param forcedParams    强制卡的 {@code sum_param}（不参与选择，但计入总和）
+     * @param candidateParams 候卡的 {@code sum_param}
+     * @param min             可选张数下限（<b>不含</b>强制卡，即内核消息里的 min）
+     * @param max             可选张数上限（同上）
+     * @return 选中的候卡下标（升序）；无解返回 {@code null}
+     */
+    public static int[] pickIndices(int[] forcedParams, int[] candidateParams,
+                                   int acc, int min, int max) {
+        int mcount = forcedParams.length;
+        int[] all = new int[mcount + candidateParams.length];
+        System.arraycopy(forcedParams, 0, all, 0, mcount);
+        System.arraycopy(candidateParams, 0, all, mcount, candidateParams.length);
+
+        int kMin = Math.max(0, min);
+        int kMax = Math.min(candidateParams.length, max);
+        int[] nodes = {0};
+        for (int k = kMin; k <= kMax; k++) {
+            int[] pick = new int[k];
+            List<Integer> hit = comb(all, mcount, acc, pick, 0, 0, nodes);
+            if (hit != null) {
+                int[] out = new int[k];
+                for (int i = 0; i < k; i++) {
+                    out[i] = hit.get(i);
+                }
+                return out;
+            }
+            if (nodes[0] > NODE_LIMIT) {
+                break;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 把一个解编成内核要的应答字节。
+     *
+     * <pre>
+     * [0]            = mcount + k        ─ 总数把强制卡也算进去（playerop.cpp:697）
+     * [1 .. mcount]  = 0                 ─ 强制卡的占位，内核根本不读（704-705）
+     * [1+mcount ..]  = 选中的候卡下标
+     * </pre>
+     */
+    public static byte[] encode(int mcount, int[] picked) {
+        byte[] resp = new byte[1 + mcount + picked.length];
+        resp[0] = (byte) (mcount + picked.length);
+        for (int i = 0; i < picked.length; i++) {
+            resp[1 + mcount + i] = (byte) picked[i];
+        }
+        return resp;
+    }
+
+    /**
      * 求一个合法应答。
      *
      * @throws IllegalStateException 在节点上限内没找到合法组合，或遇到还没核实的
@@ -88,49 +151,29 @@ public final class SumSelect {
      *         会被 {@code MSG_RETRY} 打回的答案——那会变成卡住而不是报错。
      */
     public static Responder.Response solve(Msg.SelectSum m) {
-        int mcount = m.mustCount();
         if (m.unlimited()) {
-            // flag != 0 对应内核 max == 0 的另一条分支，其校验尚未逐行核实。
+            // flag != 0 对应内核 max == 0 的另一条分支（playerop.cpp:718 起），
+            // 它的校验是「和落在 [最小值之和, 最大值之和] 区间内」而不是「恰好等于 acc」，
+            // 尚未逐行核实，不能凭猜作答。
             throw new IllegalStateException("SELECT_SUM 的无上限分支（flag=" + m.flag()
                     + "）还没核实过校验规则，不能凭猜作答");
         }
-        int minTotal = m.min() + mcount;
-        int maxTotal = m.max() + mcount;
-
-        // 全部计入项的原始参数：强制卡在前，候选卡在后。
-        int mustItems = mcount;
-        int[] all = new int[mustItems + m.selectableCount()];
-        for (int i = 0; i < mustItems; i++) {
-            all[i] = m.mustSelect()[i].sumParam();
+        int mcount = m.mustCount();
+        int[] forced = new int[mcount];
+        for (int i = 0; i < mcount; i++) {
+            forced[i] = m.mustSelect()[i].sumParam();
         }
-        for (int i = 0; i < m.selectableCount(); i++) {
-            all[mustItems + i] = m.selectable()[i].sumParam();
+        int[] cand = new int[m.selectableCount()];
+        for (int i = 0; i < cand.length; i++) {
+            cand[i] = m.selectable()[i].sumParam();
         }
-
-        int kMin = Math.max(0, minTotal - mcount);
-        int kMax = Math.min(m.selectableCount(), maxTotal - mcount);
-        int[] nodes = {0};
-        for (int k = kMin; k <= kMax; k++) {
-            int[] pick = new int[k];
-            List<Integer> hit = comb(all, mustItems, m.acc(), pick, 0, 0, nodes);
-            if (hit == null) {
-                if (nodes[0] > NODE_LIMIT) {
-                    break;
-                }
-                continue;
-            }
-            // 应答形状：[总数, 为强制卡预留的 mcount 个字节, 选中的候卡下标…]
-            // 内核从 bvalue[mcount + 1] 开始读下标，前面的字节只是占位。
-            byte[] resp = new byte[1 + mcount + k];
-            resp[0] = (byte) (mcount + k);
-            for (int i = 0; i < k; i++) {
-                resp[1 + mcount + i] = (byte) (int) hit.get(i);
-            }
-            return Responder.Response.of(resp);
+        int[] pick = pickIndices(forced, cand, m.acc(), m.min(), m.max());
+        if (pick == null) {
+            throw new IllegalStateException(String.format(
+                    "SELECT_SUM 没找到合法组合（acc=%d min=%d max=%d must=%d 候选=%d）",
+                    m.acc(), m.min(), m.max(), mcount, cand.length));
         }
-        throw new IllegalStateException(String.format(
-                "SELECT_SUM 没找到合法组合（acc=%d min=%d max=%d must=%d 候选=%d 节点=%d）",
-                m.acc(), m.min(), m.max(), mcount, m.selectableCount(), nodes[0]));
+        return Responder.Response.of(encode(mcount, pick));
     }
 
     /**

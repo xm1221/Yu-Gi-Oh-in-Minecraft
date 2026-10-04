@@ -74,7 +74,8 @@ public class DuelDiskItem extends Item {
             return InteractionResultHolder.pass(stack);
         }
         String problem = DuelRoom.startFor(server,
-                cn.xm1221.ygomc.common.command.YgomcCommand.loadoutForDuel());
+                cn.xm1221.ygomc.common.command.YgomcCommand.loadoutForDuel(),
+                cn.xm1221.ygomc.common.command.YgomcCommand.opponentLoadoutForDuel());
         if (problem != null) {
             // 开局失败必须说出来。静默失败的表现是「右键没反应」，
             // 与「这个物品根本没实现」长得一样。

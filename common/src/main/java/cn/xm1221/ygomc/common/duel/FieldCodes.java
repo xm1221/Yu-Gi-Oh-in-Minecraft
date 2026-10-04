@@ -120,6 +120,17 @@ public final class FieldCodes {
     /** 段头字节数：i32 len + u32 flag（{@code common.h:39}）。 */
     public static final int LEN_HEADER = 8;
 
+    /**
+     * 这个位置是不是「一堆」——卡组/墓地/额外/除外。
+     *
+     * <p>它们在牌桌上只占一个格子、所有卡共用，所以「从墓地选一张」这种询问
+     * <b>没法靠点格子回答</b>（点那一堆等于同时点中里面每一张），必须列出来。
+     * ygo 的做法是弹 {@code wCardSelect} 卡名列表（{@code client_field.cpp:431-527}）。
+     */
+    public static boolean isPileLocation(int location) {
+        return location == LOCATION_DECK || location == LOCATION_GRAVE
+                || location == LOCATION_EXTRA || location == LOCATION_REMOVED;
+    }
     public static final int LOCATION_DECK = 0x01;
     public static final int LOCATION_HAND = 0x02;
     public static final int LOCATION_MZONE = 0x04;
@@ -131,8 +142,45 @@ public final class FieldCodes {
 
     public static final int POS_FACEUP = 0x5;
     public static final int POS_FACEDOWN = 0xa;
+    /** 攻击表示的两位（表侧 {@code 0x1}｜里侧 {@code 0x2}），{@code common.h:112-115}。 */
+    public static final int POS_ATTACK = 0x3;
+    /** 守备表示的两位（表侧 {@code 0x4}｜里侧 {@code 0x8}）。 */
+    public static final int POS_DEFENSE = 0xc;
     /** 公开标记，由 {@code card.cpp:407-408} 或进 position 字节。 */
     public static final int POS_REVEAL = 0x80;
+
+    /**
+     * 「改变表示形式」这一项按<b>当前表示形式</b>该叫什么。
+     *
+     * <p>与官方客户端逐条对齐（{@code event_handler.cpp:2297-2307}）：
+     * 里侧 → {@code 1154 反转召唤}、攻击表示 → {@code 1155 守备表示}、
+     * 其余（表侧守备）→ {@code 1156 攻击表示}。
+     *
+     * <p>三项都写成「变更表示」是不行的：盖着的怪要做的是<b>反转召唤</b>
+     * （会翻开并触发反转效果），竖着的是转守备、横着的是转攻击——
+     * 这是三个不同的决定，玩家得先知道现在是什么姿势才能选。
+     *
+     * <p>顺序有讲究：必须先判里侧。里侧攻击（{@code 0x2}）同时命中攻击位，
+     * 先判攻击会把它说成「守备表示」，而它实际是可以反转召唤的。
+     *
+     * <p>这个方法刻意放在这里而不是界面里：它是<b>纯位运算</b>，
+     * 放在这里就能在没有 Minecraft 的情况下逐位断言。
+     *
+     * @param position 卡的 {@code position} 位标志；{@code -1}（查不到快照）时给中性文案
+     */
+    public static String repositionName(int position) {
+        if (position < 0) {
+            // 拿不到快照（例如这一帧还没到）时不要瞎猜一个具体姿势。
+            return "变更表示";
+        }
+        if ((position & POS_FACEDOWN) != 0) {
+            return "反转召唤";
+        }
+        if ((position & POS_ATTACK) != 0) {
+            return "守备表示";
+        }
+        return "攻击表示";
+    }
 
     public static final int QUERY_CODE = 0x1;
     public static final int QUERY_POSITION = 0x2;

@@ -46,7 +46,14 @@ public final class DataPacks {
             synchronized (DataPacks.class) {
                 pack = instance;
                 if (pack == null) {
-                    pack = DataPack.openDefault(Platform.getGameFolder());
+                    // 只在没有显式指定时才去问 Architectury 要游戏目录：
+                    // `Platform.getGameFolder()` 脱离 Minecraft 会直接抛断言
+                    // （Architectury 的 Platform.java:86），而它是**在实参位置被求值**的，
+                    // 所以哪怕用户写了 -Dygomc.datapack 也照样炸。
+                    // 修好这一处，`OcgDuel.playOut` 这条生产路径才能离线跑。
+                    String override = System.getProperty(DataPack.PROPERTY);
+                    boolean explicit = override != null && !override.isBlank();
+                    pack = DataPack.openDefault(explicit ? null : Platform.getGameFolder());
                     instance = pack;
                 }
             }

@@ -26,6 +26,10 @@ import org.jetbrains.annotations.Nullable;
  */
 public final class CardArt {
 
+    /** Pack source dimensions for rarity layers, which use the FULL card canvas. */
+    private static final int FULL_SOURCE_W = 200;
+    private static final int FULL_SOURCE_H = 290;
+
     /** 占位框的填充色与边框色。 */
     private static final int PLACEHOLDER_FILL = 0xFF2B2B33;
     private static final int PLACEHOLDER_BORDER = 0xFF6A6A78;
@@ -74,12 +78,13 @@ public final class CardArt {
             fallback(g, x, y, w, h);
             return false;
         }
-        // 必须用带真实贴图尺寸的那个重载：7 参数版假定贴图是 256×256，
-        // 而卡图是 200×290，用错会让整张图轻微错位并采样到相邻像素。
+        // 1.21.1 的 (location,x,y,u,v,w,h,sourceW,sourceH) 重载把 w/h
+        // 同时作为目标矩形和采样矩形，不能用来缩放：它会只取左上角 w*h。
+        // 传入带目标尺寸的 11 参数重载，最后两个参数才是源贴图尺寸。
         int texW = CardTextures.width(code, tier);
         int texH = CardTextures.height(code, tier);
-        g.blit(texture, x, y, 0.0F, 0.0F, w, h,
-                texW > 0 ? texW : w, texH > 0 ? texH : h);
+        g.blit(texture, x, y, w, h, 0.0F, 0.0F, texW > 0 ? texW : w,
+                texH > 0 ? texH : h, texW > 0 ? texW : w, texH > 0 ? texH : h);
         return true;
     }
 
@@ -101,7 +106,8 @@ public final class CardArt {
         }
         int tw = CardTextures.backWidth();
         int th = CardTextures.backHeight();
-        g.blit(back, x, y, 0.0F, 0.0F, w, h, tw > 0 ? tw : w, th > 0 ? th : h);
+        g.blit(back, x, y, w, h, 0.0F, 0.0F, tw > 0 ? tw : w,
+                th > 0 ? th : h, tw > 0 ? tw : w, th > 0 ? th : h);
         return true;
     }
 
@@ -112,8 +118,9 @@ public final class CardArt {
 
     /** 普通 alpha 混合的覆盖层。 */
     private static void blitLayer(GuiGraphics g, ResourceLocation texture, int x, int y, int w, int h) {
-        // 层贴图与卡图同尺寸（由资源包作者保证），所以直接用 1:1 的贴图尺寸
-        g.blit(texture, x, y, 0.0F, 0.0F, w, h, w, h);
+        // 图层按 FULL 卡面画布缩放到目标矩形，不能把目标尺寸当采样尺寸。
+        g.blit(texture, x, y, w, h, 0.0F, 0.0F, FULL_SOURCE_W, FULL_SOURCE_H,
+                FULL_SOURCE_W, FULL_SOURCE_H);
     }
 
     /**
@@ -137,7 +144,8 @@ public final class CardArt {
         RenderSystem.enableBlend();
         RenderSystem.blendFunc(GlStateManager.SourceFactor.SRC_ALPHA, GlStateManager.DestFactor.ONE);
         g.setColor(r, gr, b, 1.0F);
-        g.blit(texture, x, y, 0.0F, 0.0F, w, h, w, h);
+        g.blit(texture, x, y, w, h, 0.0F, 0.0F, FULL_SOURCE_W, FULL_SOURCE_H,
+                FULL_SOURCE_W, FULL_SOURCE_H);
         // 必须还原：这两个都是全局 GL 状态，不改回去会让后面所有界面都变成加法混合。
         g.setColor(1.0F, 1.0F, 1.0F, 1.0F);
         RenderSystem.defaultBlendFunc();
