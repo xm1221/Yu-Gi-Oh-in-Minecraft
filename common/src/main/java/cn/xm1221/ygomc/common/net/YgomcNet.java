@@ -39,6 +39,27 @@ import java.util.function.Consumer;
  * 这里，而是由客户端把自己的处理函数交进来（{@link #registerClient}）。
  * 类里所有 lambda 只碰 common 类型，服务端加载它不会连带加载客户端类。
  */
+/*
+ * 【明知而沿用了整套遗留网络接口】
+ *
+ * 编译时发现 ResourceLocation 那一族方法【全部】被标记为弃用待删除，不只是
+ * registerS2CPayloadType：接收器与两个发送方法同样如此。也就是说本类选的不是
+ * 「一个过时方法」，而是整套旧接口。13.0.11 的替代品是原版 1.20.5+ 的
+ * CustomPacketPayload.Type + StreamCodec。
+ *
+ * 为什么现在不换：这条链路【一次都没在真实客户端上跑过】。此刻换掉传输层，
+ * 等于把「我写的载荷注册对不对」和「我写的界面/房间对不对」两个未验证面
+ * 叠在一次运行里；一旦出问题，无从判断是哪一层的错。
+ *
+ * 迁移方向已定，且不难：自定义两个 CustomPacketPayload 记录
+ * （BoardPayload / AnswerPayload），把 DuelWire 的 byte[] 放进它们的
+ * StreamCodec，再把注册与发送换成带 Type 的那组重载。DuelWire 不用动——
+ * 它本来就是纯 JDK 的，与平台接口无关，这正是当初那样分层的好处。
+ *
+ * 抑制范围只给本类：这个类的作用就是平台传输，别的类里再出现 removal 警告
+ * 仍然会照常报出来。
+ */
+@SuppressWarnings("removal")
 public final class YgomcNet {
 
     public static final ResourceLocation BOARD =
