@@ -309,6 +309,10 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
     private static DuelQuestion place(int type, int player, int count, boolean disable,
                                       ZoneDisabled disabled) {
         int monsterZones = disable ? 5 : 7;
+        // 魔陷区的上限也【跟着变】：放置是 8 格，禁用只有 5 格。
+        // 曾经把这里写成「两种都 5」，结果是放置时漏掉魔陷区 6–8 号格——
+        // 一旦玩家自己的前几格都不可用，两边就会选到不同格子，且都合法。
+        int spellZones = disable ? 5 : 8;
         List<Option> opts = new ArrayList<>();
         // 自己那一侧排在前面。这既符合界面上的直觉（先看自己的场），
         // 也让 defaultChoice() 与贪心策略「只考虑自己的区域」的选择一致。
@@ -320,7 +324,7 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
                             owner, Msg.Location.MZONE, seq));
                 }
             }
-            for (int seq = 0; seq < 5; seq++) {
+            for (int seq = 0; seq < spellZones; seq++) {
                 if (!disabled.test(owner, Msg.Location.SZONE, seq)) {
                     opts.add(Option.ofZone(zoneLabel(owner, Msg.Location.SZONE, seq),
                             owner, Msg.Location.SZONE, seq));
