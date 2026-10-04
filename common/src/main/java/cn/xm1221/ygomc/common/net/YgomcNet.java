@@ -81,8 +81,16 @@ public final class YgomcNet {
 
     /** 两端都要调（放在 common 的初始化里）。 */
     public static void registerCommon() {
-        // 漏了这行，客户端会被服务端踢下线，而且服务端日志里没有线索。
-        NetworkManager.registerS2CPayloadType(BOARD);
+        // 这里【只】注册 C2S。S2C 的载荷类型由 registerClient 里那句
+        // registerReceiver(Side.S2C, ...) 一并完成——Architectury 的 S2C 接收器
+        // 注册路径会自己去注册载荷类型。
+        //
+        // 曾经在这里多写了一句 registerS2CPayloadType(BOARD)，于是同一个 ID 被注册两遍，
+        // 客户端在模组加载阶段直接崩：
+        //   UnsupportedOperationException: Cannot register payload ygomc:duel_board
+        //   as it is already registered.
+        // 只在客户端崩，因为 registerCommon 两端都跑、registerClient 只有客户端跑，
+        // 只有客户端会同时走到这两条——服务端自检因此一直是绿的。
         NetworkManager.registerReceiver(NetworkManager.Side.C2S, ANSWER, YgomcNet::onAnswer);
     }
 
