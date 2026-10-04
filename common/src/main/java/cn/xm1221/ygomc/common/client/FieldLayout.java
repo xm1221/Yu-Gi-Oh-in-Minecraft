@@ -79,11 +79,14 @@ public record FieldLayout(int width, int height,
         // 7 行之间有 6 个间距，必须是 6：写成 5 的话会在 960x540 这类尺寸上
         // 差 1 像素压到面板上（floor 之后正好溢出）。
         int usableH = height - 2 * margin - panelH - 6 * gapY;
-        int byHeight = (int) (usableH / 5.7f);
+        // 单位是「一张卡的高度」。四行卡 + 中线额外怪兽区 + 两行手牌，
+        // 手牌与场上卡【等高】——ygopro 的手牌本来就是和场上一样大的卡，
+        // 不是缩小版图标。代价是场上卡小一点，靠悬停放大补回来。
+        int byHeight = (int) (usableH / 6.8f);
         // 卡高先由高度定，宽度不参与——参与的话矮屏会把卡压扁。
         int cellH = Math.max(12, byHeight);
         int cellW = Math.max(8, (int) (cellH * (59f / 86f)));
-        int handH = Math.max(8, (int) (cellH * 0.45f));
+        int handH = cellH;
 
         // 纵向定完再看横向：7 列铺满屏幕还剩很多宽度，就把它摊到列间距上，
         // 而不是让牌桌缩在中间一小块。ygo 客户端的怪兽区本来就是摊开的。
