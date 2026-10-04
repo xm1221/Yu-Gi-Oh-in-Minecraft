@@ -51,6 +51,22 @@ public final class FirstChoiceResponder implements Responder {
             Msg.SelectPosition.FACEDOWN_ATTACK,
     };
 
+    /**
+     * 宣言卡名时要翻的卡表。没有它就答不了「判据里不含卡号」的那种宣言（例如「宣言一只怪兽」），
+     * 见 {@link DeclareCardName}。
+     */
+    private final DeclareCardName.CardTable cardTable;
+
+    /** 不带卡表：只认判据里字面写出的卡号。单测与离线比对用这个。 */
+    public FirstChoiceResponder() {
+        this(DeclareCardName.CardTable.EMPTY);
+    }
+
+    /** @param cardTable 数据包卡表；{@code null} 等同 {@link DeclareCardName.CardTable#EMPTY} */
+    public FirstChoiceResponder(DeclareCardName.CardTable cardTable) {
+        this.cardTable = cardTable == null ? DeclareCardName.CardTable.EMPTY : cardTable;
+    }
+
     @Override
     public Response answer(Msg msg) {
         return switch (msg) {
@@ -68,10 +84,11 @@ public final class FirstChoiceResponder implements Responder {
             case Msg.SelectDisfield m -> selectDisFields(m);
             case Msg.SelectCounter m -> selectCounters(m);
             case Msg.SortCard m -> sortCard(m);
-            case Msg.AnnounceRace m -> Response.of(lowestBit(m.available()));
-            case Msg.AnnounceAttrib m -> Response.of(lowestBit(m.available()));
-            // 宣言类回的是「下标」而不是值本身，所以 0 就是选项表里的第一个。
-            case Msg.AnnounceCard m -> Response.of(0);
+            case Msg.AnnounceRace m -> Response.of(declareBits(m.count(), m.available()));
+            case Msg.AnnounceAttrib m -> Response.of(declareBits(m.count(), m.available()));
+            // 宣言卡名回的是【卡号】，宣言数字回的才是【下标】——两者字段形状一样、
+            // 读法完全不同，见 DeclareCardName 的类注释。
+            case Msg.AnnounceCard m -> Response.of(DeclareCardName.choose(m.options(), cardTable));
             case Msg.AnnounceNumber m -> Response.of(0);
             case Msg.RockPaperScissors m -> Response.of(ROCK);
             default -> throw new UnsupportedOperationException(
@@ -206,48 +223,95 @@ public final class FirstChoiceResponder implements Responder {
      * 选址。应答是每项 3 字节 {@code [归属, 区域, 序号]}。
      *
      * <p>消息里<b>不给出可选列表</b>，只给禁止位掩码，所以这里自己按
-     * 「先怪兽区再魔陷区」找一个没被禁止的格子。{@code count == 0} 表示不选。
+     * 「先怪兽区再魔陷区」找一个没被禁止的格子。
+     *
+     * <h2>{@code count == 0} 不是「不用放」</h2>
+     * 内核自己读应答时用的是 {@code len = max(1, count)}（{@code playerop.cpp:451}），
+     * 也就是<b>无论 {@code count} 是几都至少要读一个三元组</b>。而真正会发
+     * {@code count == 0} 的那一个调用点（{@code operations.cpp:2448}，{@code field::sset}）
+     * 把应答的<b>第 2 字节</b>当「放不放」、第 3 字节当格号：
+     *
+     * <pre>
+     * operations.cpp:2451-2455
+     *   if(returns.bvalue[1] == 0) return TRUE;          // ← 回 (0,0,0) 就等于「放弃盖放」
+     *   target->to_field_param = returns.bvalue[2];      // ← 格号
+     * </pre>
+     *
+     * <p>所以「{@code count == 0} 就回 {@code (0,0,0)}」虽然能通过校验（{@code playerop.cpp:452}
+     * 对 {@code count==0 && i==0 && l==0} 开绿灯），却让效果<b>静默失效</b>：
+     * 不报错、不复位，调用方原地再来一次，于是同一格询问被问几千次
+     * （实测「偏好盖魔陷」场景下 15000 步里 9996 次，一局永远打不完）。
+     * 校验放行的是「形状」，不是「语义」——这一处正是「合法但无进展」。
+     *
+     * <p>所以这里按 {@code max(1, count)} 取格子：{@code count == 0} 时也真的放一张。
+     * 只有真的一格都没有时才回 {@code (0,0,0)}（那是唯一还能通过校验的值）。
      */
     private static Response selectPlaces(Msg.SelectPlace m) {
-        if (m.count() <= 0) {
-            return Response.of(new byte[]{0, 0, 0});
-        }
-        byte[] resp = new byte[3 * m.count()];
-        boolean[] used = new boolean[16];
-        for (int i = 0; i < m.count(); i++) {
-            int location = Msg.Location.MZONE;
-            int sequence = 0;
-            boolean found = false;
-            for (int k = 0; k < 7; k++) {
-                if (m.ownMonsterZoneUsable(k) && !used[k]) {
-                    sequence = k;
-                    found = true;
-                    break;
+        int need = Math.max(1, m.count());
+        byte[] resp = new byte[3 * need];
+        // 下标与 Msg#zoneBit 同一套：自己怪兽区 0-6、自己魔陷区 8-15、
+        // 对方怪兽区 16-22、对方魔陷区 24-31。
+        boolean[] used = new boolean[32];
+        for (int i = 0; i < need; i++) {
+            int[] pick = firstFreePlace(m, used);
+            if (pick == null) {
+                if (m.count() <= 0) {
+                    // 一格都没有，而且调用方没要求放：回 (0,0,0) 是唯一合法值。
+                    return Response.of(new byte[]{0, 0, 0});
                 }
-            }
-            if (!found) {
-                location = Msg.Location.SZONE;
-                for (int k = 0; k < 8; k++) {
-                    if (m.ownSpellZoneUsable(k) && !used[8 + k]) {
-                        sequence = k;
-                        found = true;
-                        break;
-                    }
-                }
-            }
-            if (!found) {
                 // 与 selectDisFields 同样的理由：没格子可放时必须明确失败，
                 // 不能返回一个非法位置——确定性应答器 + 非法值 = RETRY 死循环。
                 throw new IllegalStateException(String.format(
                         "SELECT_PLACE 要求放置 %d 张，但 flag=0x%08X 里已没有任何可用区域"
                                 + "（player=%d）", m.count(), m.flag(), m.player()));
             }
-            used[sequence + (location == Msg.Location.MZONE ? 0 : 8)] = true;
-            resp[3 * i] = (byte) m.player();
-            resp[3 * i + 1] = (byte) location;
-            resp[3 * i + 2] = (byte) sequence;
+            used[pick[3]] = true;
+            resp[3 * i] = (byte) pick[0];
+            resp[3 * i + 1] = (byte) pick[1];
+            resp[3 * i + 2] = (byte) pick[2];
         }
         return Response.of(resp);
+    }
+
+    /**
+     * 找一个可用的格子，返回 {@code [归属, 区域, 序号, 位下标]}；没有则 {@code null}。
+     *
+     * <h2>为什么也要看对方的格子</h2>
+     * {@code MSG_SELECT_PLACE} 不一定是「把卡放到自己场上」：{@code flag} 的低 16 位是
+     * 自己的场、高 16 位是对方的场（位序见 {@link Msg#zoneBit}），
+     * {@code Duel.SelectField}（{@code libduel.cpp:3965-3982}）就按调用方给的两个
+     * {@code location} 参数分别放开自己的与对方的区域。实测真的会遇到
+     * <b>只有对方怪兽区可用</b>的询问（{@code flag=0xFFE0FFFF}：自己两区全禁、
+     * 对方怪兽区 0-4 可用），只看自己的场就会把它误判成「无处可放」而抛异常。
+     *
+     * <p>顺序是「自己怪兽区 → 自己魔陷区 → 对方怪兽区 → 对方魔陷区」：
+     * 把卡放到对方场上属于少数派，排在最后就不会改变原先那些询问的答案。
+     *
+     * <p>怪兽区扫 0..6（大师规则下 5、6 是额外怪兽区，内核的校验接受），
+     * 魔陷区扫 0..7。
+     */
+    private static int[] firstFreePlace(Msg.SelectPlace m, boolean[] used) {
+        for (int k = 0; k < 7; k++) {
+            if (m.ownMonsterZoneUsable(k) && !used[k]) {
+                return new int[]{m.player(), Msg.Location.MZONE, k, k};
+            }
+        }
+        for (int k = 0; k < 8; k++) {
+            if (m.ownSpellZoneUsable(k) && !used[8 + k]) {
+                return new int[]{m.player(), Msg.Location.SZONE, k, 8 + k};
+            }
+        }
+        for (int k = 0; k < 7; k++) {
+            if (m.oppMonsterZoneUsable(k) && !used[16 + k]) {
+                return new int[]{1 - m.player(), Msg.Location.MZONE, k, 16 + k};
+            }
+        }
+        for (int k = 0; k < 8; k++) {
+            if (m.oppSpellZoneUsable(k) && !used[24 + k]) {
+                return new int[]{1 - m.player(), Msg.Location.SZONE, k, 24 + k};
+            }
+        }
+        return null;
     }
 
     /**
@@ -387,9 +451,40 @@ public final class FirstChoiceResponder implements Responder {
         return resp;
     }
 
-    /** 取掩码里最低的那个 1；掩码为 0 时退到 1（调用方保证不了的情况下至少给个非零值）。 */
-    private static int lowestBit(int mask) {
-        return mask == 0 ? 1 : Integer.lowestOneBit(mask);
+    /**
+     * 宣言种族/属性的位掩码应答。
+     *
+     * <h2>不是「取最低位」，而是「取最低的 {@code count} 位」</h2>
+     * 内核 {@code announce_race}/{@code announce_attribute} 的校验是
+     * {@code sel != count → MSG_RETRY}（{@code playerop.cpp:820} 与 {@code :859}），
+     * 其中 {@code sel} 是应答掩码里落在 {@code available} 内的位数。
+     * 所以 {@code count > 1}（脚本要求「宣言两个种族」之类）时，回一个位就会被拒。
+     * 这两个字段长得和「单选」一样，只有 {@code count} 区分得出来——
+     * 这正是容易被顺手写成 {@code Integer.lowestOneBit} 的地方。
+     *
+     * <p>{@code count == 0} 时内核的判据是 {@code sel == 0}，也就是必须回 0
+     * （{@code playerop.cpp:799-802} 会把 {@code count} 夹到可用的位数，可用位为 0 时就是 0）。
+     */
+    private static int declareBits(int count, int available) {
+        if (count <= 0) {
+            return 0;
+        }
+        int mask = 0;
+        int taken = 0;
+        for (int bit = 1; bit != 0 && taken < count; bit <<= 1) {
+            if ((available & bit) != 0) {
+                mask |= bit;
+                taken++;
+            }
+        }
+        if (taken < count) {
+            // available 里的位数不够 count：内核在 step 0 已经把 count 夹过了，
+            // 走到这里说明消息里的 count 与 available 不自洽（协议理解有偏差）。
+            throw new IllegalStateException(String.format(
+                    "宣言类要求选 %d 位，但 available=0x%X 里只有 %d 位",
+                    count, available, taken));
+        }
+        return mask;
     }
 
     /**

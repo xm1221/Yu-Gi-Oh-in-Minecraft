@@ -6,6 +6,7 @@ import cn.xm1221.ygomc.common.ocg.msg.MsgCodecException;
 import cn.xm1221.ygomc.common.ocg.msg.MsgType;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -40,6 +41,21 @@ public final class OcgDuel implements AutoCloseable {
     private static final int RETRY_STORM_LIMIT = 8;
 
     /**
+     * <b>同一条询问</b>（原始字节逐字相同）被原样重问到这个次数就判定失败。
+     *
+     * <h2>为什么不能只看「连续 RETRY」</h2>
+     * 内核拒绝一条应答时写 {@code MSG_RETRY} 并返回 {@code FALSE}，下一次 {@code process()}
+     * 会<b>把被拒的那条询问原样再写一遍</b>，然后是下一条 {@code MSG_RETRY}……也就是说
+     * 真实的重试风暴是 {@code 询问, RETRY, 询问, RETRY, …} 交替，而不是一长串 RETRY。
+     * 只看「连续 RETRY 条数」的阈值在这个交替下<b>永远不会触发</b>：每条询问都把计数清零了。
+     * 症状因此不是「报错」，而是「安静地跑满步数上限」——正是最难查的那种。
+     *
+     * <p>所以判据换成「同一条询问被重问了几次」：只有应答被拒时内核才会原样重问，
+     * 所以它既精确（不会把「正常地又问了一次同类型问题」算进来）又必然触发。
+     */
+    private static final int SAME_QUERY_REASK_LIMIT = 8;
+
+    /**
      * 连续同一种询问而无任何状态变化的上限。
      *
      * <p>用来抓「每个应答都合法、但对局原地打转」这类问题——它<b>不会</b>产生 RETRY，
@@ -55,6 +71,19 @@ public final class OcgDuel implements AutoCloseable {
     /** 触发上一次应答的那条询问消息，只用于报错。 */
     private Msg lastQuery;
     private int retryStreak;
+
+    /** 被拒应答的总次数。 */
+    private int retries;
+    /** <b>被拒 N 次、按类型</b>：询问类型 → 被拒次数。类型是该应答所属询问的类型。 */
+    private final Map<Integer, Integer> retriesByType = new LinkedHashMap<>();
+    /** 每种询问<b>第一次</b>被拒时的「请求字节 / 应答字节」。定位非法字段靠它。 */
+    private final Map<Integer, String> firstRejectionByType = new LinkedHashMap<>();
+    /** 上一次被应答的询问的原始字节（内核是照着它重问的）。 */
+    private byte[] lastQueryBytes;
+    /** 上一条消息是 RETRY，正在等同一条询问被重问。 */
+    private boolean retryPending;
+    /** 同一条询问（原始字节逐字相同）被重问了几次。 */
+    private int sameQueryReasks;
 
     private boolean started;
     private boolean finished;
@@ -257,8 +286,21 @@ public final class OcgDuel implements AutoCloseable {
      *       所以「胜因」必须和「胜者」一起看，只看胜因会误判。</li>
      * </ul>
      */
+    /**
+     * @param retries              被拒应答的总次数（{@code MSG_RETRY} 的条数）
+     * @param retriesByType        <b>被拒 N 次、按询问类型</b>；键是应答被拒的那条询问的类型
+     * @param firstRejectionByType 每种询问第一次被拒时的「消息 + 请求字节 + 应答字节」
+     */
     public record Outcome(int winner, int reason, int steps, int queries,
-                          Map<Integer, Integer> messageCounts, String error) {
+                          Map<Integer, Integer> messageCounts, String error,
+                          int retries, Map<Integer, Integer> retriesByType,
+                          Map<Integer, String> firstRejectionByType) {
+
+        /** 没有重试数据可报时用（例如还没开局就抛异常）。 */
+        public Outcome(int winner, int reason, int steps, int queries,
+                       Map<Integer, Integer> messageCounts, String error) {
+            this(winner, reason, steps, queries, messageCounts, error, 0, Map.of(), Map.of());
+        }
 
         public boolean won() {
             return winner >= 0;
@@ -275,6 +317,29 @@ public final class OcgDuel implements AutoCloseable {
                 }
                 sb.append(MsgType.name(e.getKey())).append('=').append(e.getValue());
             }
+            return sb.toString();
+        }
+
+        /**
+         * 「被拒 N 次、按类型降序」的表。
+         *
+         * <p>只看 {@code MSG_RETRY} 的总数没有诊断价值——它既不说是哪一类询问在挨拒，
+         * 也不说拒了几次。这张表是「哪条应答构造错了」的第一手证据。
+         */
+        public String retryHistogram() {
+            if (retriesByType.isEmpty()) {
+                return "（没有任何应答被拒）";
+            }
+            List<Map.Entry<Integer, Integer>> entries = new ArrayList<>(retriesByType.entrySet());
+            entries.sort((a, b) -> Integer.compare(b.getValue(), a.getValue()));
+            StringBuilder sb = new StringBuilder();
+            int rank = 1;
+            for (Map.Entry<Integer, Integer> e : entries) {
+                sb.append(String.format("%n  %2d. %-22s 被拒 %d 次", rank++,
+                        MsgType.name(e.getKey()), e.getValue()));
+            }
+            sb.append("\n  合计 ").append(retries).append(" 次（涉及 ")
+              .append(retriesByType.size()).append(" 种询问）");
             return sb.toString();
         }
     }
@@ -368,7 +433,8 @@ public final class OcgDuel implements AutoCloseable {
                 // 内核自己不响应中断，所以「中止」只能落在消息边界上——
                 // DuelSession.abort() 打的中断标记就是靠这一句生效的。
                 if (Thread.currentThread().isInterrupted()) {
-                    return new Outcome(-1, -1, steps, queries, counts, "被中止");
+                    return new Outcome(-1, -1, steps, queries, counts, "被中止",
+                            duel.retries, duel.retriesByType, duel.firstRejectionByType);
                 }
                 Step step = duel.advance();
                 for (Msg m : step.messages()) {
@@ -383,6 +449,7 @@ public final class OcgDuel implements AutoCloseable {
                         Msg.Win win = (Msg.Win) m;
                         winner = win.winner();
                         reason = win.reason();
+                        duel.retryPending = false;
                         if (observer != null) {
                             observer.onMessage(duel, m, false);
                         }
@@ -393,6 +460,10 @@ public final class OcgDuel implements AutoCloseable {
                         // 这是「有进展」的判据。
                         repeatedType = -1;
                         repeatStreak = 0;
+                        // 非询问消息插入进来，说明「上一次应答被拒后内核原样重问」这条链断了，
+                        // 于是同一条询问的重问计数也该归零。
+                        duel.retryPending = false;
+                        duel.sameQueryReasks = 0;
                         if (observer != null) {
                             observer.onMessage(duel, m, false);
                         }
@@ -405,7 +476,8 @@ public final class OcgDuel implements AutoCloseable {
                                     "连续 " + repeatStreak + " 次 " + MsgType.name(m.type())
                                             + " 之间没有任何状态变化：应答策略在做「合法但无进展」的原地循环。"
                                             + "注意这类问题不会产生 RETRY（每个应答本身都合法），"
-                                            + "所以只能这样探测。最后一次询问=" + m);
+                                            + "所以只能这样探测。最后一次询问=" + m,
+                                    duel.retries, duel.retriesByType, duel.firstRejectionByType);
                         }
                     } else {
                         repeatedType = m.type();
@@ -413,20 +485,53 @@ public final class OcgDuel implements AutoCloseable {
                     }
 
                     if (m.type() == MsgType.RETRY) {
+                        // 被拒的是【上一次应答】所对应的那条询问，所以按 lastQuery 的类型归类。
+                        // 不这样做的话这里只有「总共多少条 RETRY」，看不出是哪一类询问在挨拒。
+                        if (duel.lastQuery != null) {
+                            duel.retries++;
+                            duel.retriesByType.merge(duel.lastQuery.type(), 1, Integer::sum);
+                            duel.firstRejectionByType.putIfAbsent(duel.lastQuery.type(),
+                                    duel.lastQuery + "\n      请求字节 " + hex(duel.lastQueryBytes)
+                                            + "\n      应答字节 " + describe(duel.lastResponse));
+                        }
                         if (++duel.retryStreak > RETRY_STORM_LIMIT) {
                             return new Outcome(-1, -1, steps, queries, counts,
                                     "连续 " + duel.retryStreak + " 次 RETRY：应答策略给出的值始终非法。"
-                                            + "最后一次询问是 " + duel.lastQuery);
+                                            + "最后一次询问是 " + duel.lastQuery,
+                                    duel.retries, duel.retriesByType, duel.firstRejectionByType);
                         }
                         if (duel.lastResponse == null) {
                             return new Outcome(-1, -1, steps, queries, counts,
-                                    "收到 RETRY 但没有可重发的应答");
+                                    "收到 RETRY 但没有可重发的应答",
+                                    duel.retries, duel.retriesByType, duel.firstRejectionByType);
                         }
+                        duel.retryPending = true;
                         duel.respond(duel.lastResponse);
                         continue;
                     }
 
                     duel.retryStreak = 0;
+
+                    // ── 同一条询问被原样重问？ ──────────────────────────────────
+                    // 内核拒绝应答后会【逐字重发同一条询问】，所以「原始字节相同」就是
+                    // 「应答被拒」的确证，而不是「又问了一次同类型的问题」。
+                    byte[] raw = Arrays.copyOfRange(duel.buffer, m.offset(), m.offset() + m.length());
+                    if (duel.retryPending && Arrays.equals(raw, duel.lastQueryBytes)) {
+                        duel.sameQueryReasks++;
+                    } else {
+                        duel.sameQueryReasks = 0;
+                    }
+                    duel.retryPending = false;
+                    duel.lastQueryBytes = raw;
+                    if (duel.sameQueryReasks > SAME_QUERY_REASK_LIMIT) {
+                        return new Outcome(-1, -1, steps, queries, counts,
+                                "同一条询问被原样重问 " + (duel.sameQueryReasks + 1)
+                                        + " 次：应答一直被内核拒绝，而重发的是同一个值。"
+                                        + "\n" + describeRejection(m, duel)
+                                        + "\n（注意交替出现的询问/RETRY 会让「连续 RETRY」计数永远归零，"
+                                        + "所以只看那个计数是发现不了的。）",
+                                duel.retries, duel.retriesByType, duel.firstRejectionByType);
+                    }
                     // 观察点：引擎已经问完、应答还没交回去。
                     // 此时取快照拿到的就是「玩家该做决定的那一刻」的牌桌。
                     if (observer != null) {
@@ -435,7 +540,8 @@ public final class OcgDuel implements AutoCloseable {
                     Responder.Response response = responder.answer(m);
                     if (response == null) {
                         return new Outcome(-1, -1, steps, queries, counts,
-                                "应答策略对 " + MsgType.name(m.type()) + " 返回了 null");
+                                "应答策略对 " + MsgType.name(m.type()) + " 返回了 null",
+                                duel.retries, duel.retriesByType, duel.firstRejectionByType);
                     }
                     duel.lastQuery = m;
                     duel.lastResponse = response;
@@ -446,13 +552,49 @@ public final class OcgDuel implements AutoCloseable {
 
             if (winner < 0) {
                 return new Outcome(-1, -1, steps, queries, counts,
-                        "推进 " + steps + " 步仍未收局（可能卡在某个询问上）");
+                        "推进 " + steps + " 步仍未收局（可能卡在某个询问上）",
+                        duel.retries, duel.retriesByType, duel.firstRejectionByType);
             }
             duel.finished = true;
-            return new Outcome(winner, reason, steps, queries, counts, null);
+            return new Outcome(winner, reason, steps, queries, counts, null,
+                    duel.retries, duel.retriesByType, duel.firstRejectionByType);
 
         } catch (RuntimeException e) {
             return new Outcome(-1, -1, steps, queries, counts, e.toString());
         }
+    }
+
+    // ── 报错文本里的字节 ──────────────────────────────────────────────────
+
+    /** 一段字节的十六进制形式；{@code null} 或空数组给 {@code "(无)"}。 */
+    private static String hex(byte[] bytes) {
+        if (bytes == null || bytes.length == 0) {
+            return "(无)";
+        }
+        StringBuilder sb = new StringBuilder(bytes.length * 3);
+        for (byte b : bytes) {
+            sb.append(String.format("%02X ", b));
+        }
+        return sb.toString().trim();
+    }
+
+    /** 一条应答的可读形式，和送进内核的字节一一对应。 */
+    private static String describe(Responder.Response r) {
+        if (r == null) {
+            return "(无)";
+        }
+        return r.isBytes() ? "bvalue[" + hex(r.bytes()) + "]" : "ivalue=" + r.value();
+    }
+
+    /**
+     * 「这条询问的请求字节 + 我回的应答字节 + 内核会怎么判它」。
+     *
+     * <p>失败时把两边的字节都摆出来，是为了让定位停在「哪几个字节」上，
+     * 而不是停在一句「应答被拒」上。
+     */
+    private static String describeRejection(Msg query, OcgDuel duel) {
+        return "询问 " + MsgType.name(query.type()) + " → " + query
+                + "\n      请求字节 " + hex(duel.lastQueryBytes)
+                + "\n      应答字节 " + describe(duel.lastResponse);
     }
 }

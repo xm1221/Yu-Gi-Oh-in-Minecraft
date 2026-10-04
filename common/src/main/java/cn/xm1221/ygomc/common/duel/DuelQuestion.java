@@ -1,5 +1,6 @@
 package cn.xm1221.ygomc.common.duel;
 
+import cn.xm1221.ygomc.common.ocg.DeclareCardName;
 import cn.xm1221.ygomc.common.ocg.Responder;
 import cn.xm1221.ygomc.common.ocg.msg.Msg;
 import cn.xm1221.ygomc.common.ocg.msg.MsgType;
@@ -31,7 +32,8 @@ import java.util.List;
  *   <li>行动类（{@code SELECT_IDLECMD/BATTLECMD}）回 {@code (子下标 << 16) | 类型}，
  *       <b>类型在低 16 位</b>；</li>
  *   <li>宣言类（{@code ANNOUNCE_RACE/ATTRIB}）回<b>位掩码</b>而不是下标；</li>
- *   <li>{@code ANNOUNCE_CARD/NUMBER} 回<b>下标</b>；</li>
+ *   <li>{@code ANNOUNCE_CARD} 回<b>卡号</b>、{@code ANNOUNCE_NUMBER} 回<b>下标</b>——
+ *       两者的消息字段形状一模一样，读法却相反，见各自的注释；</li>
  *   <li>猜拳回 1/2/3，<b>0 非法</b>（大多数单选类下标从 0 开始，所以很容易顺手写错）；</li>
  *   <li>是/否回 0/1，且内核给简单 AI 的默认值是 1
  *       （{@code playerop.cpp:197-211}），即 <b>1 = 是</b>。</li>
@@ -167,8 +169,8 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
             case Msg.SortCard m -> sort(m);
             case Msg.AnnounceRace m -> announceBits(msg.type(), m.player(), "宣言种族", m.available());
             case Msg.AnnounceAttrib m -> announceBits(msg.type(), m.player(), "宣言属性", m.available());
-            case Msg.AnnounceCard m -> announceIndex(msg.type(), m.player(), "宣言卡名", m.options());
-            case Msg.AnnounceNumber m -> announceIndex(msg.type(), m.player(), "宣言数字", m.options());
+            case Msg.AnnounceCard m -> announceCard(m);
+            case Msg.AnnounceNumber m -> announceNumber(m);
             case Msg.RockPaperScissors m -> rps(m);
             default -> unsupported(msg);
         };
@@ -458,13 +460,62 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
         return new DuelQuestion(type, player, Mode.SINGLE, title, opts, 1, 1, false);
     }
 
-    private static DuelQuestion announceIndex(int type, int player, String title, int[] options) {
-        List<Option> opts = new ArrayList<>();
-        for (int i = 0; i < options.length; i++) {
-            // 宣言卡名/数字回的是【下标】而不是值本身。
-            opts.add(Option.ofIndex(cardOrNumber(options[i]), options[i], i));
+    /**
+     * {@code MSG_ANNOUNCE_CARD}：宣言卡名。
+     *
+     * <h2>应答是<b>卡号</b></h2>
+     * 内核把 {@code ivalue[0]} 当卡号送进 {@code read_card}，查不到就 {@code MSG_RETRY}
+     * （{@code playerop.cpp:1014-1026}）。而消息里的 {@code options} 是判据<b>表达式</b>
+     * （里面混着 {@code 0x40000100} 这类 opcode），所以能当答案的只有其中以
+     * {@code OPCODE_ISCODE} 立即数形式出现的那些卡号，提取规则见
+     * {@link DeclareCardName#candidates}。
+     *
+     * <p><b>这里曾经是错的，而且是「静默」的那种错</b>：原实现用
+     * {@code Option.ofIndex(...)} 建选项，而 {@code ofIndex} 不设 {@code value}
+     * （它把值放在 {@code cardCode} 里），于是 {@link #response} 无论玩家点哪个都回
+     * {@code ivalue=0}——{@code read_card(0)} 直接是空卡，必然 {@code MSG_RETRY}，
+     * 重发同一个 0 就是一个跑满步数上限也不报错的死循环。
+     *
+     * <p>判据里一个卡号都没写时（例如「宣言一只怪兽」：{@code [1, OPCODE_ISTYPE]}），
+     * 合法答案要翻整个卡表才找得到，而问题模型手里没有卡表。这种询问标成
+     * {@link Mode#UNSUPPORTED}，由 {@code PlayerResponder} 回退给带卡表的
+     * {@link FirstChoiceResponder}；在这里硬凑一个值只会变成几千条 RETRY。
+     */
+    private static DuelQuestion announceCard(Msg.AnnounceCard m) {
+        int[] codes = DeclareCardName.candidates(m.options());
+        if (codes.length == 0) {
+            return unsupported(m);
         }
-        return new DuelQuestion(type, player, Mode.SINGLE, title, opts, 1, 1, false);
+        List<Option> opts = new ArrayList<>(codes.length);
+        for (int i = 0; i < codes.length; i++) {
+            // cardCode 与 value 都是这个卡号：前者让界面去查卡名/卡图，后者就是应答内容。
+            opts.add(Option.ofValue("#" + codes[i], codes[i], codes[i]));
+        }
+        return new DuelQuestion(MsgType.ANNOUNCE_CARD, m.player(), Mode.SINGLE,
+                "宣言卡名", opts, 1, 1, false);
+    }
+
+    /**
+     * {@code MSG_ANNOUNCE_NUMBER}：宣言数字。
+     *
+     * <h2>应答是<b>下标</b>，不是 option 的值</h2>
+     * 内核校验 {@code 0 <= ret < select_options.size()}，命中后取
+     * {@code select_options[ret]}（{@code playerop.cpp:1046-1054}）。这与同族的
+     * {@code ANNOUNCE_CARD} 正好相反，两者字段形状却一模一样——所以这里必须写清楚：
+     * 回的是 {@code i}，不是 {@code options[i]}。数字恰好是 {@code 0..n-1} 时
+     * 两种写法看不出差别，换个脚本（例如「宣言 3 或 5」）就会选错或越界成 RETRY。
+     */
+    private static DuelQuestion announceNumber(Msg.AnnounceNumber m) {
+        if (m.count() == 0) {
+            return unsupported(m);
+        }
+        List<Option> opts = new ArrayList<>(m.count());
+        for (int i = 0; i < m.count(); i++) {
+            // cardCode 留 0：这是数字不是卡，别让界面去查卡图。
+            opts.add(Option.ofValue("#" + m.options()[i], 0, i));
+        }
+        return new DuelQuestion(MsgType.ANNOUNCE_NUMBER, m.player(), Mode.SINGLE,
+                "宣言数字", opts, 1, 1, false);
     }
 
     private static DuelQuestion rps(Msg.RockPaperScissors m) {
@@ -739,12 +790,6 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
                 : location == Msg.Location.EXTRA ? "额外卡组"
                 : "区域" + location;
         return side + kind + (sequence + 1);
-    }
-
-    private static String cardOrNumber(int value) {
-        // 卡名宣言的候选是卡号，数字宣言的候选是小整数；两者都无法在这里确定地分辨，
-        // 所以给出一个中性文本，由界面按类型替换。
-        return "#" + value;
     }
 
     /**

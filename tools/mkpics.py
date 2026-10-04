@@ -11,15 +11,24 @@ pics/*.jpg -> pics.bin（卡图数据包）
 
 产物**不进版本控制**，落在 `local-data/datapack/`，与 cards.bin / texts.bin 并列。
 
-## 两档尺寸
+## 三档尺寸
 
 | 档位 | 尺寸 | 用途 |
 |---|---|---|
 | 0 FULL | 200x290 q85 | 对局界面里 1:1 显示、卡牌详情大图 |
 | 1 ICON | 64x93 q78 | 物品栏图标；世界里的小尺寸绘制 |
+| 2 HOVER | 400x580 q90 | **只给悬停大图用**：对局界面里鼠标停在卡上时的大图 |
 
 物品栏里一张卡最多占一两格，200x290 的图纯属浪费显存与解码时间，所以单独再压一档。
-两档都按「宽度取整、高度按 580/400 比例」算，保持卡面比例不失真。
+
+HOVER 档为什么要有：对局格子在 854x480 下只有 50x74，而悬停大图按「≥55% 屏高」画，
+1280x720 上是 396 px、1920x1080 上是 594 px。用 200x290 去放大 1.37x / 2.05x 会明显发虚，
+所以要一档真正的原尺寸（400x580，与 `pics/*.jpg` 同尺寸）。
+代价（25 张抽样实测）：HOVER 平均 78.0 KB → 15017 张约 **1143 MB**，
+数据包从 344 MB 涨到 **约 1.4 GB**，所以它是**可选档**：
+旧的两档数据包照常能用，Java 侧按 `tierCount` 判断并回退到 FULL。
+
+三档都按「宽度取整、高度按 580/400 比例」算，保持卡面比例不失真。
 
 ## 文件格式（与 Java 侧 CardImageDb 严格对应）
 
@@ -63,10 +72,25 @@ HEADER_BYTES = 32
 CARD_W, CARD_H = 400, 580          # 原始尺寸，用于算比例
 
 # (档位名, 宽, 高, JPEG 质量)
+#
+# 三档。索引必须与 Java 侧 CardImageDb.TIER_* 一一对应（0/1/2）。
+# HOVER 档是【可选】的：实测它把 pics.bin 从 344 MB 加到约 1.4 GB，
+# 所以旧数据包里可能只有前两档，Java 侧按 tierCount 判断并回退到 FULL。
 TIERS = [
     ("FULL", 200, 290, 85),
     ("ICON", 64, 93, 78),
+    ("HOVER", 400, 580, 90),
 ]
+
+# draft 的目标尺寸：取【最大】档，不是 TIERS[0]。
+#
+# 原先是 TIERS[0]（200x290），对 400x580 的源图正好触发 libjpeg 的 1/2 DCT 降采样——
+# 那对 FULL 档是好事（省一次重采样），但 HOVER 档会变成"200x290 再放大回 400x580"，
+# 等于花 1.3 GB 存了一张糊的大图。取最大档后 draft 不再降采样
+# （目标不小于源图时 PIL 什么都不做），三档统一由 LANCZOS 得到。
+#
+# 代价：FULL/ICON 多了解码整张 400x580 与两次 LANCZOS，重打包明显变慢。
+_DRAFT = (max(t[1] for t in TIERS), max(t[2] for t in TIERS))
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_PICS = r"D:\MyCardLibrary\ygopro\pics"
@@ -87,8 +111,9 @@ def encode_card(job):
     try:
         src = Image.open(path)
         # draft 让 libjpeg 在 DCT 域直接按比例降采样，比全解码后再缩快好几倍。
-        # 注意它只能按 1/1,1/2,1/4,1/8 缩，所以之后通常还要补一次 resize。
-        src.draft("RGB", (_TIERS[0][1], _TIERS[0][2]))
+        # 注意它只能按 1/1,1/2,1/4,1/8 缩，而且目标不能小于最大档——
+        # 理由见 _DRAFT 上面那段。
+        src.draft("RGB", _DRAFT)
         src = src.convert("RGB")
     except Exception as e:                                  # 坏图不该中断整批
         return code, None, str(e)

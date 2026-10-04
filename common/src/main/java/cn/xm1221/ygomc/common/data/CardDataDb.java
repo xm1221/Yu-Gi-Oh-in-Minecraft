@@ -153,6 +153,34 @@ public final class CardDataDb {
         return indexOf(code) >= 0;
     }
 
+    /**
+     * 某张卡的 16 个 {@code setcode} 槽（{@code card_data.h:48} 的 {@code u16 setcode[16]}，
+     * 在 80 字节结构体里是偏移 8..40）。
+     *
+     * <p>存在的理由只有一个：内核判定「这张卡能不能被宣言」时会读它
+     * （{@code playerop.cpp:965} 的 {@code OPCODE_ISSETCARD} → {@code card_data.h:65}
+     * 的 {@code is_setcode}），而「宣言卡名」的应答必须是内核认得且判据为真的卡号。
+     * 少这一个字段就没法在本地把那个判据算出来。
+     *
+     * <p><b>槽里出现 0 表示后面全是 0</b>——内核的 {@code is_setcode} 一遇到 0 就
+     * {@code return false}，不是「跳过继续看」。所以这里返回的数组必须保留 0，
+     * 不能过滤掉，否则判据会从「假」变成「真」。
+     *
+     * @return 卡号不在表里时返回 {@code null}
+     */
+    public int[] setcodes(int code) {
+        int i = indexOf(code);
+        if (i < 0) {
+            return null;
+        }
+        int[] out = new int[16];
+        int p = i * STRUCT_BYTES + 8;
+        for (int k = 0; k < 16; k++) {
+            out[k] = (blob[p + 2 * k] & 0xFF) | ((blob[p + 2 * k + 1] & 0xFF) << 8);
+        }
+        return out;
+    }
+
     private int u32(int index, int off) {
         int p = index * STRUCT_BYTES + off;
         return (blob[p] & 0xFF) | ((blob[p + 1] & 0xFF) << 8)

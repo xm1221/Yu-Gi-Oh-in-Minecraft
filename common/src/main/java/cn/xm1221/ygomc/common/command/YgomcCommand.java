@@ -8,6 +8,7 @@ import cn.xm1221.ygomc.common.deck.DeckValidator;
 import cn.xm1221.ygomc.common.duel.AutoPlayer;
 import cn.xm1221.ygomc.common.duel.DuelSnapshotProbe;
 import cn.xm1221.ygomc.common.duel.DuelStreamRecorder;
+import cn.xm1221.ygomc.common.ocg.DeclareCardName;
 import cn.xm1221.ygomc.common.ocg.DuelSession;
 import cn.xm1221.ygomc.common.ocg.PlayerResponder;
 import java.io.IOException;
@@ -149,7 +150,7 @@ public final class YgomcCommand {
         OcgDuel.DeckLoadout loadout = toLoadout(deck);
         try {
             DuelSessions.start(label, new OcgDuel.DeckLoadout[]{loadout, loadout},
-                    new FirstChoiceResponder(), session -> {
+                    new FirstChoiceResponder(DeclareCardName.packagedTable()), session -> {
                         String text = format(session, verbose);
                         LOGGER.info("对局结束：\n{}", text);
                         reply(source, text);
@@ -255,7 +256,7 @@ public final class YgomcCommand {
         DuelSnapshotProbe probe = new DuelSnapshotProbe();
         try {
             DuelSessions.start("selftest", new OcgDuel.DeckLoadout[]{loadout, loadout},
-                    new FirstChoiceResponder(), probe,
+                    new FirstChoiceResponder(DeclareCardName.packagedTable()), probe,
                     session -> {
                         LOGGER.info("自动自检结果：\n{}", format(session, true));
                         LOGGER.info(probe.report());
@@ -321,7 +322,8 @@ public final class YgomcCommand {
      * 两个数字不一样，就说明这条链路有问题。
      */
     private static void startPlayerDriven(OcgDuel.DeckLoadout loadout) {
-        PlayerResponder player = new PlayerResponder(new FirstChoiceResponder());
+        PlayerResponder player =
+                new PlayerResponder(new FirstChoiceResponder(DeclareCardName.packagedTable()));
         AutoPlayer auto = new AutoPlayer(player, "selftest");
         auto.start();
 

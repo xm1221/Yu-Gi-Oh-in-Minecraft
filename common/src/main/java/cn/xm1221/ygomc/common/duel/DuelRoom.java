@@ -1,6 +1,7 @@
 package cn.xm1221.ygomc.common.duel;
 
 import cn.xm1221.ygomc.common.net.YgomcNet;
+import cn.xm1221.ygomc.common.ocg.DeclareCardName;
 import cn.xm1221.ygomc.common.ocg.DuelSession;
 import cn.xm1221.ygomc.common.ocg.DuelSessions;
 import cn.xm1221.ygomc.common.ocg.FirstChoiceResponder;
@@ -84,7 +85,8 @@ public final class DuelRoom implements OcgDuel.Observer {
         if (ACTIVE.containsKey(id)) {
             return "你已有一局在进行中";
         }
-        PlayerResponder responder = new PlayerResponder(new FirstChoiceResponder());
+        PlayerResponder responder =
+                new PlayerResponder(new FirstChoiceResponder(DeclareCardName.packagedTable()));
         responder.setSeat(HUMAN_SEAT);
         DuelRoom room = new DuelRoom(player, responder, loadout);
         responder.setListener(room::onQuestion);
