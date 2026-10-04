@@ -123,6 +123,17 @@ public final class DuelRoom implements OcgDuel.Observer {
                 // 但问题本身是好的，玩家仍然能作答。
                 LOGGER.warn("取牌桌快照失败，这一帧只发问题：{}", e.toString());
             }
+            if (board != null) {
+                try {
+                    // 快照只有形状没有卡号，卡号必须在这里、在对局线程上另查。
+                    // 界面能画出一张具体的卡，全靠这一步。
+                    board = FieldCodes.attach(duel, board, HUMAN_SEAT);
+                } catch (RuntimeException e) {
+                    // 卡号填不上就退回「只有形状的牌桌」：界面画卡背，
+                    // 总好过画一张错位的卡（两条路径对不上时 FieldCodes 会抛）。
+                    LOGGER.warn("查卡号失败，这一帧只发牌桌形状：{}", e.toString());
+                }
+            }
         }
         YgomcNet.sendBoard(player, board, question);
     }

@@ -2,8 +2,8 @@ package cn.xm1221.ygomc.common.client;
 
 import cn.xm1221.ygomc.common.duel.DuelBoard;
 import cn.xm1221.ygomc.common.duel.DuelQuestion;
-import cn.xm1221.ygomc.common.net.YgomcNet;
 import cn.xm1221.ygomc.common.duel.DuelWire;
+import cn.xm1221.ygomc.common.net.YgomcNet;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.network.chat.Component;
@@ -14,49 +14,101 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * 对局界面：牌桌 + 当前问题。
+ * 对局界面：牌桌 + 当前询问。
+ *
+ * <h2>交互是「点牌桌」，不是「点按钮」</h2>
+ * 选卡、选格子一律<b>直接点那张卡、那个格子</b>：左键选择/取消选择，
+ * 右键确认（多选）或取消。这与 ygo 客户端和 YDM 一致——YDM 的对局界面
+ * 除了聊天框几乎没有按钮，交互全在 {@code ZoneWidget} 上，
+ * 点「动作源」再点「动作目标」，第二次点击本身就是确认。
+ *
+ * <p>只有在询问<b>没有空间落点</b>时才退化成列表：是/否、发动哪个效果、
+ * 攻击还是守备、宣言种族属性。这些本来就没有卡可以点，官方客户端也是弹一个小窗。
+ * 把它们做成按钮不是「多此一举」，而是它们确实没有别的地方可放。
  *
  * <h2>这个类不做决策</h2>
- * 它只把已经解码好的 {@link DuelQuestion} 摊成按钮，把点击翻译成
+ * 它只把已经解码好的 {@link DuelQuestion} 摊成可点目标，把点击翻译成
  * {@link DuelQuestion#response(int...)}，再交给网络层发出去。
  * <b>所有规则判断都在 {@code response} 里</b>——它和内核的编码约定一起
  * 被 7855 条真实询问验过，界面这边再写一遍判断就等于绕开那套验证。
  *
- * <h2>为什么放 common</h2>
- * 与 {@link CardBrowserScreen} 同理：它继承 {@code Screen}，是客户端专属类，
- * 所以<b>只能</b>被平台客户端入口引用。专用服务器不会加载到它，
- * 也就不会在类加载阶段抛 {@code NoClassDefFoundError}。
- * 关键是从公共代码到它的引用<b>不能进入服务端调用链</b>，
- * 这一点由两个平台入口各自把握。
+ * <h2>坐标只有一个来源</h2>
+ * 所有矩形来自 {@link FieldLayout}，落点映射来自 {@link DuelTargets}，
+ * 这两个类都不依赖 Minecraft，因此可以脱离游戏断言（996 + 894 条）。
+ * 坐标原先按 {@code height} 加减常数写死在 render 里，后果是魔陷行整行
+ * 落到屏幕外、问题标题压在我方牌桌上——编译期看不出来，只能靠盯画面发现。
+ *
+ * <h2>本地玩家不一定在下面</h2>
+ * 界面底部恒为「我」、顶部恒为「对手」，但座位号不由位置决定：
+ * 我可能是 P0 也可能是 P1。原先无条件把 {@code player0} 画在下面，
+ * 一旦本地玩家是 P1，自己的卡就会出现在对手那半边。这里按
+ * {@link DuelQuestion#player()} 定座位，再取对应的一方来画。
+ *
+ * <h2>格子数按【现行大师规则】</h2>
+ * 怪兽区 5、魔陷区 5（<b>灵摆区已并入 szone 0/4</b>，见
+ * {@code field.cpp:499-512} 的 {@code get_pzone_sequence}）、场地区 1
+ * （{@code szone 5}，{@code field.cpp:564}）、额外怪兽区 2（{@code mzone 5,6}，
+ * 中线中间列、<b>双方共用</b>）。内核魔陷槽数组长 8（{@code ocgapi.cpp:91-92}），
+ * 但 szone 6/7 是旧规则灵摆余位，<b>不画</b>。
+ * 只有行序与左右相对位置参考 YDM（GPLv3，{@code Copyright (C) CAS_ual_TY}）
+ * 的 {@code duel/playfield/PlayFieldTypes.java}；它的独立灵摆列不符合现行规则，未照抄。
  */
 public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
 
     private DuelBoard board;
     private DuelQuestion question;
-    /** 多选类问题里已勾选的选项；单选类问题不用它。 */
+    /** 多选/选址类里已勾选的选项下标。 */
     private final Set<Integer> chosen = new LinkedHashSet<>();
     private Button confirm;
+    /** 已提交、在等下个询问。这期间界面留着但按钮全灭。 */
+    private boolean submitted;
+    /** 本地玩家座位。询问到达时更新；没询问时沿用上一次。 */
+    private int mySeat;
 
     public DuelScreen(DuelBoard board, DuelQuestion question) {
         super(Component.literal("决斗"));
         this.board = board;
         this.question = question;
+        if (question != null) {
+            this.mySeat = question.player();
+        }
     }
 
-    /**
-     * 服务器推来新状态时调用。
-     *
-     * <p>问题换了就必须清空勾选：新问题的选项下标是另一套含义，
-     * 留着旧的会直接答错卡。屏不复用同一个问题对象，所以按对象身份判断即可。
-     */
+    /** 服务器推来新状态时调用。 */
     public void update(DuelBoard board, DuelQuestion question) {
         boolean different = this.question != question;
+        if (question != null) {
+            this.mySeat = question.player();
+        }
         this.board = board;
         this.question = question;
         if (different) {
             chosen.clear();
+            submitted = false;
             rebuild();
         }
+    }
+
+    private FieldLayout field() {
+        return FieldLayout.compute(width, height);
+    }
+
+    private DuelBoard.PlayerBoard me() {
+        return board == null ? null : board.playerAt(mySeat);
+    }
+
+    private DuelBoard.PlayerBoard opponent() {
+        return board == null ? null : board.playerAt(1 - mySeat);
+    }
+
+    /** 当前询问在牌桌上的落点。 */
+    private List<DuelTargets.Target> targets() {
+        return DuelTargets.of(question, field(), mySeat);
+    }
+
+    /** 只有没有落点的询问才退化成列表。 */
+    private boolean spatial() {
+        return !targets().isEmpty();
     }
 
     @Override
@@ -64,46 +116,51 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
         rebuild();
     }
 
+    /**
+     * 只有「无落点」的询问才生成选项按钮。
+     *
+     * <p>有落点时一颗按钮都不加：加了就会出现两套入口（点卡一套、点按钮另一套），
+     * 而它们对同一次询问的语义必须完全一致，等于给自己留一处会不一致的地方。
+     */
     private void rebuild() {
         clearWidgets();
         confirm = null;
-        if (question == null) {
+        if (question == null || submitted || spatial()) {
             return;
         }
         List<DuelQuestion.Option> options = question.options();
-        // 按钮排成网格：卡牌类问题一次能给二十多个选项，单行摆不下。
-        int cols = 4;
-        int bw = Math.min(150, (width - 40) / cols - 4);
+        if (options.isEmpty()) {
+            return;
+        }
+        FieldLayout L = field();
+        int margin = Math.max(2, L.gap() * 2);
+        int cols = Math.max(1, Math.min(4, width / 150));
+        int bw = Math.min(190, (width - 2 * margin - (cols - 1) * L.gap()) / cols);
         int bh = 18;
         int rows = (options.size() + cols - 1) / cols;
-        int gridH = rows * (bh + 3);
-        int top = Math.max(30, height - 30 - gridH - (needsConfirm() ? 24 : 0));
+        int gridH = rows * (bh + 2);
+        // 列表摆在提问面板里，从面板顶往下排
+        int top = L.panel().y() + 14;
+        if (top + gridH > height - margin) {
+            bh = Math.max(10, (height - margin - top - rows * 2) / rows);
+        }
+        int totalW = cols * bw + (cols - 1) * L.gap();
+        int x0 = (width - totalW) / 2;
 
         for (int i = 0; i < options.size(); i++) {
             DuelQuestion.Option o = options.get(i);
-            int col = i % cols;
-            int row = i / cols;
-            int x = width / 2 - (cols * (bw + 4)) / 2 + col * (bw + 4);
-            int y = top + row * (bh + 3);
+            int x = x0 + (i % cols) * (bw + L.gap());
+            int y = top + (i / cols) * (bh + 2);
             final int index = i;
             String label = o.label();
-            if (label.length() > 22) {
-                label = label.substring(0, 21) + "…";
+            if (label.length() > 26) {
+                label = label.substring(0, 25) + "…";
             }
             addRenderableWidget(Button.builder(Component.literal(label), b -> onOption(index))
                     .bounds(x, y, bw, bh).build());
         }
-
-        if (needsConfirm()) {
-            confirm = Button.builder(Component.literal("确定"), b -> submit())
-                    .bounds(width / 2 + 2, height - 26, 100, 20).build();
-            addRenderableWidget(confirm);
-            addRenderableWidget(Button.builder(Component.literal("取消"), b -> cancel())
-                    .bounds(width / 2 - 102, height - 26, 100, 20).build());
-        }
     }
 
-    /** 单选类问题点一下就算答完；多选类要点「确定」。 */
     private boolean needsConfirm() {
         if (question == null) {
             return false;
@@ -113,9 +170,56 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
                 || m == DuelQuestion.Mode.COUNTERS || m == DuelQuestion.Mode.SORT;
     }
 
+    /**
+     * 鼠标点击。
+     *
+     * <p>左键：落在目标上就选它；单选类立刻作答，多选类切换勾选。
+     * 落在空白处且已经选够数则确认——「点外面的空地」是最自然的确认手势。
+     * <p>右键：确认（够数时），否则取消。
+     */
+    @Override
+    public boolean mouseClicked(double mouseX, double mouseY, int button) {
+        if (question != null && !submitted && board != null) {
+            List<DuelTargets.Target> targets = targets();
+            int hit = DuelTargets.hit(targets, mouseX, mouseY);
+            if (hit >= 0) {
+                onOption(targets.get(hit).optionIndex());
+                return true;
+            }
+            if (!spatial()) {
+                // 无落点的询问交给按钮处理
+                return super.mouseClicked(mouseX, mouseY, button);
+            }
+            if (button == 0) {
+                if (needsConfirm() && countsOk()) {
+                    submit();
+                    return true;
+                }
+                return true;
+            }
+            if (button == 1) {
+                if (needsConfirm() && countsOk() && !chosen.isEmpty()) {
+                    submit();
+                } else {
+                    cancel();
+                }
+                return true;
+            }
+        }
+        return super.mouseClicked(mouseX, mouseY, button);
+    }
+
+    private boolean countsOk() {
+        if (question == null) {
+            return false;
+        }
+        int n = chosen.size();
+        return n >= question.min() && (question.max() <= 0 || n <= question.max());
+    }
+
     private void onOption(int index) {
         DuelQuestion q = question;
-        if (q == null) {
+        if (q == null || submitted) {
             return;
         }
         if (!needsConfirm()) {
@@ -126,24 +230,13 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
             chosen.add(index);
         }
         if (confirm != null) {
-            // 只在数量落在 [min, max] 内时才让点「确定」——放行一个注定被引擎
-            // 打回的应答，表现是「卡住」，比按钮不可点更难查。
-            int n = chosen.size();
-            boolean enough = n >= q.min() && (q.max() <= 0 || n <= q.max());
-            confirm.active = enough;
-        }
-    }
-
-    private void cancel() {
-        DuelQuestion q = question;
-        if (q != null) {
-            send(q, new int[]{-1});
+            confirm.active = countsOk();
         }
     }
 
     private void submit() {
         DuelQuestion q = question;
-        if (q == null) {
+        if (q == null || submitted) {
             return;
         }
         List<Integer> list = new ArrayList<>(chosen);
@@ -155,91 +248,365 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
     }
 
     /**
+     * 「取消」对应的<b>选项下标</b>，没有则 -1。
+     *
+     * <p>原先直接把字面量 {@code -1} 当选项下标传下去。取消在编码上不是
+     * 「下标 -1」，而是「某个取值为 -1 的选项的下标」——传错的下场实测是
+     * 「这个操作发不出去：构造应答失败：要选 0 个格子，实得 1」。
+     */
+    private int cancelIndex() {
+        if (question == null) {
+            return -1;
+        }
+        List<DuelQuestion.Option> options = question.options();
+        for (int i = 0; i < options.size(); i++) {
+            if (options.get(i).isCancel()) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    private void cancel() {
+        int ci = cancelIndex();
+        if (ci >= 0) {
+            send(question, new int[]{ci});
+            return;
+        }
+        // 不能取消：右键就没有出口，什么都没发生。这里刻意不静默发一个
+        // 必然被打回的应答——那会触发内核重发，最后以 RETRY_STORM_LIMIT 收场。
+        chosen.clear();
+    }
+
+    /**
      * 唯一的出口：问 {@code response} 要字节，再交给网络层。
      *
-     * <p>刻意<b>不</b>自己拼字节——每一种询问的编码约定都不一样
+     * <p>刻意<b>不</b>自己拼字节——每种询问的编码约定都不一样
      * （有下标、有取值、有 3 字节坐标、有计数器数组），
      * 在这里重写一遍就是给自己造第二个编码器。
      */
     private void send(DuelQuestion q, int... picked) {
+        var mc = net.minecraft.client.Minecraft.getInstance();
         cn.xm1221.ygomc.common.ocg.Responder.Response r;
         try {
             r = q.response(picked);
         } catch (RuntimeException e) {
             // 构造失败要说出来。静默什么都不发，症状就是「点了没反应」，
             // 和网络不通长得一模一样。
-            if (net.minecraft.client.Minecraft.getInstance().player != null) {
-                net.minecraft.client.Minecraft.getInstance().player.displayClientMessage(
+            if (mc.player != null) {
+                mc.player.displayClientMessage(
                         Component.literal("这个操作发不出去：" + e.getMessage()), false);
             }
             return;
         }
-        YgomcNet.sendAnswer(DuelWire.encodeAnswer(
-                r.isBytes() ? DuelWire.Responder2.of(r.bytes()) : DuelWire.Responder2.of(r.value())),
-                net.minecraft.client.Minecraft.getInstance().level == null ? null
-                        : net.minecraft.client.Minecraft.getInstance().level.registryAccess());
-        // 答完就关掉界面：接下来的问题会由服务器推来。留着旧按钮只会让玩家
-        // 重复提交同一个应答——那会被网络层记成「没有对局在等」。
-        onClose();
+        YgomcNet.sendAnswer(
+                DuelWire.encodeAnswer(r.isBytes()
+                        ? DuelWire.Responder2.of(r.bytes())
+                        : DuelWire.Responder2.of(r.value())),
+                mc.level == null ? null : mc.level.registryAccess());
+        submitted = true;
+        rebuild();
     }
 
     @Override
     public boolean isPauseScreen() {
-        // 对局中不该暂停：单人测试时暂停会让对局线程与界面互相等待。
         return false;
+    }
+
+    /**
+     * 铺一层半透明底，<b>不调 super</b>。
+     *
+     * <p>1.20.5 起 {@code Screen.renderBackground} 会给整个屏幕加一层模糊后处理。
+     * 牌桌要看的是卡面，模糊在这里是纯反效果，还会把格子边缘糊掉，
+     * 看起来像「渲染坏了」。
+     */
+    @Override
+    public void renderBackground(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
+        g.fill(0, 0, width, height, 0xE8121418);
     }
 
     @Override
     public void render(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
         renderBackground(g, mouseX, mouseY, partialTick);
-        drawBoard(g);
-        drawQuestion(g);
+        FieldLayout L = field();
+        if (board == null) {
+            g.drawString(font, "还没有牌桌数据", L.x0(), L.panel().y() - 14, 0xFFFFFF);
+        } else {
+            drawField(g, L);
+        }
+        drawOverlay(g, L, mouseX, mouseY);
         super.render(g, mouseX, mouseY, partialTick);
     }
 
-    /** 牌桌：双方血量、手牌/卡组/墓地数、场上区域。 */
-    private void drawBoard(GuiGraphics g) {
-        if (board == null) {
-            g.drawString(font, "还没有牌桌数据", 8, 8, 0xFFFFFF);
+    /**
+     * 画整张场地。纵向从对手到我是：
+     * <pre>
+     *   对手手牌（卡背）
+     *   对手魔陷行   [额外卡组] [S/T×5] [卡组]
+     *   对手怪兽行   [场地区]   [M×5]   [墓地]
+     *   额外怪兽区（中线，双方共用）＋ 双方除外区
+     *   我方怪兽行   [场地区]   [M×5]   [墓地]
+     *   我方魔陷行   [额外卡组] [S/T×5] [卡组]
+     *   我方手牌
+     * </pre>
+     */
+    private void drawField(GuiGraphics g, FieldLayout L) {
+        graphicHand(g, L, opponent(), L.oppHand(), true);
+        spellRow(g, L, opponent(), L.oppSpellRow());
+        monsterRow(g, L, opponent(), L.oppMonsterRow());
+        extraMonsterZones(g, L, opponent());
+        removedPiles(g, L);
+        monsterRow(g, L, me(), L.myMonsterRow());
+        spellRow(g, L, me(), L.mySpellRow());
+        graphicHand(g, L, me(), L.myHand(), false);
+    }
+
+    private void monsterRow(GuiGraphics g, FieldLayout L, DuelBoard.PlayerBoard p,
+                            FieldLayout.Rect band) {
+        if (p == null) {
             return;
         }
-        g.drawString(font, "回合 " + board.chainCount() + " 连锁   规则 " + board.duelRule(),
-                8, 8, 0xFFE080);
-        drawSide(g, board.player1(), 8, 22, "对手");
-        drawSide(g, board.player0(), 8, height - 74, "我方");
+        List<DuelBoard.Zone> zones = p.monsterZones();
+        pile(g, L, "场地", L.col(band, 0), 0xFF2A3550);
+        for (int i = 0; i < FieldLayout.MAIN_ZONES; i++) {
+            zone(g, L, at(zones, i), L.col(band, 1 + i), 0xFF2A3550, true);
+        }
+        pile(g, L, "墓地 " + p.graveCount(), L.col(band, 6), 0xFF3A3A4A);
     }
 
-    private void drawSide(GuiGraphics g, DuelBoard.PlayerBoard p, int x, int y, String who) {
-        g.drawString(font, who + "  LP " + p.lp()
-                + "   手牌 " + p.handCount() + "  卡组 " + p.deckCount()
-                + "  墓地 " + p.graveCount() + "  除外 " + p.removedCount()
-                + "  额外 " + p.extraCount(), x, y, 0xFFFFFF);
-        // 区域用色块表示占用，不画卡图：快照里【没有卡号】，
-        // 要画具体卡得另查 queryFieldCard，那是下一步的事。
-        int zx = x;
-        int zy = y + 11;
-        for (DuelBoard.Zone z : p.monsterZones()) {
-            g.fill(zx, zy, zx + 22, zy + 30, z.occupied() ? 0xFF4060C0 : 0x40FFFFFF);
-            if (z.overlayCount() > 0) {
-                g.drawString(font, String.valueOf(z.overlayCount()), zx + 2, zy + 22, 0xFFD060);
+    private void spellRow(GuiGraphics g, FieldLayout L, DuelBoard.PlayerBoard p,
+                          FieldLayout.Rect band) {
+        if (p == null) {
+            return;
+        }
+        List<DuelBoard.Zone> zones = p.spellZones();
+        pile(g, L, "额外 " + p.extraCount(), L.col(band, 0), 0xFF3A3A4A);
+        for (int i = 0; i < FieldLayout.MAIN_ZONES; i++) {
+            zone(g, L, at(zones, i), L.col(band, 1 + i), 0xFF2A4535, false);
+        }
+        pile(g, L, "卡组 " + p.deckCount(), L.col(band, 6), 0xFF3A3A4A);
+    }
+
+    /**
+     * 额外怪兽区：中线中间列 2 格。
+     *
+     * <p>双方共用，所以不按归属方取——哪一方占了就画谁的。
+     */
+    private void extraMonsterZones(GuiGraphics g, FieldLayout L, DuelBoard.PlayerBoard p) {
+        List<DuelBoard.Zone> mz = p == null ? List.of() : p.monsterZones();
+        for (int i = 0; i < FieldLayout.EXTRA_MONSTER_ZONES; i++) {
+            FieldLayout.Rect r = L.extraMonster(i);
+            DuelBoard.Zone z = at(mz, FieldLayout.MAIN_ZONES + i);
+            if (z != null && z.occupied()) {
+                cardFace(g, L, z, r, true);
+            } else {
+                g.fill(r.x(), r.y(), r.right(), r.bottom(), 0xFF4A3A55);
+                outline(g, r, 0xFF8A6AA8);
+                g.drawString(font, "EX", r.x() + 2, r.y() + 1, 0x90FFFFFF);
             }
-            zx += 24;
-        }
-        zx = x;
-        zy += 34;
-        for (DuelBoard.Zone z : p.spellZones()) {
-            g.fill(zx, zy, zx + 22, zy + 30, z.occupied() ? 0xFF40A060 : 0x40FFFFFF);
-            zx += 24;
         }
     }
 
-    private void drawQuestion(GuiGraphics g) {
-        String title = question == null ? "等待服务器…" : question.title();
-        g.drawString(font, title, 8, height - 92, 0xFFFF80);
-        if (question != null && needsConfirm()) {
-            g.drawString(font, "已选 " + chosen.size() + "（需要 " + question.min()
-                            + (question.max() > 0 ? "~" + question.max() : " 以上") + "）",
-                    8, height - 80, 0xA0A0A0);
+    /** 双方除外区：摆在中线行的两端（中线行只有中间两格有内容，两端是空的）。 */
+    private void removedPiles(GuiGraphics g, FieldLayout L) {
+        FieldLayout.Rect band = L.extraMonsterRow();
+        DuelBoard.PlayerBoard me = me();
+        DuelBoard.PlayerBoard op = opponent();
+        if (op != null) {
+            pile(g, L, "除外 " + op.removedCount(), L.col(band, 0), 0xFF403A4A);
         }
+        if (me != null) {
+            pile(g, L, "除外 " + me.removedCount(), L.col(band, 6), 0xFF403A4A);
+        }
+    }
+
+    private void zone(GuiGraphics g, FieldLayout L, DuelBoard.Zone z,
+                      FieldLayout.Rect r, int emptyFill, boolean monster) {
+        if (z == null || !z.occupied()) {
+            g.fill(r.x(), r.bottom() - 3, r.right(), r.bottom(), emptyFill);
+            outline(g, r, 0x30FFFFFF);
+            return;
+        }
+        cardFace(g, L, z, r, monster);
+    }
+
+    /**
+     * 画一张场上的卡。
+     *
+     * <p>卡号来自 {@code DuelBoard.Zone.code()}（由 {@code Ocg.queryFieldCard}
+     * 按可见性过滤后填好）。卡号为 0 有两种情形，都不该画卡面：
+     * 里侧盖牌，以及对手的隐藏卡——后者连卡号都没有，所以不可能泄出去。
+     *
+     * <p>守备表示<b>横放</b>（旋转 90°），与 ygo 客户端一致：
+     * 光在卡面上压一条横杠看不出是「守备」还是「这张卡长这样」。
+     */
+    private void cardFace(GuiGraphics g, FieldLayout L, DuelBoard.Zone z, FieldLayout.Rect r,
+                          boolean monster) {
+        int code = z.code() & 0x7fffffff;
+        if (monster && !z.attack()) {
+            rotated(g, code, r);
+        } else if (z.faceUp() && code != 0) {
+            CardArt.draw(g, code, r.x(), r.y(), r.w(), r.h(), null);
+            outline(g, r, 0xFFFFFFFF);
+        } else if (z.faceUp()) {
+            // 表侧但卡号未知（旧线格式的帧）：色块 + 边框，至少能看出表示形式
+            g.fill(r.x(), r.y(), r.right(), r.bottom(), 0xFF3A70C0);
+            outline(g, r, 0xFFFFFFFF);
+        } else {
+            CardArt.drawBack(g, r.x(), r.y(), r.w(), r.h());
+        }
+        if (z.overlayCount() > 0) {
+            g.drawString(font, "◆" + z.overlayCount(), r.x() + 1, r.bottom() - 10, 0xFFD060);
+        }
+    }
+
+    /** 横放（守备表示）：绕格子中心转 90°，卡按「宽=格高、高=格宽」画。 */
+    private void rotated(GuiGraphics g, int code, FieldLayout.Rect r) {
+        int cw = r.h();
+        int ch = r.w();
+        g.pose().pushPose();
+        g.pose().translate(r.x() + r.w() / 2f, r.y() + r.h() / 2f, 0f);
+        g.pose().mulPose(com.mojang.math.Axis.ZP.rotationDegrees(90f));
+        if (code != 0) {
+            CardArt.draw(g, code, -cw / 2, -ch / 2, cw, ch, null);
+        } else {
+            CardArt.drawBack(g, -cw / 2, -ch / 2, cw, ch);
+        }
+        g.pose().popPose();
+        outline(g, r, 0xFFFFFFFF);
+    }
+
+    /**
+     * 手牌行。
+     *
+     * <p>我方手牌是<b>明牌</b>、对手手牌是卡背。卡号来自
+     * {@code PlayerBoard.hand()}：本地座位每张都是真卡号，对手的每张都是 0
+     * ——对手手牌卡号在内核里<b>根本没被查出来</b>（那一整块用
+     * {@code FLAG_HIDDEN} 只问表示形式），所以这里即使写错也泄不出去。
+     *
+     * <p>旧线格式（v1）的帧里这个列表是空的，此时退回按 {@code handCount()}
+     * 画卡背，而不是当作「没有手牌」——那会让人以为手牌丢了。
+     */
+    private void graphicHand(GuiGraphics g, FieldLayout L, DuelBoard.PlayerBoard p,
+                             FieldLayout.Rect band, boolean opponent) {
+        if (p == null) {
+            return;
+        }
+        int ty = band.y() + Math.max(0, (band.h() - 8) / 2);
+        g.drawString(font, (opponent ? "对手" : "我方") + " 手牌 " + p.handCount(),
+                band.x(), ty, opponent ? 0xFFB0B0B0 : 0xFFFFFFFF);
+        int w = Math.max(6, (int) (band.h() / (86f / 59f)));
+        int room = Math.max(1, (band.w() - 78) / (w + 1));
+        List<DuelBoard.Zone> hand = p.hand();
+        int n = hand.isEmpty() ? p.handCount() : hand.size();
+        for (int i = 0; i < n && i < room; i++) {
+            FieldLayout.Rect r = DuelTargets.handCard(L, band, i);
+            // 对手手牌恒为卡背：连卡号都不取
+            int code = opponent || i >= hand.size() ? 0 : hand.get(i).code() & 0x7fffffff;
+            if (code != 0) {
+                CardArt.draw(g, code, r.x(), r.y(), r.w(), r.h(), null);
+            } else {
+                CardArt.drawBack(g, r.x(), r.y(), r.w(), r.h());
+            }
+        }
+        if (n > room) {
+            g.drawString(font, "+" + (n - room), band.x() + 78 + room * (w + 1) + 2, ty, 0xFFD0D0D0);
+        }
+    }
+
+    /** 侧格（卡组/额外/墓地/场地/除外）：一个框 + 一行字。 */
+    private void pile(GuiGraphics g, FieldLayout L, String label, FieldLayout.Rect r, int fill) {
+        g.fill(r.x(), r.y(), r.right(), r.bottom(), fill);
+        outline(g, r, 0x50FFFFFF);
+        if (r.w() >= 34) {
+            g.drawString(font, label, r.x() + 2, r.y() + 2, 0xD0FFFFFF);
+        }
+    }
+
+    private void outline(GuiGraphics g, FieldLayout.Rect r, int color) {
+        g.fill(r.x(), r.y(), r.right(), r.y() + 1, color);
+        g.fill(r.x(), r.bottom() - 1, r.right(), r.bottom(), color);
+        g.fill(r.x(), r.y(), r.x() + 1, r.bottom(), color);
+        g.fill(r.right() - 1, r.y(), r.right(), r.bottom(), color);
+    }
+
+    private static DuelBoard.Zone at(List<DuelBoard.Zone> zones, int i) {
+        return i >= 0 && i < zones.size() ? zones.get(i) : null;
+    }
+
+    /**
+     * 高亮、悬停提示与状态行。
+     *
+     * <p>可点目标要<b>看得出来可以点</b>：不然玩家不知道该点哪张卡，
+     * 只会去屏幕上找按钮——而按钮已经没有了。
+     */
+    private void drawOverlay(GuiGraphics g, FieldLayout L, int mouseX, int mouseY) {
+        if (question != null && !submitted && board != null) {
+            List<DuelTargets.Target> targets = targets();
+            for (DuelTargets.Target t : targets) {
+                boolean picked = chosen.contains(t.optionIndex());
+                FieldLayout.Rect r = t.rect();
+                if (picked) {
+                    // 已选：亮黄框 + 压暗一层
+                    g.fill(r.x(), r.y(), r.right(), r.bottom(), 0x60FFE060);
+                    outline(g, r, 0xFFFFE060);
+                } else {
+                    outline(g, r, 0x70A0FFA0);
+                }
+            }
+            int hov = DuelTargets.hit(targets, mouseX, mouseY);
+            if (hov >= 0) {
+                FieldLayout.Rect r = targets.get(hov).rect();
+                outline(g, r, 0xFFFFFFFF);
+                String name = optionName(targets.get(hov).option());
+                g.drawString(font, name, Math.min(mouseX + 8, width - font.width(name) - 4),
+                        Math.max(2, mouseY - 10), 0xFFFFFF);
+            }
+        }
+        drawPanel(g, L);
+    }
+
+    /** 卡名：选项的 label 对卡牌项只是占位，卡名要用卡号去查。 */
+    private String optionName(DuelQuestion.Option o) {
+        int code = o.cardCode() & 0x7fffffff;
+        if (code != 0) {
+            var pack = cn.xm1221.ygomc.common.data.DataPacks.get();
+            String name = pack == null ? null : pack.nameOf(code);
+            if (name != null && !name.isEmpty()) {
+                return name;
+            }
+            return "#" + code;
+        }
+        return o.label();
+    }
+
+    private void drawPanel(GuiGraphics g, FieldLayout L) {
+        FieldLayout.Rect p = L.panel();
+        g.fill(p.x(), p.y(), p.right(), p.bottom(), 0xE0101018);
+        g.fill(p.x(), p.y(), p.right(), p.y() + 1, 0xFF505060);
+
+        String title = question == null ? "等待服务器…"
+                : (submitted ? "已提交，等待对手…" : question.title());
+        g.drawString(font, title, p.x() + 4, p.y() + 4, 0xFFFF80);
+        if (question == null || submitted || board == null) {
+            return;
+        }
+
+        String hint;
+        if (spatial()) {
+            hint = needsConfirm()
+                    ? "左键选卡/选格　右键确认" + (cancelIndex() >= 0 ? "　右键空地取消" : "")
+                    : "点一下即可";
+        } else {
+            hint = "选择一项";
+        }
+        String lps = "我方 LP " + me().lp() + "　对手 LP " + opponent().lp();
+        String counts = needsConfirm()
+                ? "已选 " + chosen.size() + "/" + question.min()
+                        + (question.max() > 0 ? "~" + question.max() : "+")
+                : "";
+        g.drawString(font, hint, p.x() + 4, p.bottom() - 26, 0xA0E0A0);
+        g.drawString(font, (counts.isEmpty() ? "" : counts + "　") + lps,
+                p.x() + 4, p.bottom() - 14, 0xB0B0B0);
     }
 }

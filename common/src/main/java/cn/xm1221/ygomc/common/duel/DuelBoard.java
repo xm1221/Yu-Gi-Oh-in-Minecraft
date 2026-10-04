@@ -41,10 +41,28 @@ public record DuelBoard(int duelRule, int chainCount, PlayerBoard player0, Playe
     public static final int POS_FACEUP_DEFENSE = 0x4;
     public static final int POS_FACEDOWN_DEFENSE = 0x8;
 
-    /** 一格。{@code occupied} 为假时其余字段无意义。 */
-    public record Zone(boolean occupied, int position, int overlayCount) {
+    /**
+     * 一格（或一张手牌 / 一张墓地卡）。
+     *
+     * <p>{@code occupied} 为假时其余字段无意义。
+     *
+     * @param code 卡号。{@code 0} 表示<b>未知或不可见</b>——对手的手牌、里侧盖牌、
+     *             对手的卡组与额外卡组都会是 0。界面据此画卡背；
+     *             取值来源与可见性判据见 {@link FieldCodes}。
+     */
+    public record Zone(boolean occupied, int position, int overlayCount, int code) {
 
-        public static final Zone EMPTY = new Zone(false, 0, 0);
+        public static final Zone EMPTY = new Zone(false, 0, 0, 0);
+
+        /**
+         * 不带卡号的三参构造。
+         *
+         * <p>保留它有两个用处：线格式 v1 没有卡号字段，解码时用得上；
+         * 只想描述「牌桌形状」的调用点（{@link #of}）也不必硬塞一个 0 进去。
+         */
+        public Zone(boolean occupied, int position, int overlayCount) {
+            this(occupied, position, overlayCount, 0);
+        }
 
         /** 表侧（攻击表示或守备表示的正面）。 */
         public boolean faceUp() {
@@ -55,12 +73,54 @@ public record DuelBoard(int duelRule, int chainCount, PlayerBoard player0, Playe
         public boolean attack() {
             return (position & (POS_FACEUP_ATTACK | POS_FACEDOWN_ATTACK)) != 0;
         }
+
+        /** 卡号是否已知。false 时界面只能画卡背。 */
+        public boolean known() {
+            return code != 0;
+        }
     }
 
-    /** 一方玩家。 */
+    /**
+     * 一方玩家。
+     *
+     * <p>前九个分量是「数量 + 场上两排」的紧凑形状；后四个是逐张列表，
+     * 元素与对应区域的每一张卡一一对应、按 sequence 升序：
+     * <ul>
+     *   <li>{@link #hand()}：本地座位填真实卡号；对手座位条数等于手牌数，
+     *       但每张 {@code code()} 为 0（只够画卡背）。</li>
+     *   <li>{@link #grave()}、{@link #removed()}、{@link #extra()}：同理，
+     *       对手的额外卡组一律 0。</li>
+     *   <li><b>卡组没有列表</b>：卡组顺序对双方都是隐藏信息，
+     *       造一串全 0 的列表不比 {@link #deckCount()} 多任何信息。</li>
+     * </ul>
+     */
     public record PlayerBoard(int lp, List<Zone> monsterZones, List<Zone> spellZones,
                               int deckCount, int handCount, int graveCount,
-                              int removedCount, int extraCount, int extraPCount) {
+                              int removedCount, int extraCount, int extraPCount,
+                              List<Zone> hand, List<Zone> grave, List<Zone> removed,
+                              List<Zone> extra) {
+
+        public PlayerBoard {
+            monsterZones = List.copyOf(monsterZones);
+            spellZones = List.copyOf(spellZones);
+            hand = List.copyOf(hand);
+            grave = List.copyOf(grave);
+            removed = List.copyOf(removed);
+            extra = List.copyOf(extra);
+        }
+
+        /**
+         * 不带逐张列表的九参构造。
+         *
+         * <p>{@link DuelBoard#of} 只从快照里拿到形状（快照没有卡号），
+         * 卡号要由 {@link FieldCodes#attach} 另查后补上；线格式 v1 亦然。
+         */
+        public PlayerBoard(int lp, List<Zone> monsterZones, List<Zone> spellZones,
+                           int deckCount, int handCount, int graveCount, int removedCount,
+                           int extraCount, int extraPCount) {
+            this(lp, monsterZones, spellZones, deckCount, handCount, graveCount, removedCount,
+                    extraCount, extraPCount, List.of(), List.of(), List.of(), List.of());
+        }
     }
 
     public PlayerBoard playerAt(int i) {

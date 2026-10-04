@@ -193,6 +193,26 @@ public final class OcgDuel implements AutoCloseable {
         return field;
     }
 
+    /**
+     * {@code queryFieldCard} 的原始字节，长度已裁到实际写出量。
+     *
+     * <p>调用方必须<b>在持有本句柄的线程上</b>调用（内核除 {@code create}/{@code end_duel}
+     * 外都不是线程安全的）。解析见 {@code FieldCodes.parse}。
+     *
+     * @param seat     座位 0/1
+     * @param location {@code common.h:55-64} 的 {@code LOCATION_*}
+     * @param flag     {@code common.h:230-252} 的 {@code QUERY_*} 位组合
+     */
+    public byte[] fieldCardBytes(int seat, int location, int flag) {
+        byte[] out = new byte[Ocg.SIZE_QUERY_BUFFER];
+        int n = Ocg.queryFieldCard(handle, seat, location, flag, false, out);
+        if (n < 0 || n > out.length) {
+            throw new IllegalStateException("queryFieldCard 返回了非法长度 " + n
+                    + "（座位 " + seat + "，区域 " + location + "）");
+        }
+        return n == out.length ? out : java.util.Arrays.copyOf(out, n);
+    }
+
     public boolean isFinished() {
         return finished;
     }

@@ -75,6 +75,23 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
             return new Option(label, cardCode, index, 0, 0, 0, 0);
         }
 
+        /**
+         * 带位置的卡牌项：界面据此把选项挂到牌桌上的<b>具体格子</b>，玩家点那张卡就选中它。
+         *
+         * <p>内核在 {@code MSG_SELECT_CARD}/{@code SELECT_TRIBUTE}/{@code SELECT_UNSELECT_CARD}
+         * 里本来就带着 {@code controller/location/sequence}，原先只用 {@code ofIndex}
+         * 取了卡号，位置被丢掉，界面只好把选项拍平成按钮——「点卡」因此做不到。
+         */
+        static Option ofIndexAt(String label, int cardCode, int index,
+                                int controller, int location, int sequence) {
+            return new Option(label, cardCode, index, 0, controller, location, sequence);
+        }
+
+        /** 这个选项是否指向牌桌上的某个具体位置。 */
+        public boolean hasPlace() {
+            return location != 0;
+        }
+
         static Option ofValue(String label, int cardCode, int value) {
             return new Option(label, cardCode, 0, value, 0, 0, 0);
         }
@@ -253,8 +270,8 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
         int[] locations = m.locations();
         int[] sequences = m.sequences();
         for (int i = 0; i < codes.length; i++) {
-            opts.add(Option.ofIndex(zoneLabel(controllers[i], locations[i], sequences[i]),
-                    codes[i], i));
+            opts.add(Option.ofIndexAt(zoneLabel(controllers[i], locations[i], sequences[i]),
+                    codes[i], i, controllers[i], locations[i], sequences[i]));
         }
         boolean canCancel = m.cancelable() != 0;
         if (canCancel) {
@@ -281,12 +298,14 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
         int[] selCodes = m.selectCodes();
         Msg.Location[] selLoc = m.selectLocations();
         for (int i = 0; i < selectCount; i++) {
-            opts.add(Option.ofIndex(selLoc[i].toString(), selCodes[i], i));
+            opts.add(Option.ofIndexAt(selLoc[i].toString(), selCodes[i], i,
+                    selLoc[i].controller(), selLoc[i].location(), selLoc[i].sequence()));
         }
         int[] unselCodes = m.unselectCodes();
         Msg.Location[] unselLoc = m.unselectLocations();
         for (int i = 0; i < unselCodes.length; i++) {
-            opts.add(Option.ofIndex(unselLoc[i].toString(), unselCodes[i], selectCount + i));
+            opts.add(Option.ofIndexAt(unselLoc[i].toString(), unselCodes[i], selectCount + i,
+                    unselLoc[i].controller(), unselLoc[i].location(), unselLoc[i].sequence()));
         }
         boolean canCancel = m.cancelable() != 0;
         if (canCancel) {
@@ -666,7 +685,13 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
             String label = i < packedLocations.length
                     ? zoneLabelOf(packedLocations[i])
                     : "#" + (codes[i] & 0x7fffffff);
-            opts.add(Option.ofIndex(label, codes[i], i));
+            if (i < packedLocations.length) {
+                Msg.Location l = Msg.Location.of(packedLocations[i]);
+                opts.add(Option.ofIndexAt(label, codes[i], i,
+                        l.controller(), l.location(), l.sequence()));
+            } else {
+                opts.add(Option.ofIndex(label, codes[i], i));
+            }
         }
         return opts;
     }

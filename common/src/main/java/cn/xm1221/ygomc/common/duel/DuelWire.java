@@ -30,8 +30,17 @@ import java.util.List;
  */
 public final class DuelWire {
 
-    /** 格式版本。字段有任何增删都要 +1，让新旧两端明确不兼容而不是错位解读。 */
+    /** 问题 / 应答的格式版本。字段有任何增删都要 +1，让新旧两端明确不兼容而不是错位解读。 */
     public static final int VERSION = 1;
+
+    /**
+     * 牌桌快照的格式版本，<b>独立于 {@link #VERSION}</b>。
+     *
+     * <p>v2 起 {@code Zone} 多了一个卡号字段、{@code PlayerBoard} 多了四个逐张列表。
+     * 版本号单独走是因为牌桌只在「出问题」时才发，改动节奏和问题/应答不一样；
+     * 解码端<b>同时接受 1 与 2</b>，见 {@link #decodeBoard}。
+     */
+    public static final int BOARD_VERSION = 2;
 
     private DuelWire() {
     }
@@ -142,7 +151,7 @@ public final class DuelWire {
     public static byte[] encodeBoard(DuelBoard b) {
         ByteArrayOutputStream bytes = new ByteArrayOutputStream(128);
         try (DataOutputStream out = new DataOutputStream(bytes)) {
-            out.writeInt(VERSION);
+            out.writeInt(BOARD_VERSION);
             out.writeInt(b.duelRule());
             out.writeInt(b.chainCount());
             encodePlayer(out, b.player0());
@@ -164,6 +173,12 @@ public final class DuelWire {
         out.writeInt(p.extraPCount());
         encodeZones(out, p.monsterZones());
         encodeZones(out, p.spellZones());
+        // v2 新增：四个逐张列表。顺序固定为 手牌/墓地/除外/额外，
+        // 解码端按同一顺序读；改顺序等于改版本号。
+        encodeZones(out, p.hand());
+        encodeZones(out, p.grave());
+        encodeZones(out, p.removed());
+        encodeZones(out, p.extra());
     }
 
     private static void encodeZones(DataOutputStream out, List<DuelBoard.Zone> zones)
@@ -174,23 +189,39 @@ public final class DuelWire {
             out.writeByte(z.position());
             // 叠放数用 short：它可能超过 255（超量素材堆得很高时）。
             out.writeShort(z.overlayCount());
+            // 卡号：0 = 未知/不可见。用 int 而不是 varint——
+            // 卡号最大 8 位十进制，int 是唯一不用想边界的宽度。
+            out.writeInt(z.code());
         }
     }
 
+    /**
+     * 解码牌桌。<b>同时接受版本 1 与 2</b>。
+     *
+     * <p>版本 1 是加卡号之前的线格式：没有 {@code code} 字段、也没有逐张列表。
+     * 老服务端发来的 v1 帧因此仍然能解出来，只是所有 {@code Zone.code()} 都是 0、
+     * 四个列表都是空的（手牌只剩 {@code handCount()}）。反过来，老客户端收到 v2 帧
+     * 会在它自己的版本检查上拒绝——那一侧我们改不了，实际部署时两端是一起发的。
+     */
     public static DuelBoard decodeBoard(byte[] data) {
         try (DataInputStream in = new DataInputStream(new ByteArrayInputStream(data))) {
-            requireVersion(in.readInt());
+            int version = in.readInt();
+            if (version != 1 && version != BOARD_VERSION) {
+                throw new IllegalStateException("牌桌线格式版本不支持：收到 " + version
+                        + "，本端支持 1（旧，无卡号）与 " + BOARD_VERSION + "（当前）");
+            }
             int rule = in.readInt();
             int chain = in.readInt();
-            DuelBoard.PlayerBoard p0 = decodePlayer(in);
-            DuelBoard.PlayerBoard p1 = decodePlayer(in);
+            DuelBoard.PlayerBoard p0 = decodePlayer(in, version);
+            DuelBoard.PlayerBoard p1 = decodePlayer(in, version);
             return new DuelBoard(rule, chain, p0, p1);
         } catch (IOException e) {
             throw new UncheckedIOException("解码牌桌失败", e);
         }
     }
 
-    private static DuelBoard.PlayerBoard decodePlayer(DataInputStream in) throws IOException {
+    private static DuelBoard.PlayerBoard decodePlayer(DataInputStream in, int version)
+            throws IOException {
         int lp = in.readInt();
         int deck = in.readInt();
         int hand = in.readInt();
@@ -198,17 +229,31 @@ public final class DuelWire {
         int removed = in.readInt();
         int extra = in.readInt();
         int extraP = in.readInt();
-        List<DuelBoard.Zone> monsters = decodeZones(in);
-        List<DuelBoard.Zone> spells = decodeZones(in);
+        // v1 与 v2 的场上两排布局相同，连字段宽度都没变——只有 code 是后加的。
+        List<DuelBoard.Zone> monsters = decodeZones(in, version);
+        List<DuelBoard.Zone> spells = decodeZones(in, version);
+        if (version == 1) {
+            return new DuelBoard.PlayerBoard(lp, monsters, spells, deck, hand, grave, removed,
+                    extra, extraP);
+        }
+        List<DuelBoard.Zone> handList = decodeZones(in, version);
+        List<DuelBoard.Zone> graveList = decodeZones(in, version);
+        List<DuelBoard.Zone> removedList = decodeZones(in, version);
+        List<DuelBoard.Zone> extraList = decodeZones(in, version);
         return new DuelBoard.PlayerBoard(lp, monsters, spells, deck, hand, grave, removed,
-                extra, extraP);
+                extra, extraP, handList, graveList, removedList, extraList);
     }
 
-    private static List<DuelBoard.Zone> decodeZones(DataInputStream in) throws IOException {
+    private static List<DuelBoard.Zone> decodeZones(DataInputStream in, int version)
+            throws IOException {
         int n = in.readInt();
         List<DuelBoard.Zone> zones = new ArrayList<>(n);
         for (int i = 0; i < n; i++) {
-            zones.add(new DuelBoard.Zone(in.readBoolean(), in.readByte(), in.readShort()));
+            boolean occupied = in.readBoolean();
+            int position = in.readByte();
+            int overlay = in.readShort();
+            int code = version >= 2 ? in.readInt() : 0;
+            zones.add(new DuelBoard.Zone(occupied, position, overlay, code));
         }
         return zones;
     }
