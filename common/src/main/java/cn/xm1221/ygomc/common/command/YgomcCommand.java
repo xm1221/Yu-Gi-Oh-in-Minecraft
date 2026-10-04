@@ -7,8 +7,11 @@ import cn.xm1221.ygomc.common.deck.DeckLibrary;
 import cn.xm1221.ygomc.common.deck.DeckValidator;
 import cn.xm1221.ygomc.common.duel.AutoPlayer;
 import cn.xm1221.ygomc.common.duel.DuelSnapshotProbe;
+import cn.xm1221.ygomc.common.duel.DuelStreamRecorder;
 import cn.xm1221.ygomc.common.ocg.DuelSession;
 import cn.xm1221.ygomc.common.ocg.PlayerResponder;
+import java.io.IOException;
+import java.nio.file.Path;
 import cn.xm1221.ygomc.common.ocg.DuelSessions;
 import cn.xm1221.ygomc.common.ocg.FirstChoiceResponder;
 import cn.xm1221.ygomc.common.ocg.Natives;
@@ -301,17 +304,41 @@ public final class YgomcCommand {
         PlayerResponder player = new PlayerResponder(new FirstChoiceResponder());
         AutoPlayer auto = new AutoPlayer(player, "selftest");
         auto.start();
+
+        // 录制是可选的：YGOMC_RECORD 指向要写的文件。它和快照探针【叠着用】，
+        // 不是二选一——一边要牌桌快照，一边要原始字节，两者互不干扰。
+        OcgDuel.Observer observer = new DuelSnapshotProbe();
+        DuelStreamRecorder recorder = null;
+        String recordPath = System.getenv("YGOMC_RECORD");
+        if (recordPath != null && !recordPath.isBlank()) {
+            try {
+                recorder = new DuelStreamRecorder(Path.of(recordPath), observer);
+                observer = recorder;
+            } catch (IOException e) {
+                LOGGER.warn("消息流录制无法开始，本局不录：{}", e.toString());
+            }
+        }
+        final DuelStreamRecorder rec = recorder;
+        final OcgDuel.Observer obs = observer;
+
         try {
             DuelSessions.start("player", new OcgDuel.DeckLoadout[]{loadout, loadout},
-                    player, new DuelSnapshotProbe(),
+                    player, obs,
                     session -> {
                         auto.close();
                         LOGGER.info("玩家驱动自检结果：\n{}", format(session, true));
                         LOGGER.info(player.report());
                         LOGGER.info("自动玩家：作答 {} 次，被拒 {} 次", auto.answered(), auto.failed());
+                        if (rec != null) {
+                            LOGGER.info(rec.report());
+                            rec.close();
+                        }
                     });
         } catch (IllegalStateException e) {
             auto.close();
+            if (rec != null) {
+                rec.close();
+            }
             LOGGER.warn("玩家驱动自检无法开局：{}", e.getMessage());
         }
     }

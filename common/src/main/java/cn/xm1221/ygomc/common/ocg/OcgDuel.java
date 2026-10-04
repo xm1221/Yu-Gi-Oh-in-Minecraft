@@ -306,6 +306,19 @@ public final class OcgDuel implements AutoCloseable {
     @FunctionalInterface
     public interface Observer {
         void onMessage(OcgDuel duel, Msg m, boolean awaitingAnswer);
+
+        /**
+         * 原始消息字节的旁路：一条消息一段，长度已经由解码器切好。
+         *
+         * <p>默认什么都不做。存在的理由是：{@link Msg} 只保留解出来的字段，
+         * <b>不带原始字节</b>，而「把实时对局录下来、再离线跑同一个比对」需要原样字节。
+         * 靠字段重新编码去伪造是不行的——那会引入第二个编码器，
+         * 而两个编码器互相印证等于自证。
+         *
+         * <p>实现必须<b>立刻拷走</b>自己需要的内容：{@code buffer} 是复用的。
+         */
+        default void onRawMessage(byte[] buffer, int offset, int length) {
+        }
     }
 
     /**
@@ -340,6 +353,11 @@ public final class OcgDuel implements AutoCloseable {
                 Step step = duel.advance();
                 for (Msg m : step.messages()) {
                     counts.merge(m.type(), 1, Integer::sum);
+                    if (observer != null) {
+                        // 原始字节旁路放在所有分支【之前】：WIN 与询问那两类都会
+                        // 各自 continue，晚一步调用就会把最关键的消息录丢。
+                        observer.onRawMessage(duel.buffer, m.offset(), m.length());
+                    }
 
                     if (m.type() == MsgType.WIN) {
                         Msg.Win win = (Msg.Win) m;

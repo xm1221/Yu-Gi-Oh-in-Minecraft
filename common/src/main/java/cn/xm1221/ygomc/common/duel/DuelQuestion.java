@@ -595,6 +595,14 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
             // 这不是小差别，它会让整局走向完全不同（实测步数 718→658）。
             return indexOfValue(0);
         }
+        if (type == MsgType.SELECT_CHAIN) {
+            // 同上，而且这一条是【靠录制流才定位到的】：贪心在非强制连锁时一律
+            // 不发动（-1），而界面上「发动」在前更自然，取第一项等于把所有
+            // 可选连锁都发动了。第一次离线比对（7422 条，来自 M1 的流）报全一致，
+            // 因为那些流里 4650 次连锁恰好全是强制的；换成实时录制的这条流，
+            // 9 次非强制连锁立刻把差异暴露出来。
+            return cancelable ? indexOfValue(-1) : 0;
+        }
         return 0;
     }
 
