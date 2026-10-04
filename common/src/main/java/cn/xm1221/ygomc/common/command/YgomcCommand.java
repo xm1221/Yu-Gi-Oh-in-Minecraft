@@ -249,28 +249,7 @@ public final class YgomcCommand {
             LOGGER.warn("自动自检跳过，引擎不可用：{}", OcgEngine.problem());
             return;
         }
-        String name = firstRealDeck();
-        DeckData deck;
-        String label;
-        try {
-            deck = name == null
-                    ? new DeckData(toList(FALLBACK_DECK), List.of(), List.of())
-                    : DeckLibrary.load(name);
-            label = name == null ? "内置兜底卡组" : name;
-        } catch (Exception e) {
-            LOGGER.warn("自动自检读取卡组失败，改用内置卡组：{}", e.toString());
-            deck = new DeckData(toList(FALLBACK_DECK), List.of(), List.of());
-            label = "内置兜底卡组";
-        }
-
-        DeckValidator.Report report = DeckValidator.validate(deck, DataPacks.get());
-        if (!report.ok()) {
-            LOGGER.warn("自动自检：卡组「{}」校验不过，改用内置卡组\n{}", label, report.describe());
-            deck = new DeckData(toList(FALLBACK_DECK), List.of(), List.of());
-            label = "内置兜底卡组";
-        }
-
-        OcgDuel.DeckLoadout loadout = toLoadout(deck);
+        OcgDuel.DeckLoadout loadout = toLoadout(pickDeck("自动自检").deck());
         // 自动自检顺带跑快照探针。queryFieldInfo 这条路径此前在本项目里
         // 一次都没被执行过，而「从未跑过」和「跑过且正确」在编译期长得一模一样。
         DuelSnapshotProbe probe = new DuelSnapshotProbe();
@@ -288,6 +267,47 @@ public final class YgomcCommand {
         if (System.getenv("YGOMC_PLAYER") != null) {
             startPlayerDriven(loadout);
         }
+    }
+
+    /** 选定的卡组与它的可读名字。 */
+    public record DeckPick(DeckData deck, String label) {
+    }
+
+    /**
+     * 决斗盘开局用的卡组。
+     *
+     * <p>与自动自检走<b>同一条</b>选择与校验策略，所以抽成一处：
+     * 两处各写一遍的话，以后改「优先用哪副」只改一处就会出现两种行为，
+     * 而且只在其中一条路径上表现出来。
+     *
+     * <p>归宿说明：放在命令类里是因为它要用 {@code FALLBACK_DECK}，
+     * 而那是命令侧的常量；等卡组来源独立成组件时再搬走。
+     */
+    public static OcgDuel.DeckLoadout loadoutForDuel() {
+        return toLoadout(pickDeck("决斗盘").deck());
+    }
+
+    private static DeckPick pickDeck(String who) {
+        String name = firstRealDeck();
+        DeckData deck;
+        String label;
+        try {
+            deck = name == null
+                    ? new DeckData(toList(FALLBACK_DECK), List.of(), List.of())
+                    : DeckLibrary.load(name);
+            label = name == null ? "内置兜底卡组" : name;
+        } catch (Exception e) {
+            LOGGER.warn("{}：读取卡组失败，改用内置卡组：{}", who, e.toString());
+            deck = new DeckData(toList(FALLBACK_DECK), List.of(), List.of());
+            label = "内置兜底卡组";
+        }
+        DeckValidator.Report report = DeckValidator.validate(deck, DataPacks.get());
+        if (!report.ok()) {
+            LOGGER.warn("{}：卡组「{}」校验不过，改用内置卡组\n{}", who, label, report.describe());
+            deck = new DeckData(toList(FALLBACK_DECK), List.of(), List.of());
+            label = "内置兜底卡组";
+        }
+        return new DeckPick(deck, label);
     }
 
     /**

@@ -59,8 +59,29 @@ public class DuelDiskItem extends Item {
      * 写成 {@link InteractionResult} 会编译不过。
      */
     // TODO(M2): 打开决斗盘 GUI（只读状态面板）；没有进行中的房间时给出提示。
+    //
+    // 目前这一步直接开局：对着空气右键 = 和本地贪心对手打一局（单人可测）。
+    // 之后有了卡组选择界面，这里改成先开面板、由玩家选卡组再开局。
     @Override
     public InteractionResultHolder<ItemStack> use(Level level, Player player, InteractionHand hand) {
-        return super.use(level, player, hand);
+        ItemStack stack = player.getItemInHand(hand);
+        if (level.isClientSide()) {
+            // 客户端只给「挥一下手」的即时反馈。房间的建立与校验一律在服务端，
+            // 客户端这边走一遍状态机只会造出「客户自以为开了房」的分裂状态。
+            return InteractionResultHolder.success(stack);
+        }
+        if (!(player instanceof net.minecraft.server.level.ServerPlayer server)) {
+            return InteractionResultHolder.pass(stack);
+        }
+        String problem = DuelRoom.startFor(server,
+                cn.xm1221.ygomc.common.command.YgomcCommand.loadoutForDuel());
+        if (problem != null) {
+            // 开局失败必须说出来。静默失败的表现是「右键没反应」，
+            // 与「这个物品根本没实现」长得一样。
+            server.displayClientMessage(
+                    net.minecraft.network.chat.Component.literal(problem), false);
+            return InteractionResultHolder.fail(stack);
+        }
+        return InteractionResultHolder.success(stack);
     }
 }
