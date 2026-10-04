@@ -93,4 +93,104 @@ public final class DataPacks {
             }
         }
     }
+
+    // ── description → 文本（照官方 data_manager.cpp:267-278，阈值与拆法已用本地数据验证）──
+
+    /** 官方 {@code MAX_STRING_ID = 0x7ff}。小于等于它的 description 是系统文本编号。 */
+    public static final int MAX_STRING_ID = 0x7ff;
+
+    /**
+     * 把引擎给的 {@code description} / {@code edesc} / {@code strCode} 解码成人能看懂的文本。
+     *
+     * <pre>
+     *   description &lt;= 2047  → strings.conf 的 !system &lt;description&gt;
+     *   否则                 → 卡号 = (description &gt;&gt;&gt; 4) &amp; 0x0fffffff
+     *                          取该卡 texts 表的 str((description &amp; 0xf) + 1)
+     * </pre>
+     *
+     * <p>阈值与拆分不是照抄文档，是用本地数据独立验证过的，推导见
+     * {@code tools/mkdatapack.py} 里 {@code MAX_STRING_ID} 上方那段注释。
+     *
+     * <p><b>本方法不抛异常</b>，兜底顺序是：
+     * <pre>
+     *   &lt;= 2047 查到系统文本 → 用它
+     *   &lt;= 2047 查不到       → "系统文本 " + description
+     *   拆分后说明非空       → 用它
+     *   拆分后说明为空/无此卡 → "说明 " + description
+     * </pre>
+     * 留着「说明 N」这层是为了让<b>「数据没装」和「代码写错」在界面上长得不一样</b>：
+     * 数据没装时稳定显示「系统文本/说明 N」；代码写错（偏移或位运算搞反）则会算出个荒唐的
+     * 卡号，显示成某张无关的卡名甚至空白——一眼能分辨。
+     *
+     * <p>注意实测有 7174 张卡（48%）的 str1..str16 全是空的，所以「拆分后有说明」这条
+     * 必须真的检查内容非空，不能只看卡号存在。
+     *
+     * @return 人看的文本；{@code description <= 0} 时返回 null（调用方应显示成「无说明」）
+     */
+    public static String desc(int description) {
+        if (description <= 0) {
+            return null;
+        }
+        DataPack pack = get();
+        if (description <= MAX_STRING_ID) {
+            StringsDb strings = pack.strings();
+            String sys = strings == null ? null : strings.sys(description);
+            return (sys == null || sys.isEmpty()) ? "系统文本 " + description : sys;
+        }
+        int code = (description >>> 4) & 0x0FFFFFFF;
+        int n = (description & 0xF) + 1;
+        CardTextDb texts = pack.cardText();
+        String s = texts == null ? null : texts.str(code, n);
+        return (s == null || s.isEmpty()) ? "说明 " + description : s;
+    }
+
+    /**
+     * 属性名。
+     *
+     * @param bit 内核的属性位掩码（EARTH = 1、WATER = 2、…、DEVINE = 0x40）
+     * @return 查不到时退成 {@code "属性 0x40"}——界面上的「位 0x40」正是缺了这张表
+     */
+    public static String attributeName(int bit) {
+        StringsDb s = get().strings();
+        String v = s == null ? null : s.attributeName(bit);
+        return (v == null || v.isEmpty()) ? "属性 0x" + Integer.toHexString(bit) : v;
+    }
+
+    /** @param bit 种族位掩码（内核顺序） @return 种族名；查不到时退成 {@code "种族 0x…"} */
+    public static String raceName(int bit) {
+        StringsDb s = get().strings();
+        String v = s == null ? null : s.raceName(bit);
+        return (v == null || v.isEmpty()) ? "种族 0x" + Integer.toHexString(bit) : v;
+    }
+
+    /** @param bit 类型位掩码（内核顺序） @return 类型名；查不到时退成 {@code "类型 0x…"} */
+    public static String typeName(int bit) {
+        StringsDb s = get().strings();
+        String v = s == null ? null : s.typeName(bit);
+        return (v == null || v.isEmpty()) ? "类型 0x" + Integer.toHexString(bit) : v;
+    }
+
+    /**
+     * 指示物名。
+     *
+     * @param type {@code SELECT_COUNTER} 里的指示物类型
+     * @return 查不到时退成 {@code "指示物 3"}——原先界面上只有「可放 N 个」而没有名字
+     */
+    public static String counterName(int type) {
+        StringsDb s = get().strings();
+        String v = s == null ? null : s.counter(type);
+        return (v == null || v.isEmpty()) ? "指示物 " + type : v;
+    }
+
+    /**
+     * 胜负原因。
+     *
+     * @param reason 内核给的胜负原因编号（{@code !victory 0x…}）
+     * @return 查不到时退成 {@code "胜负原因 3"}
+     */
+    public static String victoryName(int reason) {
+        StringsDb s = get().strings();
+        String v = s == null ? null : s.victory(reason);
+        return (v == null || v.isEmpty()) ? "胜负原因 " + reason : v;
+    }
 }

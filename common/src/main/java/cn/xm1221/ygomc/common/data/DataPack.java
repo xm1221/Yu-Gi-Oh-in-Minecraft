@@ -86,6 +86,7 @@ public final class DataPack implements Closeable {
     private final Path dir;
     private final CardDataDb cardData;
     private final CardTextDb cardText;
+    private final StringsDb strings;
     private final CardImageDb cardImages;
     private final List<String> problems;
 
@@ -93,11 +94,12 @@ public final class DataPack implements Closeable {
     private byte[] cardBack;
     private boolean backLoaded;
 
-    private DataPack(Path dir, CardDataDb cardData, CardTextDb cardText,
+    private DataPack(Path dir, CardDataDb cardData, CardTextDb cardText, StringsDb strings,
                      CardImageDb cardImages, List<String> problems) {
         this.dir = dir;
         this.cardData = cardData;
         this.cardText = cardText;
+        this.strings = strings;
         this.cardImages = cardImages;
         this.problems = Collections.unmodifiableList(problems);
     }
@@ -110,6 +112,7 @@ public final class DataPack implements Closeable {
         List<String> problems = new ArrayList<>();
         CardDataDb data = null;
         CardTextDb text = null;
+        StringsDb str = null;
         CardImageDb images = null;
 
         if (!Files.isDirectory(dir)) {
@@ -120,10 +123,12 @@ public final class DataPack implements Closeable {
                     () -> CardDataDb.load(dir.resolve("cards.bin")));
             text = tryOpen(problems, "texts.bin", "tools/mkdatapack.py",
                     () -> CardTextDb.load(dir.resolve("texts.bin")));
+            str = tryOpen(problems, "strings.bin", "tools/mkdatapack.py",
+                    () -> StringsDb.load(dir.resolve("strings.bin")));
             images = tryOpen(problems, "pics.bin", "tools/mkpics.py",
                     () -> CardImageDb.open(dir.resolve("pics.bin")));
         }
-        return new DataPack(dir, data, text, images, problems);
+        return new DataPack(dir, data, text, str, images, problems);
     }
 
     /**
@@ -175,7 +180,7 @@ public final class DataPack implements Closeable {
         }
         sb.append("\n请运行 tools/mkdatapack.py 与 tools/mkpics.py 生成，")
                 .append("或用 -D").append(PROPERTY).append("=<目录> 指定。");
-        return new DataPack(candidates.get(0), null, null, null, List.of(sb.toString()));
+        return new DataPack(candidates.get(0), null, null, null, null, List.of(sb.toString()));
     }
 
     private interface Loader<T> {
@@ -192,7 +197,13 @@ public final class DataPack implements Closeable {
         }
     }
 
-    /** 三份文件是否都可用。 */
+    /**
+     * 三份基础文件是否都可用（卡片数据、卡名卡文、卡图）。
+     *
+     * <p>{@code strings.bin} 有意<b>不算</b>在内：它是这一版才加的文件，缺了只会让
+     * 「属性/种族/指示物/胜负原因」显示成编号或留白，卡牌本身与对局不受影响。
+     * 把它算进来的话，拿着旧数据包的用户会看到「数据包不完整」，而实际是能玩的。
+     */
     public boolean isComplete() {
         return cardData != null && cardText != null && cardImages != null;
     }
@@ -214,6 +225,11 @@ public final class DataPack implements Closeable {
     /** @return 可能为 null */
     public CardTextDb cardText() {
         return cardText;
+    }
+
+    /** @return 系统文本表（strings.bin）；可能为 null，见 {@link #isComplete()} */
+    public StringsDb strings() {
+        return strings;
     }
 
     /** @return 可能为 null */
@@ -298,6 +314,7 @@ public final class DataPack implements Closeable {
     public String toString() {
         return "DataPack[" + dir + " " + (isComplete() ? "完整" : ("问题 " + problems.size() + " 项"))
                 + (cardData == null ? "" : ", " + cardData.size() + " 张卡")
+                + (strings == null ? ", 无系统文本" : ", " + strings)
                 + "]";
     }
 }
