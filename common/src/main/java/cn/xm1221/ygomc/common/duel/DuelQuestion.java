@@ -96,6 +96,18 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
             return new Option(label, cardCode, 0, value, 0, 0, 0);
         }
 
+        /**
+         * 带位置的<b>行动</b>项：应答回填 {@code value}，同时指向牌桌上的那张卡。
+         *
+         * <p>「召唤/盖放/攻击/发动」这些是<b>行动</b>而不是菜单项：ygo 客户端的做法是
+         * 玩家点那张卡，再由界面给出这张卡当前可做的行动。所以行动项必须带位置，
+         * 否则界面只能把它们倒成一个二十来项的按钮列表——那正是「把行动做成菜单」。
+         */
+        static Option ofAction(String label, int cardCode, int value,
+                               int controller, int location, int sequence) {
+            return new Option(label, cardCode, 0, value, controller, location, sequence);
+        }
+
         static Option ofZone(String label, int controller, int location, int sequence) {
             return new Option(label, 0, 0, 0, controller, location, sequence);
         }
@@ -189,11 +201,14 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
         List<Option> opts = new ArrayList<>();
         for (int i = 0; i < m.attackable().length; i++) {
             Msg.AttackableEntry e = m.attackable()[i];
-            opts.add(Option.ofValue("攻击", e.code(), (i << 16) | BATTLE_ATTACK));
+            // 攻击是「点我这只怪」而不是「从菜单里挑一只怪」
+            opts.add(Option.ofAction("攻击", e.code(), (i << 16) | BATTLE_ATTACK,
+                    e.controller(), e.location(), e.sequence()));
         }
         for (int i = 0; i < m.chains().length; i++) {
             Msg.SelectChainEntry e = m.chains()[i];
-            opts.add(Option.ofValue("发动效果", e.code(), (i << 16) | IDLE_ACTIVATE_EFFECT));
+            opts.add(Option.ofAction("发动效果", e.code(), (i << 16) | IDLE_ACTIVATE_EFFECT,
+                    e.controller(), e.location(), e.sequence()));
         }
         if (m.toM2() != 0) {
             opts.add(Option.ofValue("进入主要阶段 2", 0, BATTLE_TO_M2));
@@ -208,7 +223,8 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
     /** 行动类里「同一种行动有若干张卡可选」的部分：子下标就是卡在该表里的下标。 */
     private static void addActions(List<Option> opts, String what, int kind, Msg.CardEntry[] cards) {
         for (int i = 0; i < cards.length; i++) {
-            opts.add(Option.ofValue(what, cards[i].code(), (i << 16) | kind));
+            opts.add(Option.ofAction(what, cards[i].code(), (i << 16) | kind,
+                    cards[i].controller(), cards[i].location(), cards[i].sequence()));
         }
     }
 
@@ -225,7 +241,9 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
         for (int i = 0; i < entries.size(); i++) {
             Msg.SelectChain.ChainEntry e = entries.get(i);
             String label = e.isForced() ? "发动（强制）" : "发动";
-            opts.add(Option.ofIndex(label, e.code(), i));
+            // 带位置：对手发动效果后，玩家应当能【点自己的那张卡】来连锁它
+            opts.add(Option.ofIndexAt(label, e.code(), i,
+                    e.location().controller(), e.location().location(), e.location().sequence()));
         }
         boolean forced = m.hasForced();
         if (!forced) {

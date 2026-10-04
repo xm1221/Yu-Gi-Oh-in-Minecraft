@@ -21,7 +21,7 @@ package cn.xm1221.ygomc.common.client;
  */
 public record FieldLayout(int width, int height,
                           int cellW, int cellH, int handH,
-                          int gap, int x0,
+                          int gapX, int gapY, int x0,
                           Rect oppHand, Rect oppSpellRow, Rect oppMonsterRow,
                           Rect extraMonsterRow,
                           Rect myMonsterRow, Rect mySpellRow, Rect myHand,
@@ -71,46 +71,57 @@ public record FieldLayout(int width, int height,
      */
     public static FieldLayout compute(int width, int height) {
         int margin = Math.max(2, Math.min(6, width / 60));
-        int gap = Math.max(1, Math.min(2, width / 240));
-        int panelH = Math.min(96, Math.max(40, height / 5));
+        int gapY = Math.max(1, Math.min(2, width / 240));
+        // 底部只留一条细状态条。原先给了 height/5（最少 40px）——那是为了摆
+        // 二十来个行动按钮的网格，等于把场地挤掉五分之一高。行动改成点卡之后
+        // 这块地方不需要了，省下来的高度全部还给牌桌。
+        int panelH = Math.max(22, Math.min(34, height / 14));
         // 7 行之间有 6 个间距，必须是 6：写成 5 的话会在 960x540 这类尺寸上
         // 差 1 像素压到面板上（floor 之后正好溢出）。
-        int usableH = height - 2 * margin - panelH - 6 * gap;
+        int usableH = height - 2 * margin - panelH - 6 * gapY;
         int byHeight = (int) (usableH / 5.7f);
-        int byWidth = (int) ((width - 2 * margin - (ROW_COLS - 1) * gap) / (float) ROW_COLS
-                / (86f / 59f));
-        int cellH = Math.max(12, Math.min(byHeight, byWidth));
+        // 卡高先由高度定，宽度不参与——参与的话矮屏会把卡压扁。
+        int cellH = Math.max(12, byHeight);
         int cellW = Math.max(8, (int) (cellH * (59f / 86f)));
         int handH = Math.max(8, (int) (cellH * 0.45f));
 
-        int rowW = ROW_COLS * cellW + (ROW_COLS - 1) * gap;
+        // 纵向定完再看横向：7 列铺满屏幕还剩很多宽度，就把它摊到列间距上，
+        // 而不是让牌桌缩在中间一小块。ygo 客户端的怪兽区本来就是摊开的。
+        // 上限一个卡宽，免得五格被拉成一排孤零零的小卡片。
+        int want = width - 2 * margin;
+        int gapX = gapY;
+        if (ROW_COLS > 1) {
+            int spare = want - ROW_COLS * cellW;
+            gapX = Math.max(gapY, Math.min(cellW, spare / (ROW_COLS - 1)));
+        }
+        int rowW = ROW_COLS * cellW + (ROW_COLS - 1) * gapX;
         int x0 = Math.max(margin, (width - rowW) / 2);
         int panelTop = height - margin - panelH;
 
         int y = margin;
         Rect oppHand = new Rect(x0, y, rowW, handH);
-        y += handH + gap;
+        y += handH + gapY;
         Rect oppSpell = new Rect(x0, y, rowW, cellH);
-        y += cellH + gap;
+        y += cellH + gapY;
         Rect oppMonster = new Rect(x0, y, rowW, cellH);
-        y += cellH + gap;
+        y += cellH + gapY;
         int extraH = Math.max(8, (int) (cellH * 0.8f));
         Rect extra = new Rect(x0, y, rowW, extraH);
-        y += extraH + gap;
+        y += extraH + gapY;
         Rect myMonster = new Rect(x0, y, rowW, cellH);
-        y += cellH + gap;
+        y += cellH + gapY;
         Rect mySpell = new Rect(x0, y, rowW, cellH);
-        y += cellH + gap;
+        y += cellH + gapY;
         Rect myHand = new Rect(x0, y, rowW, handH);
         Rect panel = new Rect(0, panelTop, width, height - panelTop);
 
-        return new FieldLayout(width, height, cellW, cellH, handH, gap, x0,
+        return new FieldLayout(width, height, cellW, cellH, handH, gapX, gapY, x0,
                 oppHand, oppSpell, oppMonster, extra, myMonster, mySpell, myHand, panel);
     }
 
     /** 某一行里第 {@code col} 列的格子（0 = 左侧格，1..5 = 区域格，6 = 右侧格）。 */
     public Rect col(Rect band, int col) {
-        return new Rect(x0 + col * (cellW + gap), band.y(), cellW, band.h());
+        return new Rect(x0 + col * (cellW + gapX), band.y(), cellW, band.h());
     }
 
     /**
@@ -120,8 +131,8 @@ public record FieldLayout(int width, int height,
      * 因为它本来就由双方共用。
      */
     public Rect extraMonster(int i) {
-        int cx = x0 + (ROW_COLS * (cellW + gap)) / 2 - (cellW + gap) / 2;
-        int x = cx + (i == 0 ? -(cellW + gap) / 2 : (cellW + gap) / 2);
+        int cx = x0 + (ROW_COLS * (cellW + gapX)) / 2 - (cellW + gapX) / 2;
+        int x = cx + (i == 0 ? -(cellW + gapX) / 2 : (cellW + gapX) / 2);
         return new Rect(x, extraMonsterRow.y(), cellW, extraMonsterRow.h());
     }
 

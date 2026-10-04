@@ -154,4 +154,31 @@ public final class DuelTargets {
         }
         return -1;
     }
+
+    /**
+     * 落在这一点上的<b>所有</b>选项下标（按画出顺序）。
+     *
+     * <p>一张卡可能有多个可做的行动——手牌既能通常召唤又能盖放，
+     * 场上的怪既能攻击又能发动效果。这时要在光标处弹出菜单让玩家挑，
+     * 所以这里要拿到全部而不是第一个。
+     */
+    public static List<Integer> optionIndicesAt(List<Target> targets, double mx, double my) {
+        List<Integer> out = new ArrayList<>();
+        for (Target t : targets) {
+            FieldLayout.Rect r = t.rect();
+            if (mx >= r.x() && mx < r.right() && my >= r.y() && my < r.bottom()) {
+                out.add(t.optionIndex());
+            }
+        }
+        return out;
+    }
+
+    /** 行动菜单一行的高度与行间距。渲染与命中测试共用这一份，免得两边错位。 */
+    public static final int MENU_ROW_H = 14;
+    public static final int MENU_ROW_GAP = 2;
+
+    /** 行动菜单第 {@code i} 行的矩形。 */
+    public static FieldLayout.Rect menuRow(int x, int y, int w, int i) {
+        return new FieldLayout.Rect(x, y + i * (MENU_ROW_H + MENU_ROW_GAP), w, MENU_ROW_H);
+    }
 }
