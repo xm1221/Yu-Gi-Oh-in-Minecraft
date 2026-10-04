@@ -1,0 +1,7 @@
+{
+  "variants": {
+    "": {
+      "model": "ygomc:block/duel_table"
+    }
+  }
+}

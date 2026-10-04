@@ -255,6 +255,78 @@ public final class CardDataDb {
         public static final int TYPE_LINK = 0x4000000;
     }
 
+    /**
+     * 属性位掩码，取自内核 {@code common.h:123-129} 的 {@code ATTRIBUTE_*}。
+     *
+     * <p><b>这套位序很容易记错，别凭印象写。</b>它不是「暗最靠前」之类的直觉顺序，
+     * 内核里的顺序是 地/水/炎/风/光/暗/神 —— 例如 {@code 光 = 0x10}、
+     * {@code 暗 = 0x20}，而不是 {@code 暗 = 0x01}。
+     * 猜错的后果不是崩，而是<b>每张卡的属性都显示成另一个属性</b>：
+     * 编译通过、界面正常、只是全错，靠肉眼扫一眼很难发现。
+     * 这里的值是对着内核头文件抄的，并用全卡池分布 + 已知卡抽查核对过
+     * （青眼白龙=光/龙、黑魔术师=暗/魔法师、灰流丽=炎/不死）。
+     *
+     * <p>怪兽的属性在实卡规则里恰好是<b>一个</b>位，但这里仍然按「位掩码」写：
+     * 数据字段存的确实就是掩码。把「它一定只有一位」当前提，
+     * 会在遇到多位的异常数据时静默显示成某个碰巧匹配的名字。
+     */
+    public static final class Attributes {
+        private Attributes() {}
+
+        public static final int EARTH = 0x01;
+        public static final int WATER = 0x02;
+        public static final int FIRE = 0x04;
+        public static final int WIND = 0x08;
+        public static final int LIGHT = 0x10;
+        public static final int DARK = 0x20;
+        public static final int DIVINE = 0x40;
+
+        private static final int[] BITS = {EARTH, WATER, FIRE, WIND, LIGHT, DARK, DIVINE};
+        private static final String[] NAMES = {"地", "水", "炎", "风", "光", "暗", "神"};
+
+        /** 属性名；不是恰好一个已知位时返回 {@code null}（调用方据此整段不显示）。 */
+        public static String name(int attribute) {
+            for (int i = 0; i < BITS.length; i++) {
+                if (attribute == BITS[i]) {
+                    return NAMES[i];
+                }
+            }
+            return null;
+        }
+    }
+
+    /**
+     * 种族位掩码，取自内核 {@code common.h} 的 {@code race} 枚举。
+     *
+     * <p>同样是掩码而不是序号——魔法/陷阱卡的 {@code race} 用的是另一套位
+     * （永续/装备/速攻…），与怪兽种族共用同一个字段。所以查不到名字时返回
+     * {@code null} 而不是硬套一个怪兽种族名：那些位落在这里就是查不到。
+     */
+    public static final class Races {
+        private Races() {}
+
+        private static final int[] BITS = {
+                0x1, 0x2, 0x4, 0x8, 0x10, 0x20, 0x40, 0x80,
+                0x100, 0x200, 0x400, 0x800, 0x1000, 0x2000, 0x4000, 0x8000,
+                0x10000, 0x20000, 0x40000, 0x80000, 0x100000, 0x200000, 0x400000,
+                0x800000, 0x1000000, 0x2000000};
+        private static final String[] NAMES = {
+                "战士", "魔法师", "天使", "恶魔", "不死", "机械", "水", "炎",
+                "岩石", "鸟兽", "植物", "昆虫", "雷", "龙", "兽", "兽战士",
+                "恐龙", "鱼", "海龙", "爬虫", "念动力", "幻神兽", "创造神",
+                "幻龙", "电子界", "幻想魔"};
+
+        /** 种族名；不是恰好一个已知位时返回 {@code null}。 */
+        public static String name(int race) {
+            for (int i = 0; i < BITS.length; i++) {
+                if (race == BITS[i]) {
+                    return NAMES[i];
+                }
+            }
+            return null;
+        }
+    }
+
     @Override
     public String toString() {
         return "CardDataDb[" + file.getFileName() + ", " + codes.length + " 张, "

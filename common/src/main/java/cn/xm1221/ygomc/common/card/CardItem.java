@@ -168,6 +168,28 @@ public class CardItem extends Item {
             return (type & CardDataDb.CardTypes.TYPE_SPELL) != 0 ? "魔法卡" : "陷阱卡";
         }
         StringBuilder sb = new StringBuilder();
+
+        // 属性与种族放在最前面：认一张怪兽卡最先要看的就是这两个，
+        // 它们比攻守更能决定「这是张什么卡」。
+        //
+        // 查不到名字时整段略过而不是显示「未知」：魔法/陷阱卡的 race 与怪兽种族
+        // 共用同一个字段，用的是另一套位（永续/装备/速攻…），
+        // 那种情况下这一行本来就不该出现，而不是该显示成某个怪兽种族。
+        String attribute = CardDataDb.Attributes.name(s.attribute());
+        String race = CardDataDb.Races.name(s.race());
+        if (attribute != null) {
+            sb.append(attribute).append("属性");
+        }
+        if (race != null) {
+            if (sb.length() > 0) {
+                sb.append(' ');
+            }
+            sb.append(race).append("族");
+        }
+        if (sb.length() > 0) {
+            sb.append("    ");
+        }
+
         if ((type & CardDataDb.CardTypes.TYPE_XYZ) != 0) {
             sb.append("阶级 ").append(s.level());
         } else if ((type & CardDataDb.CardTypes.TYPE_LINK) != 0) {
