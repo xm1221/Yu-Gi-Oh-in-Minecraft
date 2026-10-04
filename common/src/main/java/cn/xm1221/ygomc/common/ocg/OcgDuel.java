@@ -161,6 +161,38 @@ public final class OcgDuel implements AutoCloseable {
         }
     }
 
+    /**
+     * 取内核的整场快照（一个完整的 {@code MSG_RELOAD_FIELD}）。
+     *
+     * <p><b>只能在对局线程上调用。</b>内核除 {@code create} / {@code end_duel} 之外不加锁，
+     * 从别的线程碰它就是在和数据竞争。界面需要在「引擎刚问完、应答还没交回去」
+     * 那个精确时刻取快照，所以调用点是 {@link Observer#onMessage}，
+     * <b>不是</b>客户端的渲染线程。
+     *
+     * <p>拿到的是内核自己的状态，而不是「我对消息流的复述」——这正是它比逐条重建
+     * MOVE / DRAW / POS_CHANGE 可靠的地方：漏解一条消息、算错一个坐标，
+     * 重建出来的牌桌会安静地偏掉，而且往往看起来还挺合理；快照不会。
+     *
+     * <p>注意快照里只有<b>区域占用与位置</b>，没有卡号（卡号要按可见性另查
+     * {@code Ocg.queryFieldCard}）——这是内核刻意为之，否则就等于把对手的盖牌
+     * 直接告诉客户端了。
+     *
+     * @return 快照；内核未给出内容时返回 null
+     */
+    public Msg.ReloadField snapshot() {
+        byte[] out = new byte[Ocg.SIZE_QUERY_BUFFER];
+        int n = Ocg.queryFieldInfo(handle, out);
+        if (n <= 0) {
+            return null;
+        }
+        Msg m = MsgCodec.decode(out, 0);
+        if (!(m instanceof Msg.ReloadField field)) {
+            throw new IllegalStateException("queryFieldInfo 返回的不是 MSG_RELOAD_FIELD，而是 "
+                    + MsgType.name(m.type()));
+        }
+        return field;
+    }
+
     public boolean isFinished() {
         return finished;
     }
@@ -256,6 +288,33 @@ public final class OcgDuel implements AutoCloseable {
      * @param decks {@code decks[0]} 是先手方的牌，{@code decks[1]} 是后手方
      */
     public static Outcome playOut(int[] seeds, DeckLoadout[] decks, Responder responder, int maxSteps) {
+        return playOut(seeds, decks, responder, maxSteps, null);
+    }
+
+    /**
+     * 对局过程中的观察点。
+     *
+     * <p><b>在对局线程上同步调用</b>，所以实现里可以安全地用
+     * {@link OcgDuel#snapshot()} 向内核索取状态——这是唯一能安全拿到内核状态的线程。
+     *
+     * <p>{@code awaitingAnswer} 为 true 的那一次调用是界面的关键点：此时引擎已经问完、
+     * 应答尚未交回，所以拿到的快照是「玩家该做决定的那一刻」的牌桌，
+     * 还没有被这次决定改变。
+     *
+     * <p>实现抛出的异常会终止本局并记为失败，不会被吞掉。
+     */
+    @FunctionalInterface
+    public interface Observer {
+        void onMessage(OcgDuel duel, Msg m, boolean awaitingAnswer);
+    }
+
+    /**
+     * 带观察点地跑完一局。
+     *
+     * @param observer 可为 null
+     */
+    public static Outcome playOut(int[] seeds, DeckLoadout[] decks, Responder responder, int maxSteps,
+                                  Observer observer) {
         Map<Integer, Integer> counts = new LinkedHashMap<>();
         int steps = 0;
         int queries = 0;
@@ -286,6 +345,9 @@ public final class OcgDuel implements AutoCloseable {
                         Msg.Win win = (Msg.Win) m;
                         winner = win.winner();
                         reason = win.reason();
+                        if (observer != null) {
+                            observer.onMessage(duel, m, false);
+                        }
                         continue;
                     }
                     if (!m.isQuery()) {
@@ -293,6 +355,9 @@ public final class OcgDuel implements AutoCloseable {
                         // 这是「有进展」的判据。
                         repeatedType = -1;
                         repeatStreak = 0;
+                        if (observer != null) {
+                            observer.onMessage(duel, m, false);
+                        }
                         continue;
                     }
 
@@ -324,6 +389,11 @@ public final class OcgDuel implements AutoCloseable {
                     }
 
                     duel.retryStreak = 0;
+                    // 观察点：引擎已经问完、应答还没交回去。
+                    // 此时取快照拿到的就是「玩家该做决定的那一刻」的牌桌。
+                    if (observer != null) {
+                        observer.onMessage(duel, m, true);
+                    }
                     Responder.Response response = responder.answer(m);
                     if (response == null) {
                         return new Outcome(-1, -1, steps, queries, counts,

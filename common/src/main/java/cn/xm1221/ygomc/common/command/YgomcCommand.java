@@ -5,6 +5,7 @@ import cn.xm1221.ygomc.common.data.DataPack;
 import cn.xm1221.ygomc.common.data.DataPacks;
 import cn.xm1221.ygomc.common.deck.DeckLibrary;
 import cn.xm1221.ygomc.common.deck.DeckValidator;
+import cn.xm1221.ygomc.common.duel.DuelSnapshotProbe;
 import cn.xm1221.ygomc.common.ocg.DuelSession;
 import cn.xm1221.ygomc.common.ocg.DuelSessions;
 import cn.xm1221.ygomc.common.ocg.FirstChoiceResponder;
@@ -265,10 +266,16 @@ public final class YgomcCommand {
         }
 
         OcgDuel.DeckLoadout loadout = toLoadout(deck);
+        // 自动自检顺带跑快照探针。queryFieldInfo 这条路径此前在本项目里
+        // 一次都没被执行过，而「从未跑过」和「跑过且正确」在编译期长得一模一样。
+        DuelSnapshotProbe probe = new DuelSnapshotProbe();
         try {
             DuelSessions.start("selftest", new OcgDuel.DeckLoadout[]{loadout, loadout},
-                    new FirstChoiceResponder(),
-                    session -> LOGGER.info("自动自检结果：\n{}", format(session, true)));
+                    new FirstChoiceResponder(), probe,
+                    session -> {
+                        LOGGER.info("自动自检结果：\n{}", format(session, true));
+                        LOGGER.info(probe.report());
+                    });
         } catch (IllegalStateException e) {
             LOGGER.warn("自动自检无法开局：{}", e.getMessage());
         }

@@ -45,12 +45,23 @@ public final class DuelSessions {
     public static synchronized DuelSession start(String label, OcgDuel.DeckLoadout[] decks,
                                                 Responder responder,
                                                 Consumer<DuelSession> onDone) {
+        return start(label, decks, responder, null, onDone);
+    }
+
+    /**
+     * 带观察点地开一局并登记。
+     *
+     * @param observer 在对局线程上逐条消息回调；可为 null
+     */
+    public static synchronized DuelSession start(String label, OcgDuel.DeckLoadout[] decks,
+                                                Responder responder, OcgDuel.Observer observer,
+                                                Consumer<DuelSession> onDone) {
         long running = SESSIONS.keySet().stream().filter(DuelSession::isRunning).count();
         if (running >= MAX_CONCURRENT) {
             throw new IllegalStateException(
                     "同时进行的对局已达上限 " + MAX_CONCURRENT + "，请等一局结束");
         }
-        DuelSession session = DuelSession.start(label, decks, responder, self -> {
+        DuelSession session = DuelSession.start(label, decks, responder, observer, self -> {
             // 完成时刷新次序，让它排到「最近」那一端，这样刚打完的局不会因为
             // 启动得早而被历史裁剪掉。
             SESSIONS.put(self, SEQUENCE.incrementAndGet());

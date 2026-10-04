@@ -56,6 +56,16 @@ public final class DuelSession {
      */
     public static DuelSession start(String label, OcgDuel.DeckLoadout[] decks, Responder responder,
                                     Consumer<DuelSession> onDone) {
+        return start(label, decks, responder, null, onDone);
+    }
+
+    /**
+     * 带观察点地开一局。
+     *
+     * @param observer 在对局线程上逐条消息回调，用来建牌桌/自检；可为 null
+     */
+    public static DuelSession start(String label, OcgDuel.DeckLoadout[] decks, Responder responder,
+                                    OcgDuel.Observer observer, Consumer<DuelSession> onDone) {
         DuelSession[] holder = new DuelSession[1];
         Thread thread = new Thread(() -> {
             // 线程里要能拿到 session 自己，所以用一个单元素数组把引用传进去
@@ -64,7 +74,7 @@ public final class DuelSession {
             try {
                 OcgDuel.Outcome result = OcgDuel.playOut(
                         new int[]{1, 2, 3, 4, 5, 6, 7, 8}, decks, responder,
-                        OcgDuel.DEFAULT_MAX_STEPS);
+                        OcgDuel.DEFAULT_MAX_STEPS, observer);
                 self.outcome = result;
                 self.failure = result.error();
                 self.state = result.won() ? State.FINISHED : State.FAILED;
