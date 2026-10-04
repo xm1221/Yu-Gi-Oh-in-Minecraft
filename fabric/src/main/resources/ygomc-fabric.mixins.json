@@ -1,0 +1,12 @@
+{
+  "required": true,
+  "package": "cn.xm1221.ygomc.fabric.client.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "minVersion": "0.8",
+  "client": [
+    "ItemRendererMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}
