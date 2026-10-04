@@ -54,13 +54,23 @@ public final class CardTextures {
     private record Key(int code, int tier) {
     }
 
-    private record Entry(ResourceLocation location, int width, int height) {
+    /**
+     * 一条已缓存的纹理。
+     *
+     * <p><b>不要把它改名成 {@code Entry}。</b>下面那个匿名 {@code LinkedHashMap} 子类
+     * 从 {@code Map} 继承了成员类型 {@code Map.Entry}，而类体作用域比外层类更内层，
+     * 于是签名写成 {@code Map.Entry<Key, Entry>} 时，第二个 {@code Entry} 会解析成
+     * {@code Map.Entry}——参数类型与父类的 {@code removeEldestEntry} 不一致，
+     * 但擦除后都是 {@code Map.Entry}，javac 报「名称冲突……具有相同疑符，
+     * 但两者均不覆盖对方」。这个名字本身就是那个坑的说明。
+     */
+    private record Cached(ResourceLocation location, int width, int height) {
     }
 
     /** key → 纹理。{@link java.util.LinkedHashMap} 按访问顺序淘汰比手写 LRU 队列更不容易写错。 */
-    private static final Map<Key, Entry> CACHE = new java.util.LinkedHashMap<>(64, 0.75f, true) {
+    private static final Map<Key, Cached> CACHE = new java.util.LinkedHashMap<>(64, 0.75f, true) {
         @Override
-        protected boolean removeEldestEntry(Map.Entry<Key, Entry> eldest) {
+        protected boolean removeEldestEntry(Map.Entry<Key, Cached> eldest) {
             if (size() > MAX_TEXTURES) {
                 // 这里只从表里移除；真正的显存释放在 release 里做，
                 // 因为 removeEldestEntry 里调 TextureManager 会与外层加锁顺序互锁。
@@ -88,7 +98,7 @@ public final class CardTextures {
      */
     public static ResourceLocation get(int code, int tier) {
         Key key = new Key(code, tier);
-        Entry cached = CACHE.get(key);
+        Cached cached = CACHE.get(key);
         if (cached != null) {
             hits++;
             return cached.location();
@@ -114,7 +124,7 @@ public final class CardTextures {
         DynamicTexture texture = new DynamicTexture(image);
         Minecraft.getInstance().getTextureManager().register(location, texture);
 
-        Entry entry = new Entry(location, image.getWidth(), image.getHeight());
+        Cached entry = new Cached(location, image.getWidth(), image.getHeight());
         CACHE.put(key, entry);
         // 插入可能触发淘汰，淘汰会往 PENDING_RELEASE 里放东西，下一轮再清。
         return location;
@@ -122,13 +132,13 @@ public final class CardTextures {
 
     /** 纹理的像素宽度；纹理不在缓存里时返回 0。 */
     public static int width(int code, int tier) {
-        Entry e = CACHE.get(new Key(code, tier));
+        Cached e = CACHE.get(new Key(code, tier));
         return e == null ? 0 : e.width();
     }
 
     /** 纹理的像素高度；纹理不在缓存里时返回 0。 */
     public static int height(int code, int tier) {
-        Entry e = CACHE.get(new Key(code, tier));
+        Cached e = CACHE.get(new Key(code, tier));
         return e == null ? 0 : e.height();
     }
 
@@ -140,7 +150,7 @@ public final class CardTextures {
 
     /** 全部释放。切换世界/重载资源时调用。 */
     public static void clear() {
-        for (Entry e : CACHE.values()) {
+        for (Cached e : CACHE.values()) {
             Minecraft.getInstance().getTextureManager().release(e.location());
         }
         CACHE.clear();
@@ -150,7 +160,7 @@ public final class CardTextures {
     private static void drainPendingReleases() {
         while (!PENDING_RELEASE.isEmpty()) {
             Key key = PENDING_RELEASE.poll();
-            Entry entry = CACHE.get(key);
+            Cached entry = CACHE.get(key);
             // 淘汰之后又被重新加载过的键，这里不能再释放——那会把正在用的纹理删掉。
             if (entry != null) {
                 continue;
