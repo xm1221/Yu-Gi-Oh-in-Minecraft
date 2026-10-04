@@ -1,6 +1,7 @@
 package cn.xm1221.ygomc.common.ocg;
 
 import cn.xm1221.ygomc.common.duel.DuelQuestion;
+import cn.xm1221.ygomc.common.duel.SumSelect;
 import cn.xm1221.ygomc.common.ocg.msg.Msg;
 
 /**
@@ -48,6 +49,18 @@ public final class PlayerResponder implements Responder {
     public Response answer(Msg msg) {
         DuelQuestion question = DuelQuestion.of(msg);
         if (question.mode() == DuelQuestion.Mode.UNSUPPORTED) {
+            if (msg instanceof Msg.SelectSum s) {
+                // SELECT_SUM 的应答是「一组下标」而不是「一个数值」，塞不进当前的问题模型
+                // （选项表 + 一个取值），所以先在这里直接求解。
+                //
+                // 待清理：这形成了 ocg → duel 的包间环（DuelQuestion 本来就在 duel → ocg）。
+                // 正确的归宿是把 SumSelect 挪进 ocg（它只依赖 Responder/Msg），
+                // 再让 DuelQuestion 反向调用它来给界面摆选项。现在先保证功能可用。
+                synchronized (lock) {
+                    autoAnswered++;
+                }
+                return SumSelect.solve(s);
+            }
             if (fallback == null) {
                 throw new IllegalStateException(
                         "这条询问还没有实现界面：" + question.describe()
