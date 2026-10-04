@@ -65,6 +65,9 @@ public final class FirstChoiceResponder implements Responder {
             case Msg.SelectTribute m -> selectTributes(m);
             case Msg.SelectUnselectCard m -> selectUnselectCard(m);
             case Msg.SelectPlace m -> selectPlaces(m);
+            case Msg.SelectDisfield m -> selectDisFields(m);
+            case Msg.SelectCounter m -> selectCounters(m);
+            case Msg.SortCard m -> sortCard(m);
             case Msg.AnnounceRace m -> Response.of(lowestBit(m.available()));
             case Msg.AnnounceAttrib m -> Response.of(lowestBit(m.available()));
             // 宣言类回的是「下标」而不是值本身，所以 0 就是选项表里的第一个。
@@ -227,14 +230,140 @@ public final class FirstChoiceResponder implements Responder {
                 for (int k = 0; k < 8; k++) {
                     if (m.ownSpellZoneUsable(k) && !used[8 + k]) {
                         sequence = k;
+                        found = true;
                         break;
                     }
                 }
+            }
+            if (!found) {
+                // 与 selectDisFields 同样的理由：没格子可放时必须明确失败，
+                // 不能返回一个非法位置——确定性应答器 + 非法值 = RETRY 死循环。
+                throw new IllegalStateException(String.format(
+                        "SELECT_PLACE 要求放置 %d 张，但 flag=0x%08X 里已没有任何可用区域"
+                                + "（player=%d）", m.count(), m.flag(), m.player()));
             }
             used[sequence + (location == Msg.Location.MZONE ? 0 : 8)] = true;
             resp[3 * i] = (byte) m.player();
             resp[3 * i + 1] = (byte) location;
             resp[3 * i + 2] = (byte) sequence;
+        }
+        return Response.of(resp);
+    }
+
+    /**
+     * {@code MSG_SELECT_DISFIELD}：挑 {@code count} 个区域禁用掉。
+     *
+     * <p>应答格式与 {@link #selectPlaces} 完全相同（{@code count} 组
+     * {@code owner/location/sequence}），但<b>扫描范围必须是 0..4</b>，不能照抄
+     * {@code selectPlaces} 的 0..6。原因在内核：{@code processor.cpp:4748} 与
+     * {@code :4787} 把应答里的位置按 {@code & 0x1f} 累加成 {@code mzone_flag}
+     * 再或进 {@code player.disabled_location}，只有 5 位有意义。选到 5、6 号区
+     * （额外怪兽区）会污染那个掩码，而症状是「区域莫名其妙被禁」，很难往这里想。
+     *
+     * <p>「第一选择」的含义是<b>禁用最左边那一格</b>——这是所有合法选择里
+     * 对局面影响最小的一种。等有真正的玩家界面时，这里会变成让玩家点格子。
+     */
+    private static Response selectDisFields(Msg.SelectDisfield m) {
+        if (m.count() <= 0) {
+            // 内核的校验对 (count == 0, i == 0, location == 0) 这一组开绿灯，
+            // 所以「不选」就用一个全 0 的三元组表示，而不是空数组。
+            return Response.of(new byte[]{0, 0, 0});
+        }
+        byte[] resp = new byte[3 * m.count()];
+        boolean[] used = new boolean[16];
+        for (int i = 0; i < m.count(); i++) {
+            int location = Msg.Location.MZONE;
+            int sequence = 0;
+            boolean found = false;
+            for (int k = 0; k < 5; k++) {
+                if (m.ownMonsterZoneUsable(k) && !used[k]) {
+                    sequence = k;
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                location = Msg.Location.SZONE;
+                for (int k = 0; k < 5; k++) {
+                    if (m.ownSpellZoneUsable(k) && !used[8 + k]) {
+                        sequence = k;
+                        found = true;
+                        break;
+                    }
+                }
+            }
+            if (!found) {
+                // 没有可用区域时【必须明确失败】，不能返回一个非法区域。
+                //
+                // 理由不是洁癖：这个应答器是确定性的，同一个询问永远给出同一个答案。
+                // 返回非法值 → 内核回 MSG_RETRY → 重问 → 再给同一个非法值……
+                // 于是表现为「卡住」而不是「报错」，最后靠 OcgDuel 的重试风暴计数
+                // 兜底，而那时已经看不出是哪条询问的问题了。
+                // 这里直接抛，让失败点就停在原因上。
+                throw new IllegalStateException(String.format(
+                        "SELECT_DISFIELD 要求禁用 %d 个区域，但 flag=0x%08X 里已没有任何可用区域"
+                                + "（player=%d）", m.count(), m.flag(), m.player()));
+            }
+            used[sequence + (location == Msg.Location.MZONE ? 0 : 8)] = true;
+            resp[3 * i] = (byte) m.player();
+            resp[3 * i + 1] = (byte) location;
+            resp[3 * i + 2] = (byte) sequence;
+        }
+        return Response.of(resp);
+    }
+
+    /**
+     * {@code MSG_SELECT_COUNTER}：把 {@code count} 个指示物分配到候选卡上。
+     *
+     * <h2>应答不是「选哪些卡」，而是「每张各拿几个」</h2>
+     * 这是本类型最容易写错的地方：内核读的是 {@code returns.svalue[i]}
+     * （{@code playerop.cpp:626-636}），也就是一个<b>与消息里候选卡一一对应的
+     * u16 数组</b>，而不是下标列表。{@code svalue} 与 {@code bvalue} 是同一个
+     * union（{@code field.h:162-167}），所以按小端写 u16 就对了。
+     *
+     * <p>内核的两条校验：每张卡拿走的量不得超过它自己有的，
+     * 且总和<b>恰好</b>等于 {@code count}（不等就 {@code MSG_RETRY}）。
+     * 从前往后贪心地取 {@code min(剩余, 这张有的)} 同时满足两条：
+     * 内核在发消息前已经保证 {@code count <= 候选指示物总数}，
+     * 所以贪心到最后剩余量一定归零。
+     */
+    private static Response selectCounters(Msg.SelectCounter m) {
+        int n = m.candidateCount();
+        int remaining = m.count();
+        byte[] resp = new byte[2 * n];
+        for (int i = 0; i < n; i++) {
+            int take = Math.max(0, Math.min(remaining, m.cardCounter(i)));
+            remaining -= take;
+            resp[2 * i] = (byte) (take & 0xFF);
+            resp[2 * i + 1] = (byte) ((take >>> 8) & 0xFF);
+        }
+        return Response.of(resp);
+    }
+
+    /**
+     * {@code MSG_SORT_CARD}：把 {@code n} 张卡排个序（{@code Duel.SortDecktop} 等）。
+     *
+     * <h2>应答是「裸排列」，没有长度前缀</h2>
+     * 内核直接按下标读 {@code returns.bvalue[0..n-1]}（{@code playerop.cpp:780-787}），
+     * 要求每个值 {@code < n} 且互不重复，而<b>不会</b>先读一个计数。
+     * 多数多选类消息是要带计数前缀的（见 {@code check_response}），
+     * 这一条是例外；写错的话内核会把排列的第一个字节当成数量，
+     * 于是要么 {@code MSG_RETRY} 死循环，要么把顺序搞乱而不报错。
+     *
+     * <p>{@code bvalue[0] == 0xff} 是内核给简单 AI 留的「跳过排序」暗号
+     * （{@code playerop.cpp:757-760}），正常情况下不该由应答方主动发。
+     * 这里回恒等排列，语义是「保持引擎给的顺序」——对
+     * {@code Duel.SortDecktop} 这类「自己决定牌堆顶顺序」的效果，
+     * 这是所有合法选择里信息量最小、也最不会破坏局面的一种。
+     */
+    private static Response sortCard(Msg.SortCard m) {
+        int n = m.count();
+        if (n <= 0) {
+            return Response.of(new byte[0]);
+        }
+        byte[] resp = new byte[n];
+        for (int i = 0; i < n; i++) {
+            resp[i] = (byte) i;
         }
         return Response.of(resp);
     }

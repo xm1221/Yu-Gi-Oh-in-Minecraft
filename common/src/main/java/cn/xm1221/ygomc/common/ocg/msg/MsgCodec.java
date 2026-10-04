@@ -105,7 +105,8 @@ public final class MsgCodec {
                 case MsgType.SELECT_OPTION -> decodeSelectOption(c, type);
                 case MsgType.SELECT_CARD -> decodeSelectCard(c, type);
                 case MsgType.SELECT_CHAIN -> decodeSelectChain(c, type);
-                case MsgType.SELECT_PLACE, MsgType.SELECT_DISFIELD -> decodeSelectPlace(c, type);
+                case MsgType.SELECT_PLACE -> decodeSelectPlace(c, type);
+                case MsgType.SELECT_DISFIELD -> decodeSelectDisfield(c, type);
                 case MsgType.SELECT_POSITION -> decodeSelectPosition(c, type);
                 case MsgType.SELECT_TRIBUTE -> decodeSelectTribute(c, type);
                 case MsgType.SELECT_COUNTER -> decodeSelectCounter(c, type);
@@ -320,6 +321,24 @@ public final class MsgCodec {
         int count = c.u8("count");
         int flag = c.u32("flag");
         return new Msg.SelectPlace(t, c.messageOffset(), c.position() - c.messageOffset(),
+                player, count, flag);
+    }
+
+    /**
+     * {@code MSG_SELECT_DISFIELD}：{@code u8 player, u8 count, u32 flag}。
+     *
+     * <p>版式与 {@link #decodeSelectPlace} 逐字相同——内核在
+     * {@code playerop.cpp:443-449} 用同一个处理器按消息类型二选一地写这两条。
+     * 这里仍然产出两个不同的记录，是因为<b>消息类型不同</b>：统计、日志、
+     * 以及将来「按类型挂界面」都要能区分「选一个放置位置」和「选一些区域禁用掉」，
+     * 这两件事给玩家的提示语完全不同。版式相同的部分靠 {@link Msg#zoneBit}
+     * 共用，而不是靠两处复制粘贴来维持一致。
+     */
+    private static Msg decodeSelectDisfield(Cursor c, int t) {
+        int player = c.u8("player");
+        int count = c.u8("count");
+        int flag = c.u32("flag");
+        return new Msg.SelectDisfield(t, c.messageOffset(), c.position() - c.messageOffset(),
                 player, count, flag);
     }
 

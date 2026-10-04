@@ -11,7 +11,8 @@ import java.util.Objects;
  * {@link MsgCodec#decode(byte[], int)} 返回的就是这里的某个实现。
  *
  * <h2>访问方式</h2>
- * 每个具体类型都是 {@link Msg.Body} 的嵌套 {@code record}，字段具名且带类型，例如：
+ * 每个具体类型都是 {@link Msg} 的嵌套 {@code record}（不是 {@link Msg.Body} 的——
+ * {@code Body} 只负责用 {@code permits} 把它们封成一个封闭集合），字段具名且带类型，例如：
  * <pre>{@code
  * if (m instanceof Msg.Move move) {
  *     int code = move.code();
@@ -52,7 +53,8 @@ public sealed interface Msg permits Msg.Body {
      */
     sealed interface Body extends Msg permits Retry, Hint, Win, SelectBattleCmd, SelectIdleCmd,
             SelectEffectYn, SelectYesNo, SelectOption, SelectCard, SelectChain, SelectPlace,
-            SelectPosition, SelectTribute, SelectCounter, SelectSum, SortCard, SelectUnselectCard,
+            SelectDisfield, SelectPosition, SelectTribute, SelectCounter, SelectSum, SortCard,
+            SelectUnselectCard,
             ConfirmDeckTop, ConfirmCards, ShuffleDeck, ShuffleHand, SwapGraveDeck, ShuffleSetCard,
             ReverseDeck, DeckTop, ShuffleExtra, NewTurn, NewPhase, ConfirmExtraTop, Move, PosChange,
             Set, Swap, FieldDisabled, Summoning, Summoned, SpSummoning, SpSummoned, FlipSummoning,
@@ -482,10 +484,7 @@ public sealed interface Msg permits Msg.Body {
 
         /** 该位置是否被禁止（{@code owner} 相对 {@code player} 的归属 0/1，{@code location} 用 LOCATION_MZONE/SZONE）。 */
         public boolean isDisabled(int owner, int location, int sequence) {
-            int bit = sequence
-                    + (owner == player ? 0 : 16)
-                    + (location == Location.MZONE ? 0 : 8);
-            return (flag & (1 << bit)) != 0;
+            return (flag & (1 << zoneBit(player, owner, location, sequence))) != 0;
         }
 
         /** 自己怪兽区第 {@code seq} 格是否可用。 */
@@ -499,6 +498,40 @@ public sealed interface Msg permits Msg.Body {
 
         /** 对方魔陷区第 {@code seq} 格是否可用。 */
         public boolean oppSpellZoneUsable(int seq) { return !isDisabled(1 - player, Location.SZONE, seq); }
+
+        @Override public String toString() {
+            return head() + " player=" + player + " count=" + count
+                    + String.format(" flag=0x%08X", flag);
+        }
+    }
+
+    /**
+     * 禁用区域选择（{@code MSG_SELECT_DISFIELD}）：{@code u8 player, u8 count, u32 flag}（7 字节）。
+     *
+     * <p>语义是「从可用区域里挑 {@code count} 个<b>禁用</b>掉」。{@code flag} 是<b>不可选</b>
+     * 区域的位图——已经被占用或已禁用的那些，外加内核强制置 1 的高位。
+     *
+     * <h2>为什么应答只能在 0..4 号区里挑</h2>
+     * 内核的两处内部触发点（{@code processor.cpp:4748} 与 {@code :4787}）都把应答结果
+     * 按 {@code & 0x1f} 解读：怪兽区用 {@code mzone_flag}、魔陷区用 {@code szone_flag}，
+     * 都是 5 位。要是选到 5、6 号区（额外怪兽区），多出来的位会被置进
+     * {@code player.disabled_location}，语义就不对了。
+     *
+     * <p>与 {@link SelectPlace} 由同一个内核处理器写出（{@code playerop.cpp:443-449}
+     * 按处理器类型二选一），字段与应答格式完全相同，位序见 {@link Msg#zoneBit}。
+     */
+    record SelectDisfield(int _type, int offset, int _length, int player, int count, int flag) implements Body {
+
+        /** 该位置是否已经不可选。 */
+        public boolean isDisabled(int owner, int location, int sequence) {
+            return (flag & (1 << zoneBit(player, owner, location, sequence))) != 0;
+        }
+
+        /** 自己怪兽区第 {@code seq} 格是否可选。 */
+        public boolean ownMonsterZoneUsable(int seq) { return !isDisabled(player, Location.MZONE, seq); }
+
+        /** 自己魔陷区第 {@code seq} 格是否可选。 */
+        public boolean ownSpellZoneUsable(int seq) { return !isDisabled(player, Location.SZONE, seq); }
 
         @Override public String toString() {
             return head() + " player=" + player + " count=" + count
@@ -1482,6 +1515,25 @@ public sealed interface Msg permits Msg.Body {
                  MsgType.ANNOUNCE_NUMBER, MsgType.ROCK_PAPER_SCISSORS -> true;
             default -> false;
         };
+    }
+
+    /**
+     * 区域位图的位序，与内核 {@code playerop.cpp:460} 逐字一致。
+     *
+     * <p>{@link SelectPlace} 与 {@link SelectDisfield} 共用这一位序，
+     * 而且<b>必须</b>共用：内核在 {@code playerop.cpp:443-449} 用同一个处理器
+     * 按消息类型二选一地写这两条，其后三个字段（{@code player}/{@code count}/{@code flag}）
+     * 与应答格式完全相同。把这个公式放在一处，是为了让「两条消息的位序一致」
+     * 成为结构性事实，而不是靠两处各抄一遍、改一处忘另一处——
+     * 那种错的表现是「区域选错了」，在对局里极难定位。
+     *
+     * @param player   被询问的玩家；决定占用低 16 位还是高 16 位
+     * @param owner    该区域属于哪一方，0/1
+     * @param location {@link Location#MZONE} 或 {@link Location#SZONE}
+     */
+    static int zoneBit(int player, int owner, int location, int sequence) {
+        return sequence + (owner == player ? 0 : 16)
+                + (location == Location.MZONE ? 0 : 8);
     }
 
     /** 便捷：把 {@link Body} 当作某个具体类型时做类型检查的短路写法。 */
