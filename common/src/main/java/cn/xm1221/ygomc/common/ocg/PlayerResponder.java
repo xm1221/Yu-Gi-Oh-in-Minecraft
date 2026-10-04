@@ -29,6 +29,14 @@ public final class PlayerResponder implements Responder {
     private final Object lock = new Object();
     private final Responder fallback;
 
+    /**
+     * 「新问题诞生」的通知口，由对局房间装入，用来把问题推给客户端。
+     *
+     * <p>有了它，真实客户端就不必像 {@code AutoPlayer} 那样轮询 {@code pending()}——
+     * 轮询是给进程内替身用的临时手段，延迟与空转都不该带进正式链路。
+     */
+    private volatile java.util.function.Consumer<DuelQuestion> listener;
+
     // 以下全部只在持有 lock 时读写。
     private DuelQuestion pending;
     private Response answer;
@@ -43,6 +51,11 @@ public final class PlayerResponder implements Responder {
      */
     public PlayerResponder(Responder fallback) {
         this.fallback = fallback;
+    }
+
+    /** 装入「问题诞生」的通知口（由对局房间调用）。 */
+    public void setListener(java.util.function.Consumer<DuelQuestion> listener) {
+        this.listener = listener;
     }
 
     @Override
@@ -78,6 +91,14 @@ public final class PlayerResponder implements Responder {
             answered = false;
             cancelled = false;
             asked++;
+            // 通知放在【持锁区内】是有意的：此时 pending 已经就位，玩家就算立刻
+            // 应答，也会在 submit 里等这把锁，直到下面进入 wait() 才继续，
+            // 于是不可能出现「应答比等待先到」而被丢掉的真空窗口。
+            // 放到锁外就正好有这么一个窗口，而且它只在玩家手速快时出现。
+            java.util.function.Consumer<DuelQuestion> l = listener;
+            if (l != null) {
+                l.accept(question);
+            }
             lock.notifyAll();
             while (!answered) {
                 try {
