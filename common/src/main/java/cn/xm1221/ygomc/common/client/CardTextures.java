@@ -88,6 +88,20 @@ public final class CardTextures {
     private static long hits;
     private static long misses;
 
+    /**
+     * 卡背的固定资源名。
+     *
+     * <p>它不属于任何卡号，所以走独立槽位而不是 {@link Key}——用哨兵卡号混进
+     * LRU 的话，淘汰逻辑就得为「这张不能被淘汰」开特例，那比单独放一个字段更难维护。
+     */
+    private static final ResourceLocation BACK_LOCATION =
+            ResourceLocation.fromNamespaceAndPath("ygomc", PATH_PREFIX + "back");
+
+    private static ResourceLocation backLocation;
+    private static int backWidth;
+    private static int backHeight;
+    private static boolean backTried;
+
     private CardTextures() {
     }
 
@@ -142,10 +156,54 @@ public final class CardTextures {
         return e == null ? 0 : e.height();
     }
 
+    /**
+     * 卡背纹理位置。
+     *
+     * <p>它<b>不</b>进 LRU：全局只有这一张，淘汰它没有任何收益，
+     * 而重新加载要多走一次文件 I/O 加解码。所以只在第一次调用时尝试加载，
+     * 读不到就永远返回 {@code null}，不会每次调用都去碰磁盘。
+     *
+     * <p>没有数据组件、卡号查不到、或者这张卡在数据包里没图的，都回退到这里。
+     */
+    public static ResourceLocation back() {
+        if (backTried) {
+            return backLocation;
+        }
+        backTried = true;
+        byte[] jpeg = DataPacks.get().cardBack();
+        if (jpeg == null || jpeg.length == 0) {
+            // 这不是错误：卡背是 KONAMI 的美术，不随模组分发。
+            LOGGER.info("数据包里没有卡背（{} 缺失），缺图与无组件的卡会显示占位框",
+                    DataPack.BACK_FILE);
+            return null;
+        }
+        NativeImage image = decode(jpeg, 0, -1);
+        if (image == null) {
+            return null;
+        }
+        DynamicTexture texture = new DynamicTexture(image);
+        Minecraft.getInstance().getTextureManager().register(BACK_LOCATION, texture);
+        backLocation = BACK_LOCATION;
+        backWidth = image.getWidth();
+        backHeight = image.getHeight();
+        return backLocation;
+    }
+
+    /** 卡背的像素宽度；没加载到卡背时返回 0。 */
+    public static int backWidth() {
+        return backWidth;
+    }
+
+    /** 卡背的像素高度；没加载到卡背时返回 0。 */
+    public static int backHeight() {
+        return backHeight;
+    }
+
     /** 一次诊断用的统计行。 */
     public static String stats() {
         return "卡图纹理缓存 " + CACHE.size() + "/" + MAX_TEXTURES
-                + "，命中 " + hits + "，解码 " + misses;
+                + "，命中 " + hits + "，解码 " + misses
+                + "，卡背 " + (backLocation != null ? "有" : "无");
     }
 
     /** 全部释放。切换世界/重载资源时调用。 */
@@ -155,6 +213,14 @@ public final class CardTextures {
         }
         CACHE.clear();
         PENDING_RELEASE.clear();
+        // 卡背也要重置，否则重载后 backTried 会让我们一直用着已释放的纹理。
+        if (backLocation != null) {
+            Minecraft.getInstance().getTextureManager().release(backLocation);
+            backLocation = null;
+        }
+        backTried = false;
+        backWidth = 0;
+        backHeight = 0;
     }
 
     private static void drainPendingReleases() {

@@ -2,6 +2,7 @@ package cn.xm1221.ygomc.common.card;
 
 import cn.xm1221.ygomc.common.data.CardDataDb;
 import cn.xm1221.ygomc.common.data.DataPacks;
+import cn.xm1221.ygomc.common.registry.YgomcItems;
 import net.minecraft.ChatFormatting;
 import net.minecraft.core.component.DataComponentType;
 import net.minecraft.network.chat.Component;
@@ -63,6 +64,20 @@ public class CardItem extends Item {
     public static CardRef ref(ItemStack stack) {
         DataComponentType<CardRef> type = CardComponents.CARD_REF.get();
         return stack.get(type);
+    }
+
+    /**
+     * 造一张具体的卡。
+     *
+     * <p>为什么需要这个工厂：{@link Item.Properties} 在构造时就要求把默认组件定下来，
+     * 而那时 {@link CardComponents#CARD_REF} 还没实例化（见 {@link #createDefault()}）。
+     * 所以「带卡号的卡」只能先造出 stack、再塞组件。这里是那条路径的<b>唯一</b>实现，
+     * 免得每个调用点各写一遍 {@code set}——漏写一次就是一张查不到卡号、只显示卡背的卡。
+     */
+    public static ItemStack stack(int cardCode, CardRarity rarity) {
+        ItemStack stack = new ItemStack(YgomcItems.CARD.get());
+        stack.set(CardComponents.CARD_REF.get(), CardRef.of(cardCode, rarity));
+        return stack;
     }
 
     /**

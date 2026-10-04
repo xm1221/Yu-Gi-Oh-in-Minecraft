@@ -209,6 +209,24 @@ def build(pics_dir, out_dir, limit=None, workers=None):
     if failed:
         print("  编码失败 %d 张：%s" % (len(failed), failed[:5]))
 
+    # 卡背单独放一个小文件，不塞进 pics.bin。
+    #
+    # 理由：pics.bin 有 334 MB，为了一张 130 KB 的卡背把它整个重打一遍不值得；
+    # 而卡背是「一张图一个用途」，没有按卡号索引的需求。
+    # 来源是用户自己 ygopro 目录下的 textures/cover.jpg —— 那是 KONAMI 的美术，
+    # 和卡图一样【不随模组分发】，只从本地数据包读（见 THIRD_PARTY_NOTICES.md）。
+    cover = os.path.join(os.path.dirname(os.path.abspath(pics_dir)),
+                         "textures", "cover.jpg")
+    back_out = os.path.join(out_dir, "back.jpg")
+    if os.path.isfile(cover):
+        with open(cover, "rb") as src, open(back_out, "wb") as dst:
+            dst.write(src.read())
+        print("  卡背 %s -> back.jpg (%.0f KB)"
+              % (cover, os.path.getsize(back_out) / 1024))
+    else:
+        print("  [注意] 没找到卡背 %s" % cover)
+        print("         没有组件或查不到的卡会退化成占位框而不是卡背")
+
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="卡图打包成 pics.bin")

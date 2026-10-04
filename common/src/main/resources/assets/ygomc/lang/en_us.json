@@ -1,5 +1,6 @@
 {
   "itemGroup.ygomc.main": "Yu-Gi-Oh",
+  "itemGroup.ygomc.cards": "Yu-Gi-Oh: Card Library",
   "item.ygomc.card": "Card",
   "item.ygomc.duel_disk": "Duel Disk",
   "item.ygomc.deck_box": "Deck Box",

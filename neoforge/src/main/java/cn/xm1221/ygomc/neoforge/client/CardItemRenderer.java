@@ -43,6 +43,15 @@ public final class CardItemRenderer extends BlockEntityWithoutLevelRenderer {
     /** 卡面高度占多少个方块。宽度按卡图长宽比推出来，免得拉扁。 */
     private static final float CARD_HEIGHT = 0.9F;
 
+    /**
+     * 标准卡面长宽（200:290，与 {@code pics.bin} 的 FULL 档一致）。
+     *
+     * <p>卡背按这个比例铺，而不是按 {@code cover.jpg} 自己的像素尺寸——
+     * 理由见 {@link #renderByItem}。
+     */
+    private static final float CARD_ASPECT_W = 200.0F;
+    private static final float CARD_ASPECT_H = 290.0F;
+
     private static CardItemRenderer instance;
 
     private CardItemRenderer() {
@@ -67,26 +76,37 @@ public final class CardItemRenderer extends BlockEntityWithoutLevelRenderer {
     @Override
     public void renderByItem(ItemStack stack, ItemDisplayContext context, PoseStack pose,
                              MultiBufferSource buffers, int light, int overlay) {
+        ResourceLocation texture = null;
+        // 画卡面还是画卡背，只影响「用哪张贴图」和「按什么长宽比铺」，
+        // 不影响几何——所以先把这个决定做完，后面只有一条绘制路径。
+        float aspectW = 0.0F;
+        float aspectH = 0.0F;
+
         CardRef ref = CardItem.ref(stack);
-        if (ref == null) {
-            // 没有 card_ref 的卡物品只可能是刷错物品或数据损坏。这里什么都不画，
-            // 于是它显示为空白——比画一张假卡更容易看出问题。
-            return;
+        if (ref != null) {
+            texture = CardTextures.get(ref.cardCode(), CardImageDb.TIER_FULL);
+            aspectW = CardTextures.width(ref.cardCode(), CardImageDb.TIER_FULL);
+            aspectH = CardTextures.height(ref.cardCode(), CardImageDb.TIER_FULL);
         }
-        ResourceLocation texture = CardTextures.get(ref.cardCode(), CardImageDb.TIER_FULL);
+        if (texture == null || aspectW <= 0 || aspectH <= 0) {
+            // 三种情况走这里：没有 card_ref 组件、卡号在数据包里查不到、
+            // 这张卡本身没图。对玩家来说它们是同一件事——「这不是一张能认出来的卡」——
+            // 所以都显示卡背，而不是留白。留白会让「缺数据」和「渲染坏了」看起来一样。
+            texture = CardTextures.back();
+            // 卡背按【标准卡面】的比例铺，不按它自己的像素尺寸。
+            // 否则同一张卡「有图」和「没图」时会呈现两种轮廓宽度，
+            // 看起来像是物品本身变了，而不是缺了张图。
+            aspectW = CARD_ASPECT_W;
+            aspectH = CARD_ASPECT_H;
+        }
         if (texture == null) {
-            // 数据包里这张卡没图。留白，不画占位框：物品栏里一个灰框
-            // 与「模型没加载出来」看起来一样，反而更难判断。
-            return;
-        }
-        int texW = CardTextures.width(ref.cardCode(), CardImageDb.TIER_FULL);
-        int texH = CardTextures.height(ref.cardCode(), CardImageDb.TIER_FULL);
-        if (texW <= 0 || texH <= 0) {
+            // 连卡背都没有（数据包没放）。这时只能留白：
+            // 画什么都只会让人以为渲染出了问题。
             return;
         }
 
         float h = CARD_HEIGHT;
-        float w = h * texW / texH;
+        float w = h * aspectW / aspectH;
         float x0 = 0.5F - w / 2.0F;
         float x1 = 0.5F + w / 2.0F;
         float y0 = 0.5F - h / 2.0F;

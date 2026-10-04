@@ -67,11 +67,11 @@ public final class CardArt {
         return blitTier(g, code, CardImageDb.TIER_ICON, x, y, size, h);
     }
 
-    /** 画某一档卡图；缺图时画占位框。 */
+    /** 画某一档卡图；缺图时回退到卡背，连卡背都没有才画占位框。 */
     private static boolean blitTier(GuiGraphics g, int code, int tier, int x, int y, int w, int h) {
         ResourceLocation texture = CardTextures.get(code, tier);
         if (texture == null) {
-            placeholder(g, x, y, w, h);
+            fallback(g, x, y, w, h);
             return false;
         }
         // 必须用带真实贴图尺寸的那个重载：7 参数版假定贴图是 256×256，
@@ -81,6 +81,33 @@ public final class CardArt {
         g.blit(texture, x, y, 0.0F, 0.0F, w, h,
                 texW > 0 ? texW : w, texH > 0 ? texH : h);
         return true;
+    }
+
+    /**
+     * 画一张卡的背面。
+     *
+     * <p>用在三种「没有正面可画」的场合：物品没带 {@code card_ref} 组件、
+     * 卡号在数据包里查不到、以及这张卡本身缺图。
+     * 三者对玩家来说是同一件事——「这不是一张能认出来的卡」——
+     * 所以视觉上也应当一致，都显示卡背。
+     *
+     * @return 是否画出了真正的卡背；false 表示连卡背都没有，画的是占位框
+     */
+    public static boolean drawBack(GuiGraphics g, int x, int y, int w, int h) {
+        ResourceLocation back = CardTextures.back();
+        if (back == null) {
+            placeholder(g, x, y, w, h);
+            return false;
+        }
+        int tw = CardTextures.backWidth();
+        int th = CardTextures.backHeight();
+        g.blit(back, x, y, 0.0F, 0.0F, w, h, tw > 0 ? tw : w, th > 0 ? th : h);
+        return true;
+    }
+
+    /** 缺图回退：先试卡背，再退到占位框。 */
+    private static void fallback(GuiGraphics g, int x, int y, int w, int h) {
+        drawBack(g, x, y, w, h);
     }
 
     /** 普通 alpha 混合的覆盖层。 */

@@ -76,6 +76,9 @@ public final class DataPack implements Closeable {
     /** 开发位置：项目根下的 {@code local-data/datapack}（已被 .gitignore 挡掉）。 */
     public static final String DEV_DIR = "local-data/datapack";
 
+    /** 卡背文件名。与 {@code pics.bin} 同级，由 {@code tools/mkpics.py} 一并写出。 */
+    public static final String BACK_FILE = "back.jpg";
+
     /** 从游戏目录向上回溯的层数。开发时游戏目录是 {@code <项目根>/neoforge/run}，需要 2 层。 */
     private static final int DEV_WALK_UP = 3;
 
@@ -85,6 +88,10 @@ public final class DataPack implements Closeable {
     private final CardTextDb cardText;
     private final CardImageDb cardImages;
     private final List<String> problems;
+
+    /** 卡背字节，首次 {@link #cardBack()} 时才读；{@code null} 表示读不到。 */
+    private byte[] cardBack;
+    private boolean backLoaded;
 
     private DataPack(Path dir, CardDataDb cardData, CardTextDb cardText,
                      CardImageDb cardImages, List<String> problems) {
@@ -252,6 +259,32 @@ public final class DataPack implements Closeable {
     /** 这张卡有没有卡图。 */
     public boolean hasImage(int code) {
         return imageOf(code, CardImageDb.TIER_ICON) != null;
+    }
+
+    /**
+     * 取卡背字节（JPEG）。
+     *
+     * <p>卡背是<b>一张图一个用途</b>，没有按卡号索引的需求，所以它没有被塞进
+     * {@code pics.bin}，而是单独一个 {@code back.jpg}——为一张 130 KB 的图
+     * 去重打 334 MB 的卡图包不值得。
+     *
+     * <p>读不到时返回 {@code null}，渲染端再退化成占位框。这是<b>预期情况</b>：
+     * 卡背是 KONAMI 的美术，和卡图一样不随模组分发，只从用户本地数据包读。
+     * 只读一次并缓存——它是全局唯一的一份，没有 LRU 的必要。
+     */
+    public byte[] cardBack() {
+        if (!backLoaded) {
+            backLoaded = true;
+            Path p = dir.resolve(BACK_FILE);
+            try {
+                if (Files.isRegularFile(p)) {
+                    cardBack = Files.readAllBytes(p);
+                }
+            } catch (IOException e) {
+                problems.add("读卡背失败 " + p + "：" + e.getMessage());
+            }
+        }
+        return cardBack;
     }
 
     @Override
