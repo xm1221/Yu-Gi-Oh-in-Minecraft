@@ -2,6 +2,7 @@ package cn.xm1221.ygomc.common;
 
 import cn.xm1221.ygomc.common.card.CardComponents;
 import cn.xm1221.ygomc.common.command.YgomcCommand;
+import cn.xm1221.ygomc.common.net.YgomcNet;
 import cn.xm1221.ygomc.common.data.DataPacks;
 import cn.xm1221.ygomc.common.ocg.Natives;
 import cn.xm1221.ygomc.common.ocg.OcgEngine;
@@ -61,6 +62,10 @@ public final class Ygomc {
 
         // 命令要在注册表之后登记：它本身不动注册表，但玩家可能立刻就敲 /ygomc。
         YgomcCommand.init();
+
+        // 网络也要早些登记：S2C 的载荷类型漏注册的症状是「客户端一连就断」，
+        // 而服务端日志里没有线索，所以宁可让它出现在启动路径上。
+        YgomcNet.registerCommon();
 
         // 数据包不是加载的前提（缺文件是正常情况），这里只是让状态在日志里可见。
         DataPacks.init();
