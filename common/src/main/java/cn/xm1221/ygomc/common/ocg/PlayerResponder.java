@@ -58,6 +58,19 @@ public final class PlayerResponder implements Responder {
         this.listener = listener;
     }
 
+    /** 真人席位。{@code -1} 表示不区分席位（M1 自检那样两边都答）。 */
+    private volatile int seat = -1;
+
+    /**
+     * 指定真人坐哪一席。
+     *
+     * <p>不设的话，本类会为<b>双方</b>的询问阻塞等待——真人被问到对手该答的问题，
+     * 界面上还会把对手的选项摆给他。M1 自检没暴露这一点，因为那时两种应答都是自动的。
+     */
+    public void setSeat(int seat) {
+        this.seat = seat;
+    }
+
     @Override
     public Response answer(Msg msg) {
         DuelQuestion question = DuelQuestion.of(msg);
@@ -81,6 +94,18 @@ public final class PlayerResponder implements Responder {
             }
             synchronized (lock) {
                 autoAnswered++;
+            }
+            return fallback.answer(msg);
+        }
+
+        // 对手那半场的询问要立刻交出去，不能阻塞等真人。
+        if (seat >= 0 && question.player() != seat) {
+            synchronized (lock) {
+                autoAnswered++;
+            }
+            if (fallback == null) {
+                throw new IllegalStateException(
+                        "对手席位的询问没有 fallback：" + question.describe());
             }
             return fallback.answer(msg);
         }

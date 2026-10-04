@@ -33,6 +33,15 @@ public final class DuelClient {
 
     private static void onUpdate(YgomcNet.BoardUpdate update) {
         Minecraft mc = Minecraft.getInstance();
+        if (update.board() == null && update.question() == null) {
+            // 收尾信号。必须按「是不是当前这个屏」判断再关：
+            // 玩家可能已经自己关掉并开了别的界面，这时不该把他从那儿拽出来。
+            if (screen != null && mc.screen == screen) {
+                mc.setScreen(null);
+            }
+            screen = null;
+            return;
+        }
         if (screen == null || mc.screen != screen) {
             screen = new DuelScreen(update.board(), update.question());
             mc.setScreen(screen);
