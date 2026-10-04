@@ -439,6 +439,38 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
                 "猜拳", opts, 1, 1, false);
     }
 
+    /**
+     * 本项目还没实现应答的询问。
+     *
+     * <h2>SELECT_SUM 的应答语义（已从内核核实，尚未实现）</h2>
+     * 出处 {@code playerop.cpp:654-725 select_with_sum_limit}。它是「按合计值选卡」：
+     * 每张候选卡带一个 {@code sum_param}，必须选出若干张，使某个取值之和恰好等于
+     * {@code acc}。要点有四条，每条都能单独把实现对：
+     *
+     * <ol>
+     *   <li><b>消息里那个 {@code flag} 不是标志位</b>，而是 {@code max == 0} 的<b>取反</b>编码
+     *       （{@code if(max) write8(0) else write8(1)}）。它决定应答走两条完全不同的
+     *       分支，所以「flag=0 表示普通情况」这种读法只是碰巧对。</li>
+     *   <li><b>应答形状是普通多选</b> {@code [数量, 下标…]}，而且下标只索引
+     *       {@code select_cards}——<b>不含</b> {@code must_select_cards}。强制选的卡
+     *       在对局里已被算进去，不出现在应答里，但数量校验是
+     *       {@code [min + must数, max + must数]}，所以「照 min 个回」会偏少。</li>
+     *   <li>下标不许重复。</li>
+     *   <li>最后用 {@code select_sum_check1} 做<b>子集和</b>校验：每张选中的卡可以取
+     *       {@code o1} 或 {@code o2} 两个值之一（{@code get_sum_params} 拆出来），
+     *       必须存在一种取法使总和<b>恰好</b>等于 {@code acc}。</li>
+     * </ol>
+     *
+     * <p><b>为什么不能照第一项</b>：这条是确定性的，答错只会拿到 {@code MSG_RETRY}
+     * 然后被重问，于是同一个错答案反复提交——表现为「卡住」而不是「报错」。
+     * 例如 {@code acc=6} 而候选的和是 {@code [1,1,1,1,1,1,…]} 时，
+     * 必须回 6 个下标而不是 1 个。
+     *
+     * <p>实测这条询问<b>真的会出现</b>（一次自检对局里出现过 1 次，
+     * 消息形如 {@code acc=6 min=1 max=22 must=[] 候选=[7 张 sum=6, 15 张 sum=1]}）。
+     * 上面那个例子恰好可以只选 1 张，所以它是这条询问里最容易被误判成
+     * 「照第一项就行」的一种；换个局面就会卡住。
+     */
     private static DuelQuestion unsupported(Msg msg) {
         return new DuelQuestion(msg.type(), -1, Mode.UNSUPPORTED,
                 "本项目还不能作答的询问：" + MsgType.name(msg.type()), List.of(), 0, 0, false);
