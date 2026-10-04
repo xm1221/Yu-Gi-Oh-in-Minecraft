@@ -89,10 +89,19 @@ public final class PlayerResponder implements Responder {
         }
     }
 
-    /** 玩家侧：当前待答的问题；没有则 null。客户端拿它去画界面。 */
+    /**
+     * 玩家侧：当前待答的问题；没有则 null。
+     *
+     * <p><b>「待答」的定义是「还没被答」，不只是「还没被清空」。</b>
+     * 对局线程从被唤醒到把 {@code pending} 置空之间有一个窗口，此时应答已经记录、
+     * 但问题还在。如果这里直接把字段返回出去，客户端就会看到一个已经答过的旧问题，
+     * 玩家点它必然被 {@link #submit} 拒绝——实测 248 次提问产生了 247 次这种
+     * 无用提交。功能上被挡住了，但那是「靠下层的守卫兜住上层的错」，
+     * 正确的做法是这一层就不要把它报成待答。
+     */
     public DuelQuestion pending() {
         synchronized (lock) {
-            return pending;
+            return answered ? null : pending;
         }
     }
 
