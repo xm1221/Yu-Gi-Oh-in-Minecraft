@@ -1,6 +1,7 @@
 package cn.xm1221.ygomc.fabric.client;
 
 import cn.xm1221.ygomc.common.client.CardBrowserScreen;
+import cn.xm1221.ygomc.common.client.DuelClient;
 import cn.xm1221.ygomc.common.collection.CardBinderItem;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.event.player.UseItemCallback;

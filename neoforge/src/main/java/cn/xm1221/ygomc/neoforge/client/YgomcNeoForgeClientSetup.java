@@ -1,11 +1,13 @@
 package cn.xm1221.ygomc.neoforge.client;
 
 import cn.xm1221.ygomc.common.Ygomc;
+import cn.xm1221.ygomc.common.client.DuelClient;
 import cn.xm1221.ygomc.common.registry.YgomcItems;
 import net.minecraft.client.renderer.BlockEntityWithoutLevelRenderer;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
+import net.neoforged.fml.event.lifecycle.FMLClientSetupEvent;
 import net.neoforged.neoforge.client.extensions.common.IClientItemExtensions;
 import net.neoforged.neoforge.client.extensions.common.RegisterClientExtensionsEvent;
 
@@ -25,6 +27,18 @@ import net.neoforged.neoforge.client.extensions.common.RegisterClientExtensionsE
         bus = EventBusSubscriber.Bus.MOD)
 @SuppressWarnings("removal")
 public final class YgomcNeoForgeClientSetup {
+
+    /**
+     * 对局界面：把网络层收到的牌桌与问题接到 {@code DuelScreen} 上。
+     *
+     * <p>用 {@code FMLClientSetupEvent}（模组总线）而不是模组构造器：
+     * 注册接收器只需要网络层就绪，不需要世界；而放在这里能保证
+     * 它<b>只在客户端</b>执行，服务端连这个类都不会加载。
+     */
+    @SubscribeEvent
+    public static void onClientSetup(FMLClientSetupEvent event) {
+        DuelClient.init();
+    }
 
     /**
      * 卡牌物品的客户端扩展。
