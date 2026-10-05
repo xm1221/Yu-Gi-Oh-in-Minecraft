@@ -63,6 +63,8 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
     /** 多选/选址类里已勾选的选项下标。 */
     private final Set<Integer> chosen = new LinkedHashSet<>();
     private Button confirm;
+    /** 取消键。只在询问真的带了「取消」项时才摆出来（咩咩：仅限于可以取消的操作）。 */
+    private Button cancelBtn;
     private int[] counterAmounts = new int[0];
     /** 已提交、在等下个询问。这期间界面留着但按钮全灭。 */
     private boolean submitted;
@@ -342,6 +344,7 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
     private void rebuild() {
         clearWidgets();
         confirm = null;
+        cancelBtn = null;
         popup = null;
         if (question == null || submitted) {
             piles = List.of();
@@ -358,6 +361,9 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
         }
         // 卡列表与下面那排按钮是互斥的两条路：有列表就以列表为准。
         piles = pileTargets();
+        // 常驻的「确认 / 取消」键（右下角）。摆在这里，下面三条路
+        // （卡名列表 / 点场地 / 网格按钮）都覆盖得到。
+        buildAnswerButtons();
         // 判据是「有没有落在牌堆上的选项」，不再看询问类型——行动询问同样可能
         // 有好几张墓地的卡可以发动，那同样得给列表（见 pileTargets 的注释）。
         list = question.needsCardList() && !piles.isEmpty()
@@ -507,14 +513,12 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
         return null;
     }
 
+    /**
+     * 这个询问要不要「确认」才作答。判据在 {@link DuelQuestion#needsConfirm()}
+     * （纯逻辑，可离线断言），这里只加一层空值保护。
+     */
     private boolean needsConfirm() {
-        if (question == null) {
-            return false;
-        }
-        DuelQuestion.Mode m = question.mode();
-        return m == DuelQuestion.Mode.MULTI || m == DuelQuestion.Mode.PLACES
-                || m == DuelQuestion.Mode.COUNTERS || m == DuelQuestion.Mode.SORT
-                || m == DuelQuestion.Mode.SUM;
+        return question != null && question.needsConfirm();
     }
 
     /**
@@ -554,14 +558,16 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
             return super.mouseClicked(mouseX, mouseY, button);
         }
         if (button == 1) {
-            // 弹窗里右键不当作答：是/否两个按钮都在窗里，右键去猜一个
-            // 内核未必接受的「取消」只会招来 MSG_RETRY。
-            if (popup != null) {
+            // 右键不再当作答（咩咩 2026-10-05）：确认与取消都有独立按键了，
+            // 让右键去猜一个内核未必接受的答案只会招来 MSG_RETRY。
+            // 它现在只用来收起已经打开的窗口。
+            if (!menu.isEmpty()) {
+                menu.clear();
                 return true;
             }
-            if (!menu.isEmpty()) menu.clear();
-            else if (needsConfirm() && countsOk()) submit();
-            else cancel();
+            if (browse != null) {
+                closeBrowse();
+            }
             return true;
         }
         if (button != 0) return super.mouseClicked(mouseX, mouseY, button);
@@ -598,24 +604,16 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
             }
             return true;
         }
-        // 正在查看牌堆：右键或点窗口外收起；点窗口内只当「在看」。
+        // 正在查看牌堆：点窗口外收起（窗口右上角有「收起」键，右键也能收）；
+        // 点窗口内只当「在看」。
         if (browse != null) {
-            if (button == 1 || !browse.list().panel().contains(mouseX, mouseY)) {
-                browse = null;
-                if (button == 1) {
-                    return true;
-                }
+            if (!browse.list().panel().contains(mouseX, mouseY)) {
+                closeBrowse();
             } else {
                 return true;
             }
         }
-        // 列表开着时的退路：列表内有「取消」行，列表外靠右键。
-        // 没有这一条，点开一堆牌（或点开额外卡组）就只剩「必须挑一张」，
-        // 而很多询问本来就是可选的——不选是合法答案。
-        if (list != null && button == 1 && cancelIndex() >= 0) {
-            cancel();
-            return true;
-        }
+
         List<DuelTargets.Target> targets = fieldTargets();
         List<Integer> hits = DuelTargets.optionIndicesAt(targets, mouseX, mouseY);
         if (!hits.isEmpty()) {
@@ -657,6 +655,41 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
             submit();
         }
         return true;
+    }
+
+    /**
+     * 常驻的「确认 / 取消」两个键，摆在右下角。
+     *
+     * <p>咩咩 2026-10-05：确认键要单独做出来、不再用右键；取消也一样，
+     * <b>只给可取消的操作</b>——询问里没带「取消」项就是引擎不许退（例如必须选一张），
+     * 那时候摆一个取消键等于替玩家做决定。
+     *
+     * <p>ygo 那边是<b>一个</b>会变字的 {@code btnCancelOrFinish}
+     * （{@code ClientField::ShowCancelOrFinishButton}，client_field.cpp:2348-2366：
+     * op=1 取消 / op=2 完成 / op=0 藏起来），它由询问自己带的 {@code select_cancelable} 决定
+     * （duelclient.cpp:1675-1681）。我们按咩咩要的做两个键，判据沿用同一套。
+     */
+    private void buildAnswerButtons() {
+        if (question == null || submitted) {
+            return;
+        }
+        int bw = 54;
+        int bh = 18;
+        int gap = 4;
+        int y = height - bh - 4;
+        int x = width - bw - 6;
+        if (needsConfirm()) {
+            confirm = Button.builder(Component.literal("确认"), b -> submit())
+                    .bounds(x, y, bw, bh).build();
+            confirm.active = countsOk();
+            addRenderableWidget(confirm);
+            x -= bw + gap;
+        }
+        if (cancelIndex() >= 0) {
+            cancelBtn = Button.builder(Component.literal("取消"), b -> cancel())
+                    .bounds(x, y, bw, bh).build();
+            addRenderableWidget(cancelBtn);
+        }
     }
 
     /** 菜单每行的宽度（由最长的行动名决定）。 */
@@ -709,6 +742,11 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
             if (counterAmounts.length != q.options().size()) counterAmounts = new int[q.options().size()];
             counterAmounts[index] = counterAmounts[index] >= q.options().get(index).value()
                     ? 0 : counterAmounts[index] + 1;
+            // 指示物这类也要刷新确认键的可用状态：以前这里提前 return，
+            // 于是加满/清零之后那颗键一直是老样子。
+            if (confirm != null) {
+                confirm.active = countsOk();
+            }
             return;
         }
         if (!chosen.remove(index)) {
@@ -1859,6 +1897,21 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
         browse = new Browse(ref.location(),
                 PileBrowse.title(ref.seat(), ref.location(), rows.size(), mySeat),
                 rows, new CardList(listRect(), rows.size()));
+        // 「收起」键：咩咩说查看额外卡组的列表不好关掉——以前只有右键一条路。
+        FieldLayout.Rect p = browse.list().panel();
+        addRenderableWidget(Button.builder(Component.literal("收起"), b -> closeBrowse())
+                .bounds(p.right() - 38, p.y() + 1, 36, 12).build());
+    }
+
+    /**
+     * 收起「查看牌堆内容」的窗口。
+     *
+     * <p>要连窗口上那颗「收起」键一起清掉，所以走 {@link #rebuild()}：
+     * 只把 {@code browse} 置空的话，那颗键会留在屏幕上，下次开窗口还会多一颗。
+     */
+    private void closeBrowse() {
+        browse = null;
+        rebuild();
     }
 
     /**
@@ -1877,7 +1930,7 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
         FieldLayout.Rect p = l.panel();
         g.fill(p.x(), p.y(), p.right(), p.bottom(), 0xF0162534);
         outline(g, p, 0xFF78C8A4);
-        g.drawString(font, clip(b.title() + "（右键收起）", p.w() - 8), p.x() + CardList.PAD, p.y() + 3,
+        g.drawString(font, clip(b.title() + "（右上角收起）", p.w() - 8), p.x() + CardList.PAD, p.y() + 3,
                 0xFFFFE060, true);
         if (b.rows().isEmpty()) {
             g.drawString(font, clip("  空的", p.w() - 8), p.x() + CardList.PAD,

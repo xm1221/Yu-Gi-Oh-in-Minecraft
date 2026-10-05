@@ -423,6 +423,19 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
     public int cardListRows() {
         return pileOptionCount() + (cancelOptionIndex() >= 0 ? 1 : 0);
     }
+
+    /**
+     * 这个询问要不要按「确认」才作答：多选、选址、指示物、排序、合计值。
+     *
+     * <p>判据原先写在界面里（{@code DuelScreen.needsConfirm}），搬到这里是为了能离线钉住：
+     * 它决定界面上有没有那颗「确认」键，写窄了玩家就交不出答案，写宽了会多一道没人要的确认。
+     * 单选/是否这类询问点一下就作答，不要确认键。
+     */
+    public boolean needsConfirm() {
+        return mode == Mode.MULTI || mode == Mode.PLACES || mode == Mode.COUNTERS
+                || mode == Mode.SORT || mode == Mode.SUM;
+    }
+
     private static String locationName(Msg.Location l) {
         return l == null ? null : DescText.location(l.location(), l.sequence());
     }
