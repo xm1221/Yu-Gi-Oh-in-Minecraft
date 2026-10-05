@@ -20,6 +20,45 @@ public final class DuelScreenFlow {
      * @param hasQuestion 这一帧带没带需要玩家作答的询问
      * @param isCurrent   这个界面是不是已经是当前屏了
      */
+    /**
+     * 「确认（完成）」这颗键该不该出现。
+     *
+     * <p>ygo 全场只有一颗 {@code btnCancelOrFinish}（event_handler.cpp:2348-2367），
+     * 文字在「取消」（sys 1295）/「完成」（sys 1296）之间变。规则：
+     * <ul>
+     *   <li>连锁的第一段（先问「XX时，是否发动效果？」）→ 要给「确认」；</li>
+     *   <li>是/否类 → 要给（确认＝是）；</li>
+     *   <li>选卡类 → <b>够条件才出现</b>（{@code select_ready}，duelclient.cpp:1677-1678）。
+     *       这一点很要紧：ygo 是「<b>不摆</b>」，不是「摆着但是灰的」——
+     *       一直摆一颗点不动的键，看起来就是咩咩说的「时灵时不灵」。</li>
+     * </ul>
+     */
+    public static boolean showFinish(boolean askStage, boolean yesNo, boolean ready) {
+        return askStage || yesNo || ready;
+    }
+
+    /**
+     * 「取消」这颗键该不该出现。
+     *
+     * <p>规则来自 ygo 每次点选之后的那段状态机（event_handler.cpp:1320-1326、:711-717）：
+     * <b>可取消 且 一个都还没选</b> 才显示——一旦选了东西，「取消」就消失
+     * （要改主意就把已选的那张再点一次）。是/否类的「取消」就是「否」，与选没选无关。
+     *
+     * @param cancelable   询问自己带的可取消标志（{@code DuelQuestion.cancelable()}）
+     * @param nothingChosen 当前一个都没选
+     */
+    public static boolean showCancel(boolean askStage, boolean yesNo, boolean cancelable,
+                                     boolean nothingChosen) {
+        if (askStage) {
+            // 连锁第一段的「取消」＝不发动（ygo 在窗里点否 → SetResponseI(-1)，:245-249）。
+            return true;
+        }
+        if (yesNo) {
+            return true;
+        }
+        return cancelable && nothingChosen;
+    }
+
     public static boolean shouldShow(boolean everShown, boolean hasQuestion, boolean isCurrent) {
         if (isCurrent) {
             // 已经在他眼前了。重复 setScreen 会把界面重建一次，

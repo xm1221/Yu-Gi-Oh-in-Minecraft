@@ -401,6 +401,31 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
      * client_field.cpp:431-527），不能走「点卡弹菜单」——菜单里会摆出一列
      * 一模一样的「发动效果」，玩家根本分不出点的是哪一张。
      */
+    /**
+     * 这一问里「可以勾的东西」有几个（取消项不算）。
+     *
+     * <p>ygo 用它判「到下限了、而且候选已经被全选完」→ 直接送出，不再等玩家按完成
+     * （event_handler.cpp:1312-1315、:1307-1310）。
+     */
+    /** 这一问是不是「要不要发动」的连锁询问（{@code SELECT_CHAIN}）。 */
+    public boolean isChainQuestion() {
+        return type == MsgType.SELECT_CHAIN;
+    }
+
+    /**
+     * 点一下就等于作答的询问（{@code SELECT_UNSELECT_CARD}）。
+     *
+     * <p>ygo 那边点任何一张可选的卡都立刻把已选交出去（event_handler.cpp:1365-1369），
+     * 所以这类询问不该再要一次「确认」。
+     */
+    public boolean sendsOnClick() {
+        return type == MsgType.SELECT_UNSELECT_CARD;
+    }
+
+    public int selectableCount() {
+        return options.size() - (cancelOptionIndex() >= 0 ? 1 : 0);
+    }
+
     public int pileOptionCount() {
         int n = 0;
         for (Option o : options) {
@@ -601,7 +626,10 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
             opts.add(Option.ofIndexAt(unselLoc[i].toString(), unselCodes[i], selectCount + i,
                     unselLoc[i].controller(), unselLoc[i].location(), unselLoc[i].sequence()));
         }
-        boolean canCancel = m.cancelable() != 0;
+        // ygo: {@code select_cancelable = finishable || cancelable}（duelclient.cpp:1688）——
+        // 「可以就这样确定」和「可以取消」在界面上都是退路。只认 cancelable 会让
+        // finishable-only 的那些询问一点退路都没有（咩咩说的「取消键时灵时不灵」有一部分就是它）。
+        boolean canCancel = m.finishable() != 0 || m.cancelable() != 0;
         if (canCancel) {
             opts.add(Option.cancel());
         }

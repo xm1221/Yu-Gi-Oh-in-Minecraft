@@ -103,6 +103,15 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
      * （{@link #update} 里），新一轮询问总是从「没点开」开始。
      */
     private boolean extraListOpen;
+    /**
+     * 连锁「第一段」答过没有：先问「XX时，是否发动效果？」，同意之后才让候选亮起来。
+     *
+     * <p>ygo 里这两件事是两步：非必发连锁先弹询问窗（duelclient.cpp:1871-1879），
+     * 点「是」之后才收窗、才继续去点卡，并给取消键（event_handler.cpp:219-224）；
+     * 必发连锁压根不问（那个分支外面就是 {@code if(!chain_forced)}）。
+     * 换了一问就回到没答过的状态——只认「这一问」，不跨问残留。
+     */
+    private boolean chainAgreed;
 
     /**
      * 「不在场上、只能靠列表选」的那些选项——墓地/卡组/额外/除外。
@@ -217,6 +226,7 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
             // 额外卡组的列表是「这一问才点开」的状态，换了一问就回到没点开。
             // 放在这里而不是 rebuild() 里：点「特殊召唤」也会触发 rebuild。
             extraListOpen = false;
+            chainAgreed = false;
             extraMenuRef = null;
         }
         // 提示是一次性的：只有带着新提示的帧才覆盖它。不带提示的帧（每一步末尾的
@@ -257,6 +267,11 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
     private List<DuelTargets.Target> targets() {
         // 是/否类不摆可点目标：选项上带的位置只用来把那张卡点亮，
         // 作答走「确认/取消」（咩咩 2026-10-05）。否则点一下那张卡就等于替玩家按了「是」。
+        if (chainAskStage()) {
+            // 第一段只问「要不要做」，还没到挑哪一张的时候：候选一律不亮、也点不动。
+            // 咩咩 2026-10-05：「同意后让卡/墓地/除外亮起」——亮得太早就是替玩家先做了半个决定。
+            return List.of();
+        }
         if (question != null && DuelQuestion.isYesNo(question.type())) {
             return List.of();
         }
@@ -455,7 +470,9 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
         // 额外卡组的选项不自动摊开：它要先由「特殊召唤 / 查看列表」菜单入场
         // （咩咩 2026-10-05）。墓地/除外照旧——那是上一轮验证过的行为。
         boolean autoList = question.pileOptionCountExcept(FieldCodes.LOCATION_EXTRA) > 0;
-        list = question.needsCardList() && !piles.isEmpty() && (autoList || extraListOpen)
+        // 答完（submitted）就不要再摆卡名列表：ygo 交出应答时会把选择窗口收起来
+        // （duelclient.cpp:2517-2520）。以前列表会赖在屏幕上，看着像「还没答」。
+        list = !submitted && question.needsCardList() && !piles.isEmpty() && (autoList || extraListOpen)
                 ? new CardList(listRect(), piles.size() + (cancelIndex() >= 0 ? 1 : 0)) : null;
         if (list != null || spatial() || actionQuestion()) {
             return;
@@ -780,13 +797,15 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
      * 常驻的「确认 / 取消」两个键，摆在右下角。
      *
      * <p>咩咩 2026-10-05：确认键要单独做出来、不再用右键；取消也一样，
-     * <b>只给可取消的操作</b>——询问里没带「取消」项就是引擎不许退（例如必须选一张），
-     * 那时候摆一个取消键等于替玩家做决定。
+     * <b>只给真的能退的操作</b>。
      *
      * <p>ygo 那边是<b>一个</b>会变字的 {@code btnCancelOrFinish}
-     * （{@code ClientField::ShowCancelOrFinishButton}，client_field.cpp:2348-2366：
-     * op=1 取消 / op=2 完成 / op=0 藏起来），它由询问自己带的 {@code select_cancelable} 决定
-     * （duelclient.cpp:1675-1681）。我们按咩咩要的做两个键，判据沿用同一套。
+     * （{@code ClientField::ShowCancelOrFinishButton}，<b>event_handler.cpp:2348-2367</b>
+     * ——上一条注释把文件写成了 client_field.cpp，是错的：函数定义在 event_handler.cpp）：
+     * op=1 取消 / op=2 完成 / op=0 藏起来。它的可见性由询问自带的 {@code select_cancelable}
+     * 与「选了几个」共同决定（duelclient.cpp:1675-1681、event_handler.cpp:1320-1326），
+     * 我们按咩咩要的做两个键，判据沿用同一套，见 {@link DuelScreenFlow#showFinish} /
+     * {@link DuelScreenFlow#showCancel}。
      */
     private void buildAnswerButtons() {
         if (question == null || submitted) {
@@ -797,41 +816,86 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
         int gap = 4;
         int y = height - bh - 4;
         int x = width - bw - 6;
-        // 是/否类（是否发动效果、一般的是/否）：确认＝「是」、取消＝「否」。
-        // 它们没有「勾选」这回事，所以不走 submit()——直接把那一项交出去。
-        // 「唯一合法答案」的询问（必发连锁、只剩一条路）：只摆「确认」，不摆取消。
-        // 不摆取消不是省事——本来就没有第二个合法答案，摆出来等于给玩家一个内核
-        // 不会接受的应答（必发连锁回「不发动」会吃 MSG_RETRY）。咩咩 2026-10-05：
-        // 必发效果也要问，但界面上只有确认；按确认才把那一项交出去（不是替他选）。
-        int sole = question.soleOption();
-        if (sole >= 0) {
-            final int pick = sole;
-            confirm = Button.builder(Component.literal("确认"), b -> onOption(pick))
-                    .bounds(x, y, bw, bh).build();
-            confirm.active = true;
-            addRenderableWidget(confirm);
-            return;
-        }
         int yes = yesOptionIndex();
         int no = declineOptionIndex();
-        if (yes >= 0 || needsConfirm()) {
+        int sole = question.soleOption();
+        boolean ask = chainAskStage();
+        // 取消键要交出的那一项：取消项（取值 -1）优先，其次「否」。
+        int cancelPick = cancelIndex() >= 0 ? cancelIndex() : no;
+
+        if (ask || sole >= 0 || yes >= 0 || needsConfirm()) {
             confirm = Button.builder(Component.literal("确认"), b -> {
-                if (yes >= 0) {
+                if (ask) {
+                    // 连锁第一段：同意＝要发动，之后才去点亮候选。
+                    agreeChain();
+                } else if (sole >= 0) {
+                    onOption(sole);
+                } else if (yes >= 0) {
                     onOption(yes);
                 } else {
                     submit();
                 }
             }).bounds(x, y, bw, bh).build();
-            confirm.active = yes >= 0 || countsOk();
             addRenderableWidget(confirm);
             x -= bw + gap;
         }
-        int cancelPick = cancelIndex() >= 0 ? cancelIndex() : no;
-        if (cancelPick >= 0) {
-            final int pick = cancelPick;
-            cancelBtn = Button.builder(Component.literal("取消"), b -> onOption(pick))
-                    .bounds(x, y, bw, bh).build();
+        if (ask || yes >= 0 || question.cancelable()) {
+            // 只有询问真的给了退路才造这颗键。判据是【消息自带的可取消标志】
+            // （{@code select_cancelable}，duelclient.cpp:1623/1688），不是「选项表里有没有取消项」：
+            // 后者只在部分询问类型里成立，正是「取消键时灵时不灵」的来源。
+            cancelBtn = Button.builder(Component.literal("取消"), b -> {
+                if (ask) {
+                    cancel();
+                } else if (cancelPick >= 0) {
+                    onOption(cancelPick);
+                } else {
+                    cancel();
+                }
+            }).bounds(x, y, bw, bh).build();
             addRenderableWidget(cancelBtn);
+        }
+        refreshAnswerButtons();
+    }
+
+    /**
+     * 连锁的第一段：先问「XX时，是否发动效果？」，同意之后才让候选亮起来。
+     *
+     * <p>只管<b>非必发</b>的连锁（{@code DuelQuestion.cancelable()} 就是 {@code !forced}，
+     * 见 {@code DuelQuestion.chain}）。必发连锁不摆这一问：ygo 那边弹窗那一段
+     * 整个包在 {@code if(!chain_forced)} 里（duelclient.cpp:1871-1879），
+     * 必发只用提示条写「请选择要发动的效果」（:1858-1862）。
+     */
+    private boolean chainAskStage() {
+        return question != null && !submitted && question.isChainQuestion()
+                && question.cancelable() && !chainAgreed;
+    }
+
+    private void agreeChain() {
+        chainAgreed = true;
+        rebuild();
+    }
+
+    /**
+     * 按 ygo 那颗会变字的按钮，决定这两颗键此刻该不该出现。
+     *
+     * <p>两处要点（都是咩咩 2026-10-05 报的「取消键时灵时不灵」）：
+     * <ul>
+     *   <li>确认键<b>够条件才出现</b>，不是「摆着但是灰的」；</li>
+     *   <li>取消键在<b>已经选了东西之后消失</b>（ygo event_handler.cpp:1320-1326）。</li>
+     * </ul>
+     */
+    private void refreshAnswerButtons() {
+        boolean ask = chainAskStage();
+        boolean yesNo = question != null && DuelQuestion.isYesNo(question.type());
+        boolean ready = question != null && (countsOk() || question.soleOption() >= 0);
+        if (confirm != null) {
+            confirm.visible = DuelScreenFlow.showFinish(ask, yesNo, ready);
+            confirm.active = confirm.visible;
+        }
+        if (cancelBtn != null) {
+            cancelBtn.visible = DuelScreenFlow.showCancel(ask, yesNo,
+                    question != null && question.cancelable(), chosen.isEmpty());
+            cancelBtn.active = cancelBtn.visible;
         }
     }
 
@@ -961,9 +1025,16 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
         if (!chosen.remove(index)) {
             chosen.add(index);
         }
-        if (confirm != null) {
-            confirm.active = countsOk();
+        // ygo：到上限、或到下限且候选已被全选完 →【直接送出】，不再让玩家多按一次
+        // （event_handler.cpp:1307-1320）。UNSELECT 更干脆：点一下就送（:1365-1369）。
+        if (q.mode() == DuelQuestion.Mode.MULTI
+                && (chosen.size() >= q.max()
+                    || (chosen.size() >= q.min() && chosen.size() == q.selectableCount())
+                    || (q.sendsOnClick() && !chosen.isEmpty()))) {
+            submit();
+            return;
         }
+        refreshAnswerButtons();
     }
 
     private void submit() {
@@ -1716,6 +1787,9 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
         if (DuelQuestion.isYesNo(question.type())) {
             return "点「确认」＝同意，点「取消」＝拒绝";
         }
+        if (chainAskStage()) {
+            return "点「确认」＝要发动（之后点亮卡/墓地/除外让你挑），点「取消」＝不发动";
+        }
         if (question.mode() == DuelQuestion.Mode.COUNTERS) {
             return "左键点卡加指示物　右下角「确认」交出";
         }
@@ -1727,7 +1801,7 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
         }
         if (spatial()) {
             return needsConfirm()
-                    ? "左键选卡/选格　右下角「确认」" + (cancelIndex() >= 0 ? "　「取消」不选" : "")
+                    ? "左键选卡/选格　右下角「确认」" + (question.cancelable() ? "　「取消」不选" : "")
                     : "点一下即可";
         }
         return "选择一项";
