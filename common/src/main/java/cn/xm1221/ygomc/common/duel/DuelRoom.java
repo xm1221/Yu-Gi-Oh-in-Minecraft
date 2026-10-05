@@ -399,13 +399,15 @@ public final class DuelRoom implements OcgDuel.Observer {
             // 用完就清：陈旧的时点配一个新问句，比不显示更糟。
             String e = eventTexts[seat];
             eventTexts[seat] = null;
-            return q.withTitle(e + "　" + q.title());
+            // 用 withHint 而不是 withTitle：这里拼的是【内核时点 + 我们自己的问句】，
+            // 前者不翻、后者要翻，所以两者必须分开存（见 DuelQuestion.Title.MIXED）。
+            return q.withHint(e);
         }
         if (selectHints[seat] != null) {
             // 同上，用完就清。
             String h = selectHints[seat];
             selectHints[seat] = null;
-            return q.withTitle(h);
+            return q.withHint(h);
         }
         return q;
     }

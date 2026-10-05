@@ -45,7 +45,7 @@ public final class CardBrowserScreen extends Screen {
     private int index;
 
     public CardBrowserScreen(int startCode) {
-        super(Component.literal("卡图浏览"));
+        super(DuelText.c(DuelText.BROWSER_TITLE));
         DataPack pack = DataPacks.get();
         CardDataDb db = pack.cardData();
         // 数据包缺失时给一个空表而不是崩：这是预期情况（卡图与卡文有版权，
@@ -74,15 +74,15 @@ public final class CardBrowserScreen extends Screen {
         int y = (height - PANEL_H) / 2;
         int by = y + PANEL_H - 26;
 
-        addRenderableWidget(Button.builder(Component.literal("◀ 上一张"), b -> step(-1))
+        addRenderableWidget(Button.builder(DuelText.c(DuelText.BROWSER_PREV), b -> step(-1))
                 .bounds(x + 10, by, 78, 20).build());
-        addRenderableWidget(Button.builder(Component.literal("下一张 ▶"), b -> step(1))
+        addRenderableWidget(Button.builder(DuelText.c(DuelText.BROWSER_NEXT), b -> step(1))
                 .bounds(x + 92, by, 78, 20).build());
         // 一次跳 100 张：15017 张卡一张一张翻是翻不完的，而逐张翻是验证解码才对的做法，
         // 所以两个粒度都留。
-        addRenderableWidget(Button.builder(Component.literal("« 前 100"), b -> step(-100))
+        addRenderableWidget(Button.builder(DuelText.c(DuelText.BROWSER_PREV_100), b -> step(-100))
                 .bounds(x + 192, by, 78, 20).build());
-        addRenderableWidget(Button.builder(Component.literal("后 100 »"), b -> step(100))
+        addRenderableWidget(Button.builder(DuelText.c(DuelText.BROWSER_NEXT_100), b -> step(100))
                 .bounds(x + 274, by, 78, 20).build());
     }
 
@@ -105,8 +105,8 @@ public final class CardBrowserScreen extends Screen {
         g.fill(x, y + PANEL_H - 1, x + PANEL_W, y + PANEL_H, 0xFF6A6A78);
 
         if (codes.length == 0) {
-            g.drawString(font, "数据包不可用，无法浏览卡图。", x + 12, y + 12, 0xFFCC5555, false);
-            g.drawString(font, "缺少 pics.bin / cards.bin / texts.bin。", x + 12, y + 26, 0xFFAAAAAA, false);
+            g.drawString(font, DuelText.s(DuelText.BROWSER_NO_PACK), x + 12, y + 12, 0xFFCC5555, false);
+            g.drawString(font, DuelText.s(DuelText.BROWSER_NO_PACK_DETAIL), x + 12, y + 26, 0xFFAAAAAA, false);
             super.render(g, mouseX, mouseY, partialTick);
             return;
         }
@@ -119,20 +119,21 @@ public final class CardBrowserScreen extends Screen {
         int artY = y + 12;
         boolean hasArt = CardArt.draw(g, code, artX, artY, ART_W, ART_H, (RarityEntry) null);
         if (!hasArt) {
-            g.drawString(font, "无卡图", artX + 6, artY + ART_H / 2 - 4, 0xFFAAAAAA, false);
+            g.drawString(font, DuelText.s(DuelText.BROWSER_NO_ART), artX + 6, artY + ART_H / 2 - 4, 0xFFAAAAAA, false);
         }
 
         int textX = artX + ART_W + 14;
         int textY = y + 12;
 
         String name = DataPacks.get().nameOf(code);
-        g.drawString(font, name == null ? "（无卡名）" : name, textX, textY, 0xFFFFFFFF, true);
+        g.drawString(font, name == null ? DuelText.s(DuelText.BROWSER_NO_NAME) : name,
+                textX, textY, 0xFFFFFFFF, true);
         textY += 12;
 
-        g.drawString(font, "#" + code, textX, textY, 0xFF8888AA, false);
+        g.drawString(font, DuelText.s(DuelText.DECLARE_CARD_CODE, code), textX, textY, 0xFF8888AA, false);
         textY += 12;
 
-        String stats = statsLine(code);
+        String stats = CardTips.statsLine(code);
         if (stats != null) {
             g.drawString(font, stats, textX, textY, 0xFFCCCCCC, false);
             textY += 12;
@@ -141,14 +142,16 @@ public final class CardBrowserScreen extends Screen {
 
         String desc = DataPacks.get().descOf(code);
         if (desc == null || desc.isBlank()) {
-            g.drawString(font, "（没有卡文）", textX, textY, 0xFF777777, false);
+            g.drawString(font, DuelText.s(DuelText.BROWSER_NO_DESC), textX, textY, 0xFF777777, false);
         } else {
             // 这里用字体真实宽度折行，而不是估值：屏幕上宽度是确定的，
             // 按像素折行才能保证不越出面板。服务端的工具提示做不到这一点，
             // 所以那边用的是「显示列数」的近似算法。
-            for (String line : wrapByFont(desc, TEXT_WIDTH)) {
+            // 折行算法走 CardTips（它又委托给纯逻辑的 TextWrap）——两处各写一份
+            // 曾经导致「同一个卡号在两个界面显示不同」。
+            for (String line : CardTips.wrap(font, desc, TEXT_WIDTH)) {
                 if (textY > y + PANEL_H - 30) {
-                    g.drawString(font, "…", textX, textY, 0xFF777777, false);
+                    g.drawString(font, DuelText.s(DuelText.BROWSER_ELLIPSIS), textX, textY, 0xFF777777, false);
                     break;
                 }
                 g.drawString(font, line, textX, textY, 0xFFB0B0B0, false);
@@ -156,53 +159,13 @@ public final class CardBrowserScreen extends Screen {
             }
         }
 
-        g.drawString(font, "第 " + (index + 1) + " / " + codes.length + " 张"
-                        + "　（翻的是整个卡池；按收藏检索等 M4）",
+        g.drawString(font, DuelText.s(DuelText.BROWSER_PAGE, index + 1, codes.length)
+                        + DuelText.s(DuelText.BROWSER_PAGE_NOTE),
                 x + 12, y + PANEL_H - 40, 0xFF808080, false);
 
         g.drawString(font, CardTextures.stats(), x + 12, y + PANEL_H - 40 + 10, 0xFF606060, false);
 
         super.render(g, mouseX, mouseY, partialTick);
-    }
-
-    private static String statsLine(int code) {
-        CardDataDb.Stats s = DataPacks.get().statsOf(code);
-        if (s == null) {
-            return null;
-        }
-        int type = s.type();
-        if ((type & CardDataDb.CardTypes.TYPE_MONSTER) == 0) {
-            return (type & CardDataDb.CardTypes.TYPE_SPELL) != 0 ? "魔法卡" : "陷阱卡";
-        }
-        String rank = (type & CardDataDb.CardTypes.TYPE_XYZ) != 0 ? "阶级 "
-                : (type & CardDataDb.CardTypes.TYPE_LINK) != 0 ? "连接 " : "等级 ";
-        StringBuilder sb = new StringBuilder(rank).append(s.level());
-        sb.append("    ATK ").append(s.attack());
-        if ((type & CardDataDb.CardTypes.TYPE_LINK) == 0) {
-            sb.append(" / DEF ").append(s.defense());
-        }
-        return sb.toString();
-    }
-
-    /** 按字体真实宽度折行。{@code \r} 必须一起处理，否则会画成一个方块。 */
-    private java.util.List<String> wrapByFont(String text, int maxWidth) {
-        java.util.List<String> out = new java.util.ArrayList<>();
-        for (String paragraph : text.split("\\r\\n|\\r|\\n")) {
-            StringBuilder line = new StringBuilder();
-            for (String word : paragraph.split(" ")) {
-                String candidate = line.isEmpty() ? word : line + " " + word;
-                if (font.width(candidate) > maxWidth && !line.isEmpty()) {
-                    out.add(line.toString());
-                    line = new StringBuilder(word);
-                } else {
-                    line = new StringBuilder(candidate);
-                }
-            }
-            if (!line.isEmpty()) {
-                out.add(line.toString());
-            }
-        }
-        return out;
     }
 
     /** 数据包缺失时也允许关闭。 */

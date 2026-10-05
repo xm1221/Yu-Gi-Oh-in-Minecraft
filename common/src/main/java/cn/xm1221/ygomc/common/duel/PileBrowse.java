@@ -113,31 +113,59 @@ public final class PileBrowse {
     }
 
     /**
-     * 窗口标题：「自己墓地 3」。
+     * 窗口标题：以前是「自己墓地 3」。
+     *
+     * <p>现在返回<b>语言资源的 key</b> 而不是中文——界面文案由我们自己的语言资源决定，
+     * 而这个类在 common 里、服务端也会加载，不能去查客户端语言表。张数由界面当参数填。
+     * 拼法是「{@code ygomc.duel.browse.title.<mine|opponent>_<区域>}」，
+     * 这样一条 key 就同时定下了「谁的」和「哪个区域」，界面不需要再拼字符串。
      *
      * @param seat       这是谁的堆
      * @param viewerSeat 谁在看
      */
-    public static String title(int seat, int location, int count, int viewerSeat) {
-        return (seat == viewerSeat ? "自己" : "对手") + zone(location) + " " + count;
+    public static String titleKey(int seat, int location, int viewerSeat) {
+        return sideZoneKey(seat, location, viewerSeat);
     }
 
-    /** 区域名，与状态行/堆标签用的是同一套说法。 */
-    public static String zone(int location) {
+    /**
+     * 「谁的哪个区」的 key：{@code ygomc.duel.zone.<mine|opponent>_<区域>}。
+     *
+     * <p>两个用处、两种参数：作堆标题时那个 {@code %d} 是<b>张数</b>，作格子标签时
+     * 是<b>格号</b>（从 1 起）。不会撞车——怪兽区/魔陷区不是可浏览的堆
+     * （{@link #browsable}），所以 mzone/szone 这两项只会当格子标签用。
+     */
+    public static String sideZoneKey(int seat, int location, int viewerSeat) {
+        return "ygomc.duel.zone." + (seat == viewerSeat ? "mine_" : "opponent_")
+                + zoneSuffix(location);
+    }
+
+    /** 区域名 key，与状态行/堆标签用的是同一套说法。 */
+    public static String zoneKey(int location) {
+        return "ygomc.duel.zone." + zoneSuffix(location);
+    }
+
+    /** key 里区的后缀部分；与 {@link #zoneKey} 共用一份取值，免得两处漂移。 */
+    private static String zoneSuffix(int location) {
         return switch (location) {
-            case FieldCodes.LOCATION_GRAVE -> "墓地";
-            case FieldCodes.LOCATION_REMOVED -> "除外";
-            case FieldCodes.LOCATION_EXTRA -> "额外卡组";
-            case FieldCodes.LOCATION_DECK -> "卡组";
-            case FieldCodes.LOCATION_HAND -> "手牌";
-            case FieldCodes.LOCATION_MZONE -> "怪兽区";
-            case FieldCodes.LOCATION_SZONE -> "魔法陷阱区";
-            default -> "区域";
+            case FieldCodes.LOCATION_GRAVE -> "grave";
+            case FieldCodes.LOCATION_REMOVED -> "removed";
+            case FieldCodes.LOCATION_EXTRA -> "extra";
+            case FieldCodes.LOCATION_DECK -> "deck";
+            case FieldCodes.LOCATION_HAND -> "hand";
+            case FieldCodes.LOCATION_MZONE -> "mzone";
+            case FieldCodes.LOCATION_SZONE -> "szone";
+            default -> "unknown";
         };
     }
 
-    /** 未知的那些行显示什么。别写「里侧」——额外卡组也是未知，但它不是里侧。 */
-    public static String unknownLabel() {
-        return "（盖着的卡）";
+    /**
+     * 未知的那些行显示什么。
+     *
+     * <p>别写「里侧」——额外卡组也是未知，但它不是里侧。
+     *
+     * @return 语言资源里的 key；界面取词
+     */
+    public static String unknownKey() {
+        return "ygomc.duel.browse.unknown";
     }
 }

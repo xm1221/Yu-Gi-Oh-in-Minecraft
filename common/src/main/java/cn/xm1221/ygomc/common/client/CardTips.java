@@ -57,7 +57,12 @@ public final class CardTips {
     /**
      * 数值行：等级/阶级/连接 + 攻守；魔法陷阱只报种类。
      *
-     * <p>连接怪兽没有守备力，写出来会是一个假的 0。
+     * <p>连接怪兽没有守备力，写出来会是一个假的 0，所以它有单独一条模板。
+     *
+     * <p><b>整行作为一个模板</b>（{@code ygomc.card.stats.*}），不是在这里拼
+     * {@code "    ATK "}。原先那两段硬编码的中文与空格就是「界面文案不由语言资源
+     * 决定」的最典型一处：换语言时它是唯一不会跟着变的。空格与 {@code ATK}/{@code DEF}
+     * 的写法也一并交给语言资源——日文/韩文环境下想写「攻撃力」是我们的事，不是代码的事。
      */
     @Nullable
     public static String statsLine(int code) {
@@ -71,16 +76,18 @@ public final class CardTips {
         }
         int type = s.type();
         if ((type & CardDataDb.CardTypes.TYPE_MONSTER) == 0) {
-            return (type & CardDataDb.CardTypes.TYPE_SPELL) != 0 ? "魔法卡" : "陷阱卡";
+            return DuelText.s((type & CardDataDb.CardTypes.TYPE_SPELL) != 0
+                    ? DuelText.CARD_SPELL : DuelText.CARD_TRAP);
         }
-        String rank = (type & CardDataDb.CardTypes.TYPE_XYZ) != 0 ? "阶级 "
-                : (type & CardDataDb.CardTypes.TYPE_LINK) != 0 ? "连接 " : "等级 ";
-        StringBuilder sb = new StringBuilder(rank).append(s.level());
-        sb.append("    ATK ").append(s.attack());
-        if ((type & CardDataDb.CardTypes.TYPE_LINK) == 0) {
-            sb.append(" / DEF ").append(s.defense());
-        }
-        return sb.toString();
+        boolean link = (type & CardDataDb.CardTypes.TYPE_LINK) != 0;
+        String rank = (type & CardDataDb.CardTypes.TYPE_XYZ) != 0 ? DuelText.s(DuelText.CARD_RANK)
+                : link ? DuelText.s(DuelText.CARD_LINK)
+                : DuelText.s(DuelText.CARD_LEVEL);
+        // 等级/阶级/连接那一段由语言资源出（「等级 」/「Rank 」），数值与攻守由模板填。
+        String head = rank + " " + s.level();
+        return link
+                ? DuelText.s(DuelText.CARD_STATS_LINK, head, s.attack())
+                : DuelText.s(DuelText.CARD_STATS_MONSTER, head, s.attack(), s.defense());
     }
 
     /** 卡文（效果文本）；没有则返回 {@code null}。 */
@@ -124,7 +131,7 @@ public final class CardTips {
                             int screenW, int screenH, boolean preferLeft) {
         List<String> text = new ArrayList<>();
         String nm = name(code);
-        text.add(nm != null ? nm : ("#" + code));
+        text.add(nm != null ? nm : DuelText.s(DuelText.DECLARE_CARD_CODE, code));
         String stats = statsLine(code);
         int statsAt = -1;
         if (stats != null) {

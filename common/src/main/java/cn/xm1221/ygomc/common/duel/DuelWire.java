@@ -41,8 +41,15 @@ public final class DuelWire {
      * 捎带的一份独立小载荷，但统一用一个版本号——装完新 jar 必须重启游戏，
      * 两端才在同一个版本上（otherwise 老客户端读到新帧会当场解码失败，这是有意的：
      * 错位解读比直接报错难查得多）。
+     *
+     * <p>v4 起界面的文案来源与语义跟着问题一起过线：{@link DuelQuestion.Title}
+     * （标题该怎么取）与 {@link DuelQuestion.Option#labelKind()} /
+     * {@link DuelQuestion.Option#action()}。这三样都是<b>语义标记</b>而不是译文——
+     * 真正的中文/英文在客户端的语言资源里，服务端只告诉它「这一项是行动类的第 2 种」。
+     * 不带它们过线的话，客户端只能拿中文 {@code label} 去 {@code startsWith}，
+     * 那正是玩家报的「换语言就坏」。
      */
-    public static final int VERSION = 3;
+    public static final int VERSION = 4;
 
     /**
      * 牌桌快照的格式版本，<b>独立于 {@link #VERSION}</b>。
@@ -66,6 +73,14 @@ public final class DuelWire {
             out.writeInt(q.player());
             out.writeByte(q.mode().ordinal());
             out.writeUTF(q.title());
+            // v4：标题的取法。RAW 时客户端照 title 原文显示；否则去查语言资源。
+            out.writeByte(q.titleText().kind().ordinal());
+            out.writeUTF(q.titleText().key());
+            out.writeUTF(q.titleText().rawHint());
+            out.writeInt(q.titleText().args().length);
+            for (String a : q.titleText().args()) {
+                out.writeUTF(a == null ? "" : a);
+            }
             out.writeInt(q.min());
             out.writeInt(q.max());
             out.writeBoolean(q.cancelable());
@@ -83,6 +98,9 @@ public final class DuelWire {
                 out.writeInt(o.controller());
                 out.writeInt(o.location());
                 out.writeInt(o.sequence());
+                // v4：这一项是哪一类名字，以及行动项的语义编号。
+                out.writeByte(o.labelKind().ordinal());
+                out.writeInt(o.action());
             }
         } catch (IOException e) {
             throw new UncheckedIOException("编码问题失败", e);
@@ -97,6 +115,14 @@ public final class DuelWire {
             int player = in.readInt();
             DuelQuestion.Mode mode = DuelQuestion.Mode.values()[in.readByte()];
             String title = in.readUTF();
+            int titleKind = in.readByte();
+            String titleKey = in.readUTF();
+            String titleHint = in.readUTF();
+            int titleArgCount = in.readInt();
+            String[] titleArgs = new String[titleArgCount];
+            for (int i = 0; i < titleArgCount; i++) {
+                titleArgs[i] = in.readUTF();
+            }
             int min = in.readInt();
             int max = in.readInt();
             boolean cancelable = in.readBoolean();
@@ -110,10 +136,13 @@ public final class DuelWire {
             List<DuelQuestion.Option> options = new ArrayList<>(n);
             for (int i = 0; i < n; i++) {
                 options.add(new DuelQuestion.Option(in.readUTF(), in.readInt(), in.readInt(),
-                        in.readInt(), in.readInt(), in.readInt(), in.readInt()));
+                        in.readInt(), in.readInt(), in.readInt(), in.readInt(),
+                        DuelQuestion.Option.LabelKind.values()[in.readByte()], in.readInt()));
             }
+            DuelQuestion.Title titleText = new DuelQuestion.Title(
+                    DuelQuestion.Title.Kind.values()[titleKind], titleKey, titleHint, titleArgs);
             return new DuelQuestion(type, player, mode, title, options, min, max, cancelable,
-                    sumTarget, forcedParams);
+                    sumTarget, forcedParams, titleText);
         } catch (IOException e) {
             throw new UncheckedIOException("解码问题失败", e);
         }

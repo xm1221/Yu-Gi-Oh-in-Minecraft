@@ -29,8 +29,15 @@ package cn.xm1221.ygomc.common.duel;
 public record ChainNotice(int code, int description, int controller, int location,
                           int sequence, int chainCount) {
 
-    /** 提示上那颗唯一按键的字。整条提示只有这一颗键。 */
-    public static final String CONFIRM_LABEL = "确认";
+    /**
+     * 提示上那颗唯一按键的<b>语言资源 key</b>。整条提示只有这一颗键。
+     *
+     * <p>这里放 key 而不是中文：字体由玩家的语言资源定，写死「确认」在英文环境下
+     * 就是一颗中文字。用 key 的另一个好处是这个类在服务端也会被加载
+     * （{@code DuelRoom} 持有 {@link Slot}），而语言资源只有客户端有——
+     * 所以这里连 {@code DuelText} 都不引用，只跟它共用同一个字符串常量值。
+     */
+    public static final String CONFIRM_LABEL = "ygomc.duel.button.confirm";
 
     /**
      * 提示正文（纯逻辑，可离线钉）：

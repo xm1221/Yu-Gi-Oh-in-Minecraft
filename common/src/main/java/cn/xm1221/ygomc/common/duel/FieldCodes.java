@@ -169,18 +169,45 @@ public final class FieldCodes {
      * @param position 卡的 {@code position} 位标志；{@code -1}（查不到快照）时给中性文案
      */
     public static String repositionName(int position) {
+        return repositionKey(position);
+    }
+
+    /**
+     * 「变更表示」这一项该用语言资源里的哪一条 key。
+     *
+     * <p><b>返回 key 而不是中文</b>：界面文案由模组自己的语言资源决定
+     * （{@code assets/ygomc/lang/*.json}），而这个类属于 common，服务端也会加载，
+     * 不该、也不能去查客户端语言表。所以这里只给语义，{@code DuelScreen} 拿 key 去取词。
+     *
+     * <p>返回的取值与 {@link #repositionName} 一一对应，自检（{@code Round4Check}
+     * 与 {@code FieldCodesCheck}）按这些常量断言，不再比中文。
+     *
+     * @param position 卡的 {@code position} 位标志；{@code -1}（查不到快照）时给中性 key
+     */
+    public static String repositionKey(int position) {
         if (position < 0) {
             // 拿不到快照（例如这一帧还没到）时不要瞎猜一个具体姿势。
-            return "变更表示";
+            return KEY_REPOSITION_GENERIC;
         }
         if ((position & POS_FACEDOWN) != 0) {
-            return "反转召唤";
+            return KEY_REPOSITION_FLIP;
         }
         if ((position & POS_ATTACK) != 0) {
-            return "守备表示";
+            return KEY_REPOSITION_TO_DEFENSE;
         }
-        return "攻击表示";
+        return KEY_REPOSITION_TO_ATTACK;
     }
+
+    /**
+     * 「变更表示」四种说法的 key。
+     *
+     * <p>它们住在 {@code DuelText} 那个常量类里会形成反向依赖（{@code DuelText} 是
+     * 客户端类），所以 key 的字面量放在这里，两边共用同一份。
+     */
+    public static final String KEY_REPOSITION_GENERIC = "ygomc.duel.reposition.generic";
+    public static final String KEY_REPOSITION_FLIP = "ygomc.duel.reposition.flip";
+    public static final String KEY_REPOSITION_TO_DEFENSE = "ygomc.duel.reposition.to_defense";
+    public static final String KEY_REPOSITION_TO_ATTACK = "ygomc.duel.reposition.to_attack";
 
     public static final int QUERY_CODE = 0x1;
     public static final int QUERY_POSITION = 0x2;

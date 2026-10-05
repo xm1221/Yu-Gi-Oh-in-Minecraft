@@ -4,9 +4,12 @@ import cn.xm1221.ygomc.common.duel.DuelBoard;
 import cn.xm1221.ygomc.common.duel.PileBrowse;
 import cn.xm1221.ygomc.common.duel.FieldCodes;
 import cn.xm1221.ygomc.common.duel.DuelQuestion;
+import cn.xm1221.ygomc.common.ocg.SumSelect;
 import cn.xm1221.ygomc.common.ocg.msg.MsgType;
+import cn.xm1221.ygomc.common.ocg.msg.Msg;
 import cn.xm1221.ygomc.common.duel.ChainNotice;
 import cn.xm1221.ygomc.common.duel.DuelWire;
+import cn.xm1221.ygomc.common.data.DataPacks;
 import cn.xm1221.ygomc.common.data.DescText;
 import cn.xm1221.ygomc.common.net.YgomcNet;
 import net.minecraft.client.gui.GuiGraphics;
@@ -137,8 +140,13 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
     private record PileRef(FieldLayout.Rect rect, int seat, int location) {
     }
 
-    /** 查看牌堆内容的窗口状态。 */
-    private record Browse(int location, String title, List<PileBrowse.Row> rows, CardList list) {
+    /**
+     * 查看牌堆内容的窗口状态。
+     *
+     * <p>标题不存字符串，只存「谁的、哪一堆」：标题要跟着语言设置走，
+     * 存下来的那一刻就定死了（换成英文后旧窗口还是中文）。
+     */
+    private record Browse(int seat, int location, List<PileBrowse.Row> rows, CardList list) {
     }
 
     /**
@@ -193,7 +201,7 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
      * @param notice 随这一帧来的必发提示（{@link ChainNotice}）；没有给 null。
      */
     public DuelScreen(DuelBoard board, DuelQuestion question, int viewerSeat, ChainNotice notice) {
-        super(Component.literal("决斗"));
+        super(DuelText.c(DuelText.SCREEN_DUEL));
         this.board = board;
         this.question = question;
         this.notice = notice;
@@ -293,7 +301,8 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
      * 是「战斗阶段结束」而<b>不是</b>战斗阶段本身，写成 0x80 会让战斗条永远点不亮。
      */
     private static final int[] PHASES = {0x01, 0x02, 0x04, 0x08, 0x100, 0x200};
-    private static final String[] PHASE_NAMES = {"抽卡", "准备", "主要1", "战斗", "主要2", "结束"};
+    // 阶段名走语言资源（DuelText.PHASES），不在这里写一份中文——原先这里有一份
+    // PHASE_NAMES，于是「阶段条上的字」是全界面唯一不跟着语言设置变的地方。
 
     private boolean actionQuestion() {
         return question != null && (question.type() == 11 || question.type() == 10);
@@ -317,7 +326,7 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
             var r = layout.phase(i);
             boolean enabled = phaseOption(PHASES[i]) >= 0;
             g.fill(r.x(), r.y(), r.right(), r.bottom(), enabled ? 0xFF35634B : 0xFF25313B);
-            g.drawCenteredString(font, PHASE_NAMES[i], r.x() + r.w() / 2, r.y() + 4,
+            g.drawCenteredString(font, phaseName(i), r.x() + r.w() / 2, r.y() + 4,
                     enabled ? 0xFFFFFF : 0x889099);
         }
     }
@@ -387,6 +396,17 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
         return question != null && !extraListOpen
                 && t.option().location() == FieldCodes.LOCATION_EXTRA
                 && question.extraNeedsMenu(t.option().controller());
+    }
+    /**
+     * 额外卡组那份「特殊召唤 / 查看列表」菜单现在开着吗。
+     *
+     * <p>开着的时候提示要换成「在菜单里选一项」：这时候牌桌是被菜单压住的，
+     * 玩家再点卡不会有反应，光写「点一下即可」会让他一直点那里。
+     */
+    private boolean extraMenuPending() {
+        return question != null && !submitted && extraMenuRef != null
+                && extraMenuRef.location() == FieldCodes.LOCATION_EXTRA
+                && question.extraNeedsMenu(extraMenuRef.seat());
     }
 
     /**
@@ -516,19 +536,162 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
      *
      * <p>需要卡名的地方是**连锁询问**那种一列同字选项（每项 label 都是「发动效果」），
      * 那由 {@link #popupLabel} 单独补，不走这里。
+     *
+     * <p><b>哪些项按「当前姿势」改名</b>不再看中文：原先写的是
+     * {@code "变更表示".equals(o.label())}，换个语言就静默失效。现在只看
+     * {@link DuelQuestion.Option#action()}。
      */
     private String shortLabel(DuelQuestion.Option o) {
-        String s = "变更表示".equals(o.label()) ? repositionLabel(o) : o.label();
+        String s = o.action() == DuelQuestion.IDLE_REPOSITION ? repositionLabel(o) : optionLabel(o);
         return s.length() > 28 ? s.substring(0, 27) + "…" : s;
     }
 
     /**
+     * 选项该显示的那句话：按 {@code labelKind} 从语言资源取。
+     *
+     * <p>以前这里直接把 {@code o.label()}（中文）上屏，于是「界面文案由语言资源决定」
+     * 这条要求在这些地方全部落空——玩家看到的菜单文字是写死在代码里的中文。
+     * 现在 {@code label} 只当兜底：语义标记取不出词时才用它。
+     */
+    private String optionLabel(DuelQuestion.Option o) {
+        return switch (o.labelKind()) {
+            case CARD -> cardNameLabel(o.cardCode(), o.label());
+            case ACTION -> actionName(o.action());
+            case YES_NO -> DuelText.s(o.value() == 1 ? DuelText.ACTION_YES : DuelText.ACTION_NO);
+            case CANCEL -> DuelText.s(DuelText.ACTION_CANCEL);
+            case ZONE -> zoneLabel(o.controller(), o.location(), o.sequence());
+            case POSITION -> positionName(o.value());
+            case SUM -> sumLabel(o.value());
+            case COUNTER -> DuelText.s(DuelText.COUNTER_AVAILABLE, o.value());
+            case BIT -> bitName(o.value());
+            case NUMBER -> DuelText.s(DuelText.DECLARE_NUMBER, o.index());
+            case OPTION_ITEM -> DuelText.s(DuelText.ACTION_OPTION_ITEM, o.index() + 1);
+            case RPS_ITEM -> rpsName(o.value());
+            case RAW -> o.label() == null || o.label().isEmpty()
+                    ? DuelQuestion.Option.FALLBACK_LABEL : o.label();
+        };
+    }
+
+    /** 卡名；查不到就用 {@code #卡号} 模板（卡号本身是内核数据，不是我们的文案）。 */
+    private String cardNameLabel(int code, String fallback) {
+        String n = CardTips.name(code);
+        if (n != null && !n.isEmpty()) {
+            return n;
+        }
+        return code != 0 ? DuelText.s(DuelText.DECLARE_CARD_CODE, code) : fallback;
+    }
+
+    /**
      * 「变更表示」这一项按<b>当前表示形式</b>改名。判定本身在
-     * {@link FieldCodes#repositionName(int)}（纯位运算，离线可断言），
-     * 这里只负责把选项翻译成「哪张卡、什么姿势」。
+     * {@link FieldCodes#repositionKey(int)}（纯位运算，离线可断言），
+     * 这里只负责把 key 取成词。
      */
     private String repositionLabel(DuelQuestion.Option o) {
-        return FieldCodes.repositionName(zonePosition(o));
+        return DuelText.s(FieldCodes.repositionKey(zonePosition(o)));
+    }
+
+    /**
+     * 区域名：{@code ygomc.duel.zone.*} 那一族（取值由 {@code PileBrowse} 定）。
+     *
+     * <p>有格号的区（怪兽区/魔陷区）用带归属的那条 key，并把格号当参数：一次「选格」
+     * 要是不说清「谁的、第几格」，五个格子就分不出是哪一个——这正是玩家说的
+     * 「提示很不完整」。归属按<b>看的人</b>算（{@code mySeat}），不是按选项里的 controller。
+     */
+    private String zoneLabel(int controller, int location, int sequence) {
+        if (location == Msg.Location.MZONE || location == Msg.Location.SZONE) {
+            return DuelText.s(DuelText.sideZoneKey(controller, location, mySeat), sequence + 1);
+        }
+        return DuelText.s(DuelText.zoneKey(location));
+    }
+
+    /** 常驻阶段条上的阶段名，按 {@link #PHASES} 的下标取。 */
+    private String phaseName(int i) {
+        return DuelText.s(DuelText.PHASES[i]);
+    }
+
+    /**
+     * 行动名。
+     *
+     * <p><b>必须带询问类型一起判</b>：行动编号是「每个询问内部自洽」的，
+     * 主要阶段的 1 是「特殊召唤」、战斗阶段的 1 是「攻击」，Idle 的 3 是「盖放怪兽」、
+     * 战斗的 3 是「进入结束阶段」。光看编号会张冠李戴，而且是大面积地错——
+     * 所以这里按 {@code type} 分派，而不是把两套编号并成一个 switch。
+     */
+    private String actionName(int action) {
+        if (question == null) {
+            return DuelText.s(DuelText.ACTION_REPOSITION);
+        }
+        if (question.type() == MsgType.SELECT_BATTLECMD) {
+            return switch (action) {
+                case DuelQuestion.BATTLE_ATTACK -> DuelText.s(DuelText.ACTION_ATTACK);
+                case DuelQuestion.BATTLE_TO_M2 -> DuelText.s(DuelText.ACTION_TO_M2);
+                case DuelQuestion.BATTLE_TO_EP -> DuelText.s(DuelText.ACTION_TO_EP);
+                default -> DuelText.s(DuelText.ACTION_ACTIVATE);
+            };
+        }
+        return switch (action) {
+            case DuelQuestion.IDLE_SUMMON -> DuelText.s(DuelText.ACTION_SUMMON);
+            case DuelQuestion.IDLE_SPSUMMON -> DuelText.s(DuelText.ACTION_SP_SUMMON);
+            case DuelQuestion.IDLE_REPOSITION -> DuelText.s(DuelText.ACTION_REPOSITION);
+            case DuelQuestion.IDLE_MONSTER_SET -> DuelText.s(DuelText.ACTION_MONSTER_SET);
+            case DuelQuestion.IDLE_SPELL_SET -> DuelText.s(DuelText.ACTION_SPELL_SET);
+            case DuelQuestion.IDLE_ACTIVATE_EFFECT -> DuelText.s(DuelText.ACTION_ACTIVATE);
+            case DuelQuestion.IDLE_TO_BP -> DuelText.s(DuelText.ACTION_TO_BP);
+            case DuelQuestion.IDLE_TO_EP -> DuelText.s(DuelText.ACTION_TO_EP);
+            default -> DuelText.s(DuelText.ACTION_REPOSITION);
+        };
+    }
+
+    /** 表示形式的位 → 名字；认不出来时退回「变更表示」这句中性话。 */
+    private String positionName(int bit) {
+        if (bit == Msg.SelectPosition.FACEUP_ATTACK) {
+            return DuelText.s(DuelText.POSITION_FACEUP_ATTACK);
+        }
+        if (bit == Msg.SelectPosition.FACEUP_DEFENSE) {
+            return DuelText.s(DuelText.POSITION_FACEUP_DEFENSE);
+        }
+        if (bit == Msg.SelectPosition.FACEDOWN_DEFENSE) {
+            return DuelText.s(DuelText.POSITION_FACEDOWN_DEFENSE);
+        }
+        if (bit == Msg.SelectPosition.FACEDOWN_ATTACK) {
+            return DuelText.s(DuelText.POSITION_FACEDOWN_ATTACK);
+        }
+        return DuelText.s(DuelText.REPOSITION_GENERIC);
+    }
+
+    /** 猜拳：内核只认 1/2/3，其它值不该出现，真出现了也别把数字印给玩家。 */
+    private String rpsName(int value) {
+        return switch (value) {
+            case DuelQuestion.RPS_ROCK -> DuelText.s(DuelText.ACTION_RPS_ROCK);
+            case DuelQuestion.RPS_SCISSORS -> DuelText.s(DuelText.ACTION_RPS_SCISSORS);
+            case DuelQuestion.RPS_PAPER -> DuelText.s(DuelText.ACTION_RPS_PAPER);
+            default -> DuelQuestion.Option.FALLBACK_LABEL;
+        };
+    }
+
+    /**
+     * 合计值项的两种取法。
+     *
+     * <p>{@code sum_param} 由 {@code SumSelect.params} 拆成可选的一或两个值
+     * （内核 {@code get_sum_params}），两个都写出来让玩家自己看——一张卡可能有两个可选值。
+     */
+    private String sumLabel(int sumParam) {
+        int[] v = SumSelect.params(sumParam);
+        return v[1] > 0 ? DuelText.s(DuelText.SUM_TWO, v[0], v[1])
+                : DuelText.s(DuelText.SUM_ONE, v[0]);
+    }
+
+    /**
+     * 宣言种族/属性的名字。
+     *
+     * <p>名字来自内核 {@code strings.conf}（{@code DataPacks.raceName/attributeName}），
+     * <b>不是我们要翻的东西</b>，所以它是参数而不是模板。以前这里显示的是
+     * {@code label} 里的「位 0x4」——把内核位掩码印给玩家看，等于没告诉他选的是什么。
+     */
+    private String bitName(int bit) {
+        String n = question != null && question.type() == MsgType.ANNOUNCE_RACE
+                ? DataPacks.raceName(bit) : DataPacks.attributeName(bit);
+        return n != null && !n.isEmpty() ? n : DuelQuestion.Option.FALLBACK_LABEL;
     }
 
     /**
@@ -593,30 +756,44 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
         return null;
     }
 
-    /** 卡面上那个两字标记。卡宽只有四十来像素，四个字会溢出到邻格上。 */
+    /**
+     * 卡面上那个两字标记。卡宽只有四十来像素，四个字会溢出到邻格上。
+     *
+     * <p><b>判据是语义编号，不是中文前缀</b>：原先这里是一串
+     * {@code label.startsWith("特殊召唤")}、{@code startsWith("盖放")}。
+     * 那种写法把「界面显示什么」和「代码怎么判断」绑在了一起——换成英文资源之后
+     * 这些分支会全部落到 {@code null}，症状是「卡面上什么标记都不显示」，
+     * 而且不报错。现在只看 {@link DuelQuestion.Option#action()}。
+     */
     private String shortTag(DuelQuestion.Option o) {
-        String l = o.label();
-        if (l.startsWith("变更表示")) {
+        if (question == null) {
+            return null;
+        }
+        // 同 actionName：编号只在各自的询问里自洽，必须带上类型一起判。
+        if (question.type() == MsgType.SELECT_BATTLECMD) {
+            return o.action() == DuelQuestion.BATTLE_ATTACK
+                    ? DuelText.s(DuelText.TAG_ATTACK) : DuelText.s(DuelText.TAG_ACTIVATE);
+        }
+        return switch (o.action()) {
             // 与「攻击」区分开：一个是宣告攻击，一个是转成攻击表示。
-            return switch (repositionLabel(o)) {
-                case "反转召唤" -> "反转";
-                case "守备表示" -> "转守";
-                case "攻击表示" -> "转攻";
-                default -> "变位";
-            };
-        }
-        if (l.startsWith("特殊召唤")) {
-            return "特召";
-        }
-        if (l.startsWith("盖放")) {
-            return "盖放";
-        }
-        for (String k : new String[]{"召唤", "发动", "攻击"}) {
-            if (l.startsWith(k)) {
-                return k;
-            }
-        }
-        return null;
+            case DuelQuestion.IDLE_REPOSITION -> DuelText.s(repositionTagKey(o));
+            case DuelQuestion.IDLE_SPSUMMON -> DuelText.s(DuelText.TAG_SP_SUMMON);
+            case DuelQuestion.IDLE_MONSTER_SET -> DuelText.s(DuelText.TAG_SET);
+            case DuelQuestion.IDLE_SPELL_SET -> DuelText.s(DuelText.TAG_SET);
+            case DuelQuestion.IDLE_SUMMON -> DuelText.s(DuelText.TAG_SUMMON);
+            case DuelQuestion.IDLE_ACTIVATE_EFFECT -> DuelText.s(DuelText.TAG_ACTIVATE);
+            default -> null;
+        };
+    }
+
+    /** 「变更表示」那四种说法各自对应的<b>两字</b>标记。 */
+    private String repositionTagKey(DuelQuestion.Option o) {
+        return switch (FieldCodes.repositionKey(zonePosition(o))) {
+            case FieldCodes.KEY_REPOSITION_FLIP -> DuelText.TAG_FLIP;
+            case FieldCodes.KEY_REPOSITION_TO_DEFENSE -> DuelText.TAG_TO_DEFENSE;
+            case FieldCodes.KEY_REPOSITION_TO_ATTACK -> DuelText.TAG_TO_ATTACK;
+            default -> DuelText.TAG_REPOSITION;
+        };
     }
 
     /**
@@ -835,7 +1012,7 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
         int cancelPick = cancelIndex() >= 0 ? cancelIndex() : no;
 
         if (ask || sole >= 0 || yes >= 0 || needsConfirm()) {
-            confirm = Button.builder(Component.literal("确认"), b -> {
+            confirm = Button.builder(DuelText.c(DuelText.BUTTON_CONFIRM), b -> {
                 if (ask) {
                     // 连锁第一段：同意＝要发动，之后才去点亮候选。
                     agreeChain();
@@ -854,7 +1031,7 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
             // 只有询问真的给了退路才造这颗键。判据是【消息自带的可取消标志】
             // （{@code select_cancelable}，duelclient.cpp:1623/1688），不是「选项表里有没有取消项」：
             // 后者只在部分询问类型里成立，正是「取消键时灵时不灵」的来源。
-            cancelBtn = Button.builder(Component.literal("取消"), b -> {
+            cancelBtn = Button.builder(DuelText.c(DuelText.BUTTON_CANCEL), b -> {
                 if (ask) {
                     cancel();
                 } else if (cancelPick >= 0) {
@@ -970,13 +1147,14 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
      */
     private String menuLabel(int idx) {
         if (idx == MENU_SUMMON) {
-            return "特殊召唤";
+            return DuelText.s(DuelText.MENU_SP_SUMMON);
         }
         if (idx == MENU_VIEW_LIST) {
-            return "查看列表";
+            return DuelText.s(DuelText.MENU_VIEW_LIST);
         }
         List<DuelQuestion.Option> options = question == null ? List.of() : question.options();
-        return idx >= 0 && idx < options.size() ? shortLabel(options.get(idx)) : "?";
+        return idx >= 0 && idx < options.size() ? shortLabel(options.get(idx))
+                : DuelQuestion.Option.FALLBACK_LABEL;
     }
 
     /**
@@ -1104,7 +1282,7 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
             var mc = net.minecraft.client.Minecraft.getInstance();
             if (mc.player != null) {
                 mc.player.displayClientMessage(
-                        Component.literal("这个操作发不出去：" + e.getMessage()), false);
+                        DuelText.c(DuelText.ERROR_CANNOT_SEND, e.getMessage()), false);
             }
         }
     }
@@ -1158,7 +1336,7 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
             // 和网络不通长得一模一样。
             if (mc.player != null) {
                 mc.player.displayClientMessage(
-                        Component.literal("这个操作发不出去：" + e.getMessage()), false);
+                        DuelText.c(DuelText.ERROR_CANNOT_SEND, e.getMessage()), false);
             }
             return;
         }
@@ -1210,7 +1388,7 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
         FieldLayout L = field();
         if (board == null) {
             // 面板现在在右侧、panel().y() 恒为 0，沿用旧写法会画到屏幕外。
-            g.drawString(font, "还没有牌桌数据", L.x0(), L.oppHand().y() + 20, 0xFFFFFF);
+            g.drawString(font, DuelText.s(DuelText.STATUS_NO_BOARD), L.x0(), L.oppHand().y() + 20, 0xFFFFFF);
         } else {
             drawField(g, L);
         }
@@ -1306,7 +1484,7 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
             zone(g, L, at(zones, i), L.col(band, p == me() ? 1 + i : 5 - i), 0x33FFFFFF, 0x66FFFFFF, true,
                     side, FieldCodes.LOCATION_MZONE, i);
         }
-        pile(g, L, "墓地 " + p.graveCount(), L.col(band, mine ? 6 : 0), 0xFF24485C, topCard(p.grave()),
+        pile(g, L, DuelText.s(DuelText.PILE_GRAVE, p.graveCount()), L.col(band, mine ? 6 : 0), 0xFF24485C, topCard(p.grave()),
                 mine ? mySeat : 1 - mySeat, FieldCodes.LOCATION_GRAVE);
     }
 
@@ -1317,13 +1495,13 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
         }
         List<DuelBoard.Zone> zones = p.spellZones();
         int side = p == me() ? mySeat : 1 - mySeat;
-        pile(g, L, "额外 " + p.extraCount(), L.col(band, p == me() ? 0 : 6), 0xFF24485C, BACK_ART,
+        pile(g, L, DuelText.s(DuelText.PILE_EXTRA, p.extraCount()), L.col(band, p == me() ? 0 : 6), 0xFF24485C, BACK_ART,
                 p == me() ? mySeat : 1 - mySeat, FieldCodes.LOCATION_EXTRA);
         for (int i = 0; i < FieldLayout.MAIN_ZONES; i++) {
             zone(g, L, at(zones, i), L.col(band, p == me() ? 1 + i : 5 - i), 0x33DFFFD8, 0x66DFFFD8, false,
                     side, FieldCodes.LOCATION_SZONE, i);
         }
-        pile(g, L, "卡组 " + p.deckCount(), L.col(band, p == me() ? 6 : 0), 0xFF24485C, BACK_ART,
+        pile(g, L, DuelText.s(DuelText.PILE_DECK, p.deckCount()), L.col(band, p == me() ? 6 : 0), 0xFF24485C, BACK_ART,
                 p == me() ? mySeat : 1 - mySeat, FieldCodes.LOCATION_DECK);
     }
 
@@ -1369,11 +1547,11 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
         DuelBoard.PlayerBoard me = me();
         DuelBoard.PlayerBoard op = opponent();
         if (op != null) {
-            pile(g, L, "除外 " + op.removedCount(), L.col(band, 0), 0xFF3A4256, topCard(op.removed()),
+            pile(g, L, DuelText.s(DuelText.PILE_REMOVED, op.removedCount()), L.col(band, 0), 0xFF3A4256, topCard(op.removed()),
                     1 - mySeat, FieldCodes.LOCATION_REMOVED);
         }
         if (me != null) {
-            pile(g, L, "除外 " + me.removedCount(), L.col(band, 6), 0xFF3A4256, topCard(me.removed()),
+            pile(g, L, DuelText.s(DuelText.PILE_REMOVED, me.removedCount()), L.col(band, 6), 0xFF3A4256, topCard(me.removed()),
                     mySeat, FieldCodes.LOCATION_REMOVED);
         }
     }
@@ -1471,7 +1649,7 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
             return;
         }
         int ty = band.y() + Math.max(0, (band.h() - 8) / 2);
-        g.drawString(font, (opponent ? "对手" : "我方") + " 手牌 " + p.handCount(),
+        g.drawString(font, DuelText.s(opponent ? DuelText.HAND_OPPONENT : DuelText.HAND_MINE, p.handCount()),
                 band.x(), ty, opponent ? 0xFFB0B0B0 : 0xFFFFFFFF);
         int w = Math.max(6, (int) (band.h() / (86f / 59f)));
         List<DuelBoard.Zone> hand = p.hand();
@@ -1795,50 +1973,113 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
      * <p>光秃秃一句「是否发动效果？」没有信息量：同一个时点可能有好几张卡能发动。
      * 官方就是在标题里点名道姓的——{@code strings.conf:200}
      * 「是否在[%ls]发动[%ls]的效果？」。
+     *
+     * <h2>标题从哪来</h2>
+     * 先看 {@link DuelQuestion.Title}：{@code RAW} 表示这是内核文本（{@code HINT_EVENT}
+     * 时点、系统串），照原文显示；否则用 {@code key} 去语言资源取词，参数是编号而不是句子。
+     * 以前这里拿 {@code "是否发动效果？".equals(title)} 当中文判据，换语言就静默失效。
      */
     private String questionTitle() {
         if (question == null) {
-            return "等待服务器…";
+            return DuelText.s(DuelText.STATUS_WAITING);
         }
         if (submitted) {
-            return "已提交，等待对手…";
+            return DuelText.s(DuelText.STATUS_SUBMITTED);
         }
-        String title = question.title();
-        if ("是否发动效果？".equals(title)) {
-            int subject = subjectCode();
-            if (subject != 0) {
-                title = "是否发动「" + CardTips.name(subject) + "」的效果？";
+        DuelQuestion.Title t = question.titleText();
+        if (!t.fromLang()) {
+            return question.title();
+        }
+        String key = t.key();
+        String[] args = t.args();
+        // 发动效果的问句要点名是哪张卡：系统串里是「%ls」，我们这里自己填。
+        if (DuelText.TITLE_EFFECTYN.equals(key)) {
+            String name = CardTips.name(subjectCode());
+            if (name != null && !name.isEmpty()) {
+                return DuelText.s(key, name);
             }
+            return DuelText.s(DuelText.TITLE_EFFECTYN_GENERIC);
         }
-        return title;
+        String body = args.length > 0 ? DuelText.s(key, (Object[]) args) : DuelText.s(key);
+        // 内核提示（时点/选择提示）不翻，挂在前面，两行读起来才是「什么时候，要不要发动」。
+        return t.rawHint() == null || t.rawHint().isEmpty() ? body : t.rawHint() + "\n" + body;
     }
 
-    /** 操作提示。 */
+    /**
+     * 操作提示。
+     *
+     * <p>每一条都要与<b>真实交互</b>对得上，这是这一轮返工的主因：原先
+     * 排序类提示写「右下角确认」（其实点选顺序就是答案）、
+     * 选卡类与「取消选中」类共用一条、选格子类只说「选卡」。写错了比不写更糟——
+     * 玩家会照着一句错话去做。
+     */
     private String questionHint() {
         if (question == null || submitted || board == null) {
             return "";
         }
         if (DuelQuestion.isYesNo(question.type())) {
-            return "点「确认」＝同意，点「取消」＝拒绝";
+            return DuelText.s(DuelText.HINT_YESNO);
         }
         if (chainAskStage()) {
-            return "点「确认」＝要发动（之后点亮卡/墓地/除外让你挑），点「取消」＝不发动";
+            return DuelText.s(DuelText.HINT_CHAIN_ASK);
+        }
+        if (question.isChainQuestion()) {
+            // 第二段：已经同意发动，点亮的就是能发动的那些，让玩家点一张。
+            // 这一步以前没有提示——玩家看到的就是「一堆卡突然亮了」。
+            return DuelText.s(DuelText.HINT_CHAIN_PICK);
+        }
+        if (extraMenuPending()) {
+            return DuelText.s(DuelText.HINT_EXTRA_MENU);
+        }
+        if (question.mode() == DuelQuestion.Mode.SORT) {
+            // 排序没有「确认」这一步：点选的先后顺序就是答案。
+            return DuelText.s(DuelText.HINT_SORT);
         }
         if (question.mode() == DuelQuestion.Mode.COUNTERS) {
-            return "左键点卡加指示物　右下角「确认」交出";
+            return DuelText.s(DuelText.HINT_COUNTERS);
         }
         if (question.mode() == DuelQuestion.Mode.SUM) {
-            return "左键选卡凑合计值　右下角「确认」交出";
+            return DuelText.s(DuelText.HINT_SUM);
         }
         if (popup != null) {
-            return "在弹窗里选";
+            return DuelText.s(DuelText.HINT_POPUP);
+        }
+        // 「选一些 / 取消选一些」点一下就把这一下交出去（sendsOnClick），没有确认键。
+        if (question.sendsOnClick()) {
+            return DuelText.s(DuelText.HINT_SELECT_UNSELECT);
+        }
+        if (question.mode() == DuelQuestion.Mode.PLACES) {
+            return question.type() == MsgType.SELECT_DISFIELD
+                    ? DuelText.s(DuelText.HINT_DISFIELD)
+                    : DuelText.s(DuelText.HINT_PLACING);
+        }
+        if (question.mode() == DuelQuestion.Mode.SINGLE
+                && question.type() == MsgType.SELECT_POSITION) {
+            return DuelText.s(DuelText.HINT_POSITION);
+        }
+        if (question.type() == MsgType.ANNOUNCE_RACE) {
+            return DuelText.s(DuelText.HINT_ANNOUNCE_RACE);
+        }
+        if (question.type() == MsgType.ANNOUNCE_ATTRIB) {
+            return DuelText.s(DuelText.HINT_ANNOUNCE_ATTRIB);
+        }
+        if (question.type() == MsgType.ANNOUNCE_CARD) {
+            return DuelText.s(DuelText.HINT_ANNOUNCE_CARD);
+        }
+        if (question.type() == MsgType.ANNOUNCE_NUMBER) {
+            return DuelText.s(DuelText.HINT_ANNOUNCE_NUMBER);
+        }
+        if (question.mode() == DuelQuestion.Mode.UNSUPPORTED) {
+            return DuelText.s(DuelText.HINT_UNSUPPORTED);
         }
         if (spatial()) {
             return needsConfirm()
-                    ? "左键选卡/选格　右下角「确认」" + (question.cancelable() ? "　「取消」不选" : "")
-                    : "点一下即可";
+                    ? (question.cancelable()
+                            ? DuelText.s(DuelText.HINT_SELECT_CANCELABLE)
+                            : DuelText.s(DuelText.HINT_SELECT))
+                    : DuelText.s(DuelText.HINT_CLICK);
         }
-        return "选择一项";
+        return DuelText.s(DuelText.HINT_PICK);
     }
 
     /** 进度：已选几张 / 已分配多少指示物。 */
@@ -1847,17 +2088,17 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
             return "";
         }
         if (question.mode() == DuelQuestion.Mode.COUNTERS) {
-            return "已分配 " + counterTotal() + "/" + question.min();
+            return DuelText.s(DuelText.COUNTS_COUNTERS, counterTotal(), question.min());
         }
         if (question.mode() == DuelQuestion.Mode.SUM) {
             int[] range = sumRange();
             String cur = range[0] == range[1] ? String.valueOf(range[0])
                     : range[0] + "~" + range[1];
-            return "已选 " + chosen.size() + " 张　合计 " + cur + " / 目标 " + question.sumTarget();
+            return DuelText.s(DuelText.COUNTS_SUM, chosen.size(), cur, question.sumTarget());
         }
         if (needsConfirm()) {
-            return "已选 " + chosen.size() + "/" + question.min()
-                    + (question.max() > 0 ? "~" + question.max() : "+");
+            String max = question.max() > 0 ? "~" + question.max() : "+";
+            return DuelText.s(DuelText.COUNTS_SELECTED, chosen.size(), question.min(), max);
         }
         return "";
     }
@@ -1877,7 +2118,7 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
         // 左下角是我方 LP，正文从徽章右边开始，两者不重叠。
         int mineW = myLpWidth(L);
         drawLifeBadge(g, s.x() + 2, s.y() + 4, mineW, me() == null ? 0 : me().lp(),
-                "我方", 0xFF7FD8A0, false);
+                DuelText.s(DuelText.LP_MINE), 0xFF7FD8A0, false);
 
         // 正文右侧要让出来的宽度：对手 LP ＋ 必发提示条 ＋ 右下角那两颗键。
         // 少让任何一项，提示尾巴都会被压在下面——这就是咩咩说的「提示显示不全」的一部分。
@@ -1932,14 +2173,14 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
             // 首选右上角：阶段条在场地里居中，两端本来就是空的。
             int room = L.fieldW() - 6 - (L.phase(5).right() + 2);
             int bw = Math.min(w, room);
-            drawLifeBadge(g, L.fieldW() - 4 - bw, 4, bw, lp, "对手", 0xFFE07A7A, true);
+            drawLifeBadge(g, L.fieldW() - 4 - bw, 4, bw, lp, DuelText.s(DuelText.LP_OPPONENT), 0xFFE07A7A, true);
             return;
         }
         // 窄屏上阶段条顶到右端，退到状态条右端。位置差一点，
         // 也比对手的 LP 干脆看不见强。
         FieldLayout.Rect s = L.status();
         drawLifeBadge(g, s.right() - 4 - inStatus, s.y() + 4, inStatus, lp,
-                "对手", 0xFFE07A7A, true);
+                DuelText.s(DuelText.LP_OPPONENT), 0xFFE07A7A, true);
     }
 
     /**
@@ -2056,10 +2297,13 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
         // 连锁询问里每一项的 label 都是同一个「发动效果」（DuelQuestion.java:285），
         // 光看按钮分不出是哪张卡，所以补上卡名。是/否那种（yesNo，:334-335）
         // 两个标签本来就不同、标题也已经点了卡名，就不用再补。
-        if (code == 0 || "是".equals(label) || "否".equals(label)) {
+        //
+        // 判据是 labelKind 而不是「是」「否」这两个中文：以前那两处字面量比较
+        // 在英文环境下会一直不成立，于是每个「是 / 否」按钮后面都被挂上一个卡名。
+        if (code == 0 || o.labelKind() == DuelQuestion.Option.LabelKind.YES_NO) {
             return label;
         }
-        return label + "「" + CardTips.name(code) + "」";
+        return DuelText.s(DuelText.LABEL_WITH_CARD, label, cardNameLabel(code, label));
     }
 
     /** 按弹窗布局摆按钮。走的是现成的按钮机制，所以 hover/焦点都是原版行为。 */
@@ -2112,7 +2356,7 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
             boolean hasArt = drawPanelArt(g, code, art);
             outline(g, art, 0xFFB8CEE4);
             if (!hasArt) {
-                g.drawCenteredString(font, "（这张卡没有卡图）", art.x() + art.w() / 2,
+                g.drawCenteredString(font, DuelText.s(DuelText.PANEL_NO_ART), art.x() + art.w() / 2,
                         art.bottom() - 12, 0xFFD0D8E0);
             }
         } else {
@@ -2122,7 +2366,7 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
             descMaxLines = 0;
             g.fill(art.x(), art.y(), art.right(), art.bottom(), 0xFF1C2836);
             outline(g, art, 0xFF3E5266);
-            g.drawCenteredString(font, "把光标移到卡上", art.x() + art.w() / 2,
+            g.drawCenteredString(font, DuelText.s(DuelText.PANEL_HOVER_CARD), art.x() + art.w() / 2,
                     art.y() + art.h() / 2 - 4, 0xFF8FA4B8);
         }
 
@@ -2173,7 +2417,7 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
                 ty += lineH;
             }
             if (lines.size() > from + maxLines) {
-                g.drawString(font, "▼ 滚轮", text.right() - 34, textBottom - 9, 0xFF9EE0B0, true);
+                g.drawString(font, DuelText.s(DuelText.PANEL_SCROLL), text.right() - 34, textBottom - 9, 0xFF9EE0B0, true);
             } else if (from > 0) {
                 g.drawString(font, "▲", text.right() - 11, textBottom - 9, 0xFF9EE0B0, true);
             }
@@ -2256,9 +2500,7 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
             default -> List.of();
         };
         List<PileBrowse.Row> rows = PileBrowse.rows(zones, ref.seat() == mySeat);
-        browse = new Browse(ref.location(),
-                PileBrowse.title(ref.seat(), ref.location(), rows.size(), mySeat),
-                rows, new CardList(listRect(), rows.size()));
+        browse = new Browse(ref.seat(), ref.location(), rows, new CardList(listRect(), rows.size()));
         // 「收起」键：咩咩说查看额外卡组的列表不好关掉——以前只有右键一条路。
         addBrowseCloseButton();
     }
@@ -2275,7 +2517,7 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
             return;
         }
         FieldLayout.Rect p = browse.list().panel();
-        addRenderableWidget(Button.builder(Component.literal("收起"), b -> closeBrowse())
+        addRenderableWidget(Button.builder(DuelText.c(DuelText.BROWSE_COLLAPSE), b -> closeBrowse())
                 .bounds(p.right() - 38, p.y() + 1, 36, 12).build());
     }
 
@@ -2341,10 +2583,12 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
         FieldLayout.Rect p = l.panel();
         g.fill(p.x(), p.y(), p.right(), p.bottom(), 0xF0162534);
         outline(g, p, 0xFF78C8A4);
-        g.drawString(font, clip(b.title() + "（右上角收起）", p.w() - 8), p.x() + CardList.PAD, p.y() + 3,
-                0xFFFFE060, true);
+        g.drawString(font, clip(DuelText.s(DuelText.pileTitleKey(b.seat(), b.location(), mySeat),
+                        b.rows().size())
+                        + DuelText.s(DuelText.BROWSE_COLLAPSE_HINT), p.w() - 8),
+                p.x() + CardList.PAD, p.y() + 3, 0xFFFFE060, true);
         if (b.rows().isEmpty()) {
-            g.drawString(font, clip("  空的", p.w() - 8), p.x() + CardList.PAD,
+            g.drawString(font, clip(DuelText.s(DuelText.BROWSE_EMPTY), p.w() - 8), p.x() + CardList.PAD,
                     p.y() + CardList.TITLE_H + 2, 0xFF9AA8B4, true);
             return;
         }
@@ -2358,9 +2602,9 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
                 g.fill(r.x(), r.y(), r.right(), r.bottom() - 1, 0xFF3E6E8C);
             }
             PileBrowse.Row row = b.rows().get(i);
-            String name = row.known() ? CardTips.name(row.code()) : PileBrowse.unknownLabel();
+            String name = row.known() ? CardTips.name(row.code()) : DuelText.s(PileBrowse.unknownKey());
             if (name == null || name.isEmpty()) {
-                name = "#" + row.code();
+                name = DuelText.s(DuelText.DECLARE_CARD_CODE, row.code());
             }
             String line = clip("  " + name, r.w() - 4);
             if (PileBrowse.italic(row)) {
@@ -2382,7 +2626,7 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
                 if (l.indexAt(mouseX, mouseY) == piles.size()) {
                     g.fill(cr.x(), cr.y(), cr.right(), cr.bottom() - 1, 0xFF3E6E8C);
                 }
-                g.drawString(font, clip("  取消（不选）", cr.w() - 4), cr.x() + 2, cr.y() + 1,
+                g.drawString(font, clip(DuelText.s(DuelText.LIST_CANCEL_ROW), cr.w() - 4), cr.x() + 2, cr.y() + 1,
                         0xFFFFB070, true);
             }
         }
@@ -2415,8 +2659,8 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
             }
         }
         String title = question != null && question.max() > 0
-                ? ("选卡 " + picked + "/" + question.max())
-                : ("选卡 " + picked);
+                ? DuelText.s(DuelText.LIST_TITLE, picked, question.max())
+                : DuelText.s(DuelText.LIST_TITLE_NO_MAX, picked);
         g.drawString(font, clip(title, p.w() - 8), p.x() + CardList.PAD, p.y() + 3,
                 0xFFFFE060, true);
 
@@ -2443,7 +2687,7 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
                 if (l.indexAt(mouseX, mouseY) == piles.size()) {
                     g.fill(cr.x(), cr.y(), cr.right(), cr.bottom() - 1, 0xFF3E6E8C);
                 }
-                g.drawString(font, clip("  取消（不选）", cr.w() - 4), cr.x() + 2, cr.y() + 1,
+                g.drawString(font, clip(DuelText.s(DuelText.LIST_CANCEL_ROW), cr.w() - 4), cr.x() + 2, cr.y() + 1,
                         0xFFFFB070, true);
             }
         }
@@ -2456,7 +2700,7 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
             g.fill(trackX, y, trackX + 3, y + h, 0xFF78C8A4);
         }
         if (needsConfirm() && countsOk()) {
-            g.drawString(font, clip("点空白处确认", p.w() - 8), p.x() + CardList.PAD,
+            g.drawString(font, clip(DuelText.s(DuelText.LIST_CONFIRM_OUTSIDE), p.w() - 8), p.x() + CardList.PAD,
                     p.bottom() - CardList.PAD - 9, 0xFF9FE0C0, true);
         }
     }

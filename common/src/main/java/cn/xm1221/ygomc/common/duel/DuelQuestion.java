@@ -43,7 +43,7 @@ import java.util.List;
  */
 public record DuelQuestion(int type, int player, Mode mode, String title,
                            List<Option> options, int min, int max, boolean cancelable,
-                           int sumTarget, int[] forcedParams) {
+                           int sumTarget, int[] forcedParams, Title titleText) {
 
     /**
      * 除 {@link Mode#SUM} 之外的询问都用的构造器。
@@ -54,11 +54,114 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
      */
     public DuelQuestion(int type, int player, Mode mode, String title,
                         List<Option> options, int min, int max, boolean cancelable) {
-        this(type, player, mode, title, options, min, max, cancelable, 0, EMPTY_PARAMS);
+        this(type, player, mode, title, options, min, max, cancelable, 0, EMPTY_PARAMS,
+                Title.raw(title));
     }
 
     /** 空的强制卡参数表（不可变，供上面的缺省构造器共用）。 */
     private static final int[] EMPTY_PARAMS = new int[0];
+
+    /**
+     * 十参重载（求和类专用）：标题取「照原文显示」。
+     *
+     * <p>离线自检大量用这个形状造样例，它们只关心应答编码，不关心标题从哪来。
+     */
+    public DuelQuestion(int type, int player, Mode mode, String title,
+                        List<Option> options, int min, int max, boolean cancelable,
+                        int sumTarget, int[] forcedParams) {
+        this(type, player, mode, title, options, min, max, cancelable, sumTarget,
+                forcedParams, Title.raw(title));
+    }
+
+    /**
+     * 标题<b>该怎么取</b>，以及给模板用的参数。
+     *
+     * <h2>为什么标题要分「哪一类」而不是只带一段文本</h2>
+     * 玩家要求界面文案由模组自己的语言资源决定。标题里有两种东西必须分开：
+     * <ul>
+     *   <li>内核给的（{@code strings.conf} 的效果名、HINT 选择提示、时点）——
+     *       <b>不翻译</b>，照原文显示，就是 {@link Kind#RAW}；</li>
+     *   <li>我们自己组织的（「选择行动」「宣言种族」「选择放置的位置」…）——
+     *       界面拿 {@code ygomc.duel.title.*} 的 key 去语言资源取，就是 {@link Kind#KEY}。</li>
+     * </ul>
+     * 分不出来的下场是二选一：要么把内核文本也翻一遍（错），要么把我们自己的句子
+     * 硬编码成中文（玩家这次报的就是这个）。{@code DuelQuestion.title} 字段仍然保留，
+     * 它现在是<b>兜底与日志</b>用的文本，不再是界面文案的唯一来源。
+     *
+     * <p>做成<b>一个嵌套 record</b> 而不是给 {@code DuelQuestion} 再加两个组件，是因为
+     * 「标题」与「它怎么取」本来就是一体的；顺带也避开了 record 组件一多、javac
+     * 重载解析反而选不中规范构造器的坑（实测过：加两个组件就开始报
+     * 「实际参数列表和形式参数列表长度不同」）。
+     */
+    public record Title(Kind kind, String key, String rawHint, String[] args) {
+
+        /** 标题取法的种类。 */
+        public enum Kind {
+            /** 照 {@code DuelQuestion.title} 原文显示（内核串、自检样例）。 */
+            RAW,
+            /** 我们自己的一句话：{@code key} 是语言资源里的 key，{@code args} 填占位符。 */
+            KEY,
+            /**
+             * 内核提示 + 我们的一句话。
+             *
+             * <p>这一种是必需的，不是可选优化：{@code HINT_EVENT}（「战斗阶段开始时」这类时点）
+             * 与 {@code SELECT_EFFECTYN} 的问句在 ygo 里是<b>两行</b>
+             * （{@code duelclient.cpp:1585} 的 {@code L"%ls\n%ls"}）。两者来源不同——
+             * 时点是内核文本（不翻），问句是我们的（要翻）。如果像以前那样在
+             * {@code DuelRoom} 里拼成一个字符串，就再也没法只翻一半，只能整体照原文显示，
+             * 于是我们自己的句子又硬编码成中文了。分开存、界面拼，是这里唯一的出路。
+             */
+            MIXED,
+        }
+
+        /** 「照原文显示」。{@code DuelQuestion.title} 就是那段原文。 */
+        public static Title raw(String text) {
+            return new Title(Kind.RAW, "", "", new String[0]);
+        }
+
+        /** 「按语言资源里的这一条取」；{@code args} 会依次填进模板的占位符。 */
+        public static Title of(String key, String... args) {
+            return new Title(Kind.KEY, key, "", args == null ? new String[0] : args);
+        }
+
+        /**
+         * 把内核提示挂到当前标题上。
+         *
+         * <p>当前已经是 {@link Kind#RAW} 时不再留 key：内核文本 + 内核文本仍然是内核文本，
+         * 没有一半是我们写的，也就没什么可翻的。
+         */
+        public Title withHint(String hint) {
+            if (hint == null || hint.isEmpty()) {
+                return this;
+            }
+            if (kind == Kind.RAW) {
+                return this;
+            }
+            return new Title(Kind.MIXED, key, hint, args);
+        }
+
+        /** 界面该不该去查语言资源。false 时用 {@code DuelQuestion.title} 原文。 */
+        public boolean fromLang() {
+            return (kind == Kind.KEY || kind == Kind.MIXED) && key != null && !key.isEmpty();
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            return o instanceof Title t && kind == t.kind
+                    && java.util.Objects.equals(key, t.key)
+                    && java.util.Objects.equals(rawHint, t.rawHint)
+                    && java.util.Arrays.equals(args, t.args);
+        }
+
+        @Override
+        public int hashCode() {
+            return 31 * java.util.Objects.hash(kind, key, rawHint)
+                    + java.util.Arrays.hashCode(args);
+        }
+    }
+
+    /** 界面取标题时用的 key 前缀，见 {@link Title}。 */
+    public static final String TITLE_KEY_PREFIX = "ygomc.duel.title.";
 
     /**
      * 逐字段比较，其中 {@code forcedParams} 比的是<b>内容</b>而不是引用。
@@ -80,14 +183,15 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
                 && min == q.min && max == q.max && cancelable == q.cancelable
                 && sumTarget == q.sumTarget
                 && java.util.Objects.equals(title, q.title)
+                && java.util.Objects.equals(titleText, q.titleText)
                 && java.util.Objects.equals(options, q.options)
                 && java.util.Arrays.equals(forcedParams, q.forcedParams);
     }
 
     @Override
     public int hashCode() {
-        int h = java.util.Objects.hash(type, player, mode, title, options, min, max,
-                cancelable, sumTarget);
+        int h = java.util.Objects.hash(type, player, mode, title, titleText, options, min,
+                max, cancelable, sumTarget);
         return 31 * h + java.util.Arrays.hashCode(forcedParams);
     }
 
@@ -117,20 +221,90 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
     /**
      * 一个可选项。
      *
-     * @param label      纯文本项的名字；卡牌项这里只是占位（形如 {@code #12345}），
-     *                   界面应优先用 {@code cardCode} 去查卡名
+     * <h2>{@code label} 只是兜底，界面不靠它说话</h2>
+     * 玩家要求「界面上的文本由我们自己的语言资源决定」，而 {@code label} 里原先装的是
+     * 中文（「特殊召唤」「攻击表示（正面）」…）。它现在<b>不再是界面文案的来源</b>：
+     * 界面按 {@link #labelKind()}、{@link #action()} 与位置/取值自己取 key
+     * （见 {@code DuelScreen.optionLabel}）。留着的文本只给两条<b>非界面</b>路径用：
+     * 离线自检按语义取项、日志与异常信息。
+     *
+     * <h2>为什么要显式分「这一项是什么」</h2>
+     * 光看 {@code cardCode}/位置分不出「卡名项」和「行动项」，界面要取的东西却完全不同
+     * （前者查卡名、后者取行动名）。以前是靠 {@code label.startsWith("特殊召唤")}
+     * 这种<b>拿中文当判据</b>的写法——一换语言就静默坏掉，正是本轮要根除的东西。
+     *
+     * @param label      兜底文本（不再直接上屏）；卡牌项这里是 {@code #卡号} 或中性占位
      * @param cardCode   卡号；非卡选项为 0
      * @param index      该项在<b>引擎选项表</b>里的下标，多选类用它拼应答
      * @param value      单选类直接回填的整数值
      * @param controller 选址类：区域归属方
      * @param location   选址类：区域种类
      * @param sequence   选址类：区域序号
+     * @param labelKind  这一项是哪一类名字；界面照它取语言资源（见 {@link LabelKind}）
+     * @param action     行动类选项的<b>语义编号</b>（{@link DuelQuestion#IDLE_SUMMON}
+     *                   这一族），非行动项为 {@link #ACTION_NONE}。界面取行动名与
+     *                   「变更表示」判断都只看它，<b>不许看译文字符串</b>
      */
     public record Option(String label, int cardCode, int index, int value,
-                         int controller, int location, int sequence) {
+                         int controller, int location, int sequence,
+                         LabelKind labelKind, int action) {
+
+        /** 非行动项的 {@link #action}。内核的行动编号从 0 起，所以负数不会撞。 */
+        public static final int ACTION_NONE = -1;
+
+        /**
+         * 这一项的名字是哪一类。
+         *
+         * <p>{@link #RAW} 是兜底：调用处若把它直接上屏，就等于绕开了语言资源。
+         * 新加选项时优先挑一个能说清语义的取值。
+         */
+        public enum LabelKind {
+            /** 直接呈现的文本（内核串、效果描述这类不是我们该翻的东西）。 */
+            RAW,
+            /** 卡牌项：界面用 {@code cardCode} 查卡名，查不到才退回 {@code #卡号}。 */
+            CARD,
+            /** 行动项：界面按 {@code action} 取行动名。 */
+            ACTION,
+            /** 是/否项：界面按 {@code value}（1/0）取「是 / 否」。 */
+            YES_NO,
+            /** 「取消 / 不选」。 */
+            CANCEL,
+            /** 选址项：界面按 {@code controller/location/sequence} 取区域名。 */
+            ZONE,
+            /** 表示形式项：界面按位置位（{@code value}）取表示形式名。 */
+            POSITION,
+            /** 合计值项：{@code value} 是 {@code sum_param}，界面拆出两个可选值。 */
+            SUM,
+            /** 指示物项：{@code value} 是这张卡能拿几个。 */
+            COUNTER,
+            /** 宣言种族/属性：{@code value} 是内核位掩码，名字来自 {@code strings.conf}。 */
+            BIT,
+            /** 宣言数字：{@code value} 是同族里的下标，展示的数在 {@code index} 里。 */
+            NUMBER,
+            /** 效果的「第几项」：内核只给项数，界面按 {@code index} 显示序号。 */
+            OPTION_ITEM,
+            /** 猜拳选项：界面按 {@code value} 取「石头 / 剪刀 / 布」。 */
+            RPS_ITEM,
+        }
+
+        /** 界面文案的兜底：任何一种名字都取不到时用它，而不是把内部占位印出去。 */
+        public static final String FALLBACK_LABEL = "？";
+
+        /**
+         * 只给离线自检与「纯文本项」用的七参构造：{@code labelKind} 取
+         * {@link LabelKind#RAW}、{@code action} 取 {@link #ACTION_NONE}。
+         *
+         * <p>保留它是有意的：自检造样例时只关心位置与取值，不该被迫为每一项编一个
+         * 语义标记；而 {@link LabelKind#RAW} 正好就是「按原文呈现」的中性含义。
+         */
+        public Option(String label, int cardCode, int index, int value,
+                      int controller, int location, int sequence) {
+            this(label, cardCode, index, value, controller, location, sequence,
+                    LabelKind.RAW, ACTION_NONE);
+        }
 
         static Option ofIndex(String label, int cardCode, int index) {
-            return new Option(label, cardCode, index, 0, 0, 0, 0);
+            return new Option(label, cardCode, index, 0, 0, 0, 0, LabelKind.CARD, ACTION_NONE);
         }
 
         /**
@@ -142,16 +316,17 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
          */
         static Option ofIndexAt(String label, int cardCode, int index,
                                 int controller, int location, int sequence) {
-            return new Option(label, cardCode, index, 0, controller, location, sequence);
-        }
-
-        /** 这个选项是否指向牌桌上的某个具体位置。 */
-        public boolean hasPlace() {
-            return location != 0;
+            return new Option(label, cardCode, index, 0, controller, location, sequence,
+                    LabelKind.CARD, ACTION_NONE);
         }
 
         static Option ofValue(String label, int cardCode, int value) {
-            return new Option(label, cardCode, 0, value, 0, 0, 0);
+            return ofValue(label, cardCode, value, LabelKind.RAW);
+        }
+
+        /** 同上，但指定这一项是哪一类名字。 */
+        static Option ofValue(String label, int cardCode, int value, LabelKind kind) {
+            return new Option(label, cardCode, 0, value, 0, 0, 0, kind, ACTION_NONE);
         }
 
         /**
@@ -160,19 +335,44 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
          * <p>「召唤/盖放/攻击/发动」这些是<b>行动</b>而不是菜单项：ygo 客户端的做法是
          * 玩家点那张卡，再由界面给出这张卡当前可做的行动。所以行动项必须带位置，
          * 否则界面只能把它们倒成一个二十来项的按钮列表——那正是「把行动做成菜单」。
+         *
+         * @param action 语义行动编号；界面取行动名靠它
          */
-        static Option ofAction(String label, int cardCode, int value,
+        static Option ofAction(String label, int cardCode, int value, int action,
                                int controller, int location, int sequence) {
-            return new Option(label, cardCode, 0, value, controller, location, sequence);
+            return new Option(label, cardCode, 0, value, controller, location, sequence,
+                    LabelKind.ACTION, action);
+        }
+
+        /**
+         * 没有落点、但有语义行动编号的项（「进入战斗阶段」这类）。
+         *
+         * <p>它与行动项的区别只是位置全 0：界面上没有格子可以点，只能摆成按钮，
+         * 但名字照样要按行动编号取。
+         */
+        static Option ofPhaseAction(String label, int value, int action) {
+            return new Option(label, 0, 0, value, 0, 0, 0, LabelKind.ACTION, action);
+        }
+
+        /** 是/否项：应答取值 1 或 0，界面按 {@code value} 取「是 / 否」。 */
+        static Option ofYesNo(int cardCode, int value, int controller, int location, int sequence) {
+            return new Option(value == 1 ? "是" : "否", cardCode, 0, value,
+                    controller, location, sequence, LabelKind.YES_NO, ACTION_NONE);
         }
 
         static Option ofZone(String label, int controller, int location, int sequence) {
-            return new Option(label, 0, 0, 0, controller, location, sequence);
+            return new Option(label, 0, 0, 0, controller, location, sequence,
+                    LabelKind.ZONE, ACTION_NONE);
         }
 
         /** 「取消 / 不选」项。多选类里用 {@code index == -1} 表示。 */
         static Option cancel() {
-            return new Option("取消", 0, -1, -1, 0, 0, 0);
+            return new Option("取消", 0, -1, -1, 0, 0, 0, LabelKind.CANCEL, ACTION_NONE);
+        }
+
+        /** 这个选项是否指向牌桌上的某个具体位置。 */
+        public boolean hasPlace() {
+            return location != 0;
         }
 
         public boolean isCancel() {
@@ -182,18 +382,21 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
 
     // ── 行动类的类型号（应答低 16 位）────────────────────────────────────────
     // 取值与语义见 FirstChoiceResponder.idleCommand 的注释（内核 playerop.cpp:69-79）。
-    private static final int IDLE_SUMMON = 0;
-    private static final int IDLE_SPSUMMON = 1;
-    private static final int IDLE_REPOSITION = 2;
-    private static final int IDLE_MONSTER_SET = 3;
-    private static final int IDLE_SPELL_SET = 4;
-    private static final int IDLE_ACTIVATE_EFFECT = 5;
-    private static final int IDLE_TO_BP = 6;
-    private static final int IDLE_TO_EP = 7;
+    //
+    // 公开是有意的：界面靠这些编号取行动名（{@code DuelScreen.optionLabel}），
+    // 而编号本身是内核语义、不是文案——公开它，「拿中文当判据」就没有后路。
+    public static final int IDLE_SUMMON = 0;
+    public static final int IDLE_SPSUMMON = 1;
+    public static final int IDLE_REPOSITION = 2;
+    public static final int IDLE_MONSTER_SET = 3;
+    public static final int IDLE_SPELL_SET = 4;
+    public static final int IDLE_ACTIVATE_EFFECT = 5;
+    public static final int IDLE_TO_BP = 6;
+    public static final int IDLE_TO_EP = 7;
 
-    private static final int BATTLE_ATTACK = 1;
-    private static final int BATTLE_TO_M2 = 2;
-    private static final int BATTLE_TO_EP = 3;
+    public static final int BATTLE_ATTACK = 1;
+    public static final int BATTLE_TO_M2 = 2;
+    public static final int BATTLE_TO_EP = 3;
 
     /** 猜拳：内核只接受 1/2/3（{@code playerop.cpp}，0 会被 RETRY）。 */
     public static final int RPS_ROCK = 1;
@@ -211,10 +414,10 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
             case Msg.SelectIdleCmd m -> idle(m);
             case Msg.SelectBattleCmd m -> battle(m);
             case Msg.SelectChain m -> chain(m);
-            case Msg.SelectEffectYn m -> yesNo(msg.type(), m.player(), "是否发动效果？",
+            case Msg.SelectEffectYn m -> yesNo(msg.type(), m.player(), "系统串解析失败",
                     m.code(), m.description(), locationName(m.location()),
                     m.location().controller(), m.location().location(), m.location().sequence());
-            case Msg.SelectYesNo m -> yesNo(msg.type(), m.player(), "请选择：", 0, m.description(),
+            case Msg.SelectYesNo m -> yesNo(msg.type(), m.player(), null, 0, m.description(),
                     null, 0, 0, 0);
             case Msg.SelectOption m -> option(m);
             case Msg.SelectCard m -> selectCard(m);
@@ -291,16 +494,17 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
             Msg.SelectChainEntry e = m.chains()[i];
             // select_idle_command: low 16 bits 5 = activate effect; high bits index chains[].
             opts.add(Option.ofAction("发动效果", e.code(), (i << 16) | IDLE_ACTIVATE_EFFECT,
-                    e.controller(), e.location(), e.sequence()));
+                    IDLE_ACTIVATE_EFFECT, e.controller(), e.location(), e.sequence()));
         }
         if (m.toBp() != 0) {
-            opts.add(Option.ofValue("进入战斗阶段", 0, IDLE_TO_BP));
+            opts.add(Option.ofPhaseAction("进入战斗阶段", IDLE_TO_BP, IDLE_TO_BP));
         }
         if (m.toEp() != 0) {
-            opts.add(Option.ofValue("进入结束阶段", 0, IDLE_TO_EP));
+            opts.add(Option.ofPhaseAction("进入结束阶段", IDLE_TO_EP, IDLE_TO_EP));
         }
         return new DuelQuestion(MsgType.SELECT_IDLECMD, m.player(), Mode.SINGLE,
-                "选择行动", opts, 1, 1, false);
+                "选择行动", opts, 1, 1, false, 0, EMPTY_PARAMS,
+                Title.of(TITLE_KEY_PREFIX + "idle"));
     }
 
     private static DuelQuestion battle(Msg.SelectBattleCmd m) {
@@ -309,27 +513,31 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
             Msg.AttackableEntry e = m.attackable()[i];
             // 攻击是「点我这只怪」而不是「从菜单里挑一只怪」
             opts.add(Option.ofAction("攻击", e.code(), (i << 16) | BATTLE_ATTACK,
-                    e.controller(), e.location(), e.sequence()));
+                    BATTLE_ATTACK, e.controller(), e.location(), e.sequence()));
         }
         for (int i = 0; i < m.chains().length; i++) {
             Msg.SelectChainEntry e = m.chains()[i];
+            // 战斗阶段里「发动效果」的值只有下标（{@code i << 16}）：内核的 battle_command
+            // 对连锁项就是这么编的，与闲置阶段的 {@code (i<<16)|5} 不同形。
+            // 所以这一项的 action 要显式写成「发动效果」，不能靠 value 反推。
             opts.add(Option.ofAction("发动效果", e.code(), i << 16,
-                    e.controller(), e.location(), e.sequence()));
+                    IDLE_ACTIVATE_EFFECT, e.controller(), e.location(), e.sequence()));
         }
         if (m.toM2() != 0) {
-            opts.add(Option.ofValue("进入主要阶段 2", 0, BATTLE_TO_M2));
+            opts.add(Option.ofPhaseAction("进入主要阶段 2", BATTLE_TO_M2, BATTLE_TO_M2));
         }
         if (m.toEp() != 0) {
-            opts.add(Option.ofValue("进入结束阶段", 0, BATTLE_TO_EP));
+            opts.add(Option.ofPhaseAction("进入结束阶段", BATTLE_TO_EP, BATTLE_TO_EP));
         }
         return new DuelQuestion(MsgType.SELECT_BATTLECMD, m.player(), Mode.SINGLE,
-                "战斗阶段：选择行动", opts, 1, 1, false);
+                "战斗阶段：选择行动", opts, 1, 1, false, 0, EMPTY_PARAMS,
+                Title.of(TITLE_KEY_PREFIX + "battle"));
     }
 
     /** 行动类里「同一种行动有若干张卡可选」的部分：子下标就是卡在该表里的下标。 */
     private static void addActions(List<Option> opts, String what, int kind, Msg.CardEntry[] cards) {
         for (int i = 0; i < cards.length; i++) {
-            opts.add(Option.ofAction(what, cards[i].code(), (i << 16) | kind,
+            opts.add(Option.ofAction(what, cards[i].code(), (i << 16) | kind, kind,
                     cards[i].controller(), cards[i].location(), cards[i].sequence()));
         }
     }
@@ -349,28 +557,45 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
             String label = e.isForced() ? "发动（强制）" : "发动";
             // 带位置：对手发动效果后，玩家应当能【点自己的那张卡】来连锁它
             opts.add(new Option(label, e.code(), i, i,
-                    e.location().controller(), e.location().location(), e.location().sequence()));
+                    e.location().controller(), e.location().location(), e.location().sequence(),
+                    Option.LabelKind.ACTION, IDLE_ACTIVATE_EFFECT));
         }
         boolean forced = m.hasForced();
         if (!forced) {
             opts.add(Option.cancel());
         }
         return new DuelQuestion(MsgType.SELECT_CHAIN, m.player(), Mode.SINGLE,
-                forced ? "必须发动一个效果" : "是否发动效果？", opts, 1, 1, !forced);
+                forced ? "必须发动一个效果" : "是否发动效果？", opts, 1, 1, !forced,
+                0, EMPTY_PARAMS,
+                Title.of(TITLE_KEY_PREFIX + (forced ? "chain_forced" : "chain")));
     }
 
     /**
      * 是/否。{@code 1 = 是}（内核给简单 AI 的默认值就是 1）。
      *
-     * <p>标题优先用内核的 {@code description} 文本（见 {@link DescText}），
-     * 解析不出来才用中文兜底。旧写法是「兜底 + （说明 N）」——把字符串表的编号
-     * 直接印给玩家看，界面上就会出现「是否发动效果？（说明 122）」。
+     * <p>标题有两种来源，必须分开：
+     * <ul>
+     *   <li>{@code SELECT_EFFECTYN}：系统串里有「是否发动「%ls」？」这种带参数的句子，
+     *       {@link DescText} 拿内核参数填进去——那是<b>内核文本</b>，标 RAW 照原文显示；</li>
+     *   <li>纯 {@code SELECT_YESNO}：内核只给一段 {@code description}，解析不出来时
+     *       根本没有句子可显示，这时标题交给语言资源（{@code ygomc.duel.title.yesno}）。</li>
+     * </ul>
+     * 以前这里写的是「解析不出来才用中文兜底」，兜底的正是最后那句「请选择：」——
+     * 那正是玩家看到的硬编码中文。
+     *
+     * @param fallback 不再使用；保留参数是为了不改调用点形状（历史上它是中文兜底）
      */
     private static DuelQuestion yesNo(int type, int player, String fallback, int cardCode, int desc,
                                       String locationName, int controller, int location, int sequence) {
         String title = type == MsgType.SELECT_EFFECTYN
-                ? DescText.effectyn(desc, cardCode, locationName, fallback)
-                : DescText.yesNo(desc, fallback);
+                ? DescText.effectyn(desc, cardCode, locationName, null)
+                : DescText.yesNo(desc, null);
+        boolean general = title == null || title.isEmpty();
+        if (general) {
+            // 内核这一问没给出可用的句子：标题由界面按 key 取。
+            // title 字段仍然填一句原文，只作日志/兜底——界面不会用它。
+            title = type == MsgType.SELECT_EFFECTYN ? "是否发动效果？" : "请选择：";
+        }
         List<Option> opts = new ArrayList<>();
         // 选项带位置：是/否问的是【哪一张卡】，界面靠它把那张卡点亮
         // （ygo 对 SELECT_EFFECTYN 就是 pcard->is_highlighting = true，
@@ -378,9 +603,14 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
         //
         // 位置<b>不</b>让这一项变成可点的目标：DuelQuestion.isYesNo 会是 true，
         // 界面因此不摆目标，只画框——点卡作答会变成「点一下就发动效果」。
-        opts.add(Option.ofAction("是", cardCode, 1, controller, location, sequence));
-        opts.add(Option.ofAction("否", cardCode, 0, controller, location, sequence));
-        return new DuelQuestion(type, player, Mode.SINGLE, title, opts, 1, 1, false);
+        //
+        // 是/否用 labelKind=YES_NO：界面按 value（1/0）取语言资源里的「是 / 否」，
+        // 不再拿中文串去比（那是上一版的判据，换个语言就静默坏掉）。
+        opts.add(Option.ofYesNo(cardCode, 1, controller, location, sequence));
+        opts.add(Option.ofYesNo(cardCode, 0, controller, location, sequence));
+        return new DuelQuestion(type, player, Mode.SINGLE, title, opts, 1, 1, false,
+                0, EMPTY_PARAMS,
+                general ? Title.of(TITLE_KEY_PREFIX + "yesno") : Title.raw(title));
     }
 
     /** {@code Msg.Location} → 区域名，填系统串里的 {@code %ls} 用。 */
@@ -391,7 +621,27 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
      * 只有它知道该把它们并到哪一问上。抛掉的那些字段原样带过去。
      */
     public DuelQuestion withTitle(String newTitle) {
-        return new DuelQuestion(type, player, mode, newTitle, options, min, max, cancelable, sumTarget, forcedParams);
+        return withTitleText(Title.raw(newTitle), newTitle);
+    }
+
+    /**
+     * 挂上内核提示（{@code HINT_EVENT} 时点 / {@code HINT_SELECTMSG} 选择提示）。
+     *
+     * <p>与 {@link #withTitle} 分开是有意的：{@link #withTitle} 的入参必然是内核文本或
+     * 自检样例，只能整段照原文显示；而这里保留我们自己的 key，让界面把两者拼起来。
+     * 原来的实现是把提示拼进标题再整体当原文，症状是「选择行动」这类我们自己的句子
+     * 也跟着不能翻了。
+     */
+    public DuelQuestion withHint(String hint) {
+        if (hint == null || hint.isEmpty()) {
+            return this;
+        }
+        return withTitleText(titleText.withHint(hint), hint + "　" + title);
+    }
+
+    private DuelQuestion withTitleText(Title t, String fallback) {
+        return new DuelQuestion(type, player, mode, fallback, options, min, max, cancelable,
+                sumTarget, forcedParams, t);
     }
     /**
      * 这一问里落在牌堆（墓地/卡组/额外/除外）上的选项有几个。
@@ -565,10 +815,14 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
     private static DuelQuestion option(Msg.SelectOption m) {
         List<Option> opts = new ArrayList<>();
         for (int i = 0; i < m.count(); i++) {
-            opts.add(Option.ofValue("选项 " + (i + 1), 0, i));
+            // 内核只给「有几项」，不给每一项是什么。界面按序号显示「第 N 项」，
+            // 具体那一项的含义写在效果文本里（内核文本），不归我们编。
+            opts.add(new Option(Integer.toString(i), 0, i, i, 0, 0, 0,
+                    Option.LabelKind.OPTION_ITEM, Option.ACTION_NONE));
         }
         return new DuelQuestion(MsgType.SELECT_OPTION, m.player(), Mode.SINGLE,
-                "请选择一项", opts, 1, 1, false);
+                "请选择一项", opts, 1, 1, false, 0, EMPTY_PARAMS,
+                Title.of(TITLE_KEY_PREFIX + "option", Integer.toString(m.count())));
     }
 
     private static DuelQuestion selectCard(Msg.SelectCard m) {
@@ -579,7 +833,9 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
             opts.add(Option.cancel());
         }
         return new DuelQuestion(MsgType.SELECT_CARD, m.player(), Mode.MULTI,
-                "选择卡牌", opts, m.min(), m.max(), canCancel);
+                "选择卡牌", opts, m.min(), m.max(), canCancel, 0, EMPTY_PARAMS,
+                Title.of(TITLE_KEY_PREFIX + "select_card", Integer.toString(m.min()),
+                        Integer.toString(m.max())));
     }
 
     private static DuelQuestion tribute(Msg.SelectTribute m) {
@@ -590,14 +846,17 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
         int[] sequences = m.sequences();
         for (int i = 0; i < codes.length; i++) {
             opts.add(new Option(zoneLabel(controllers[i], locations[i], sequences[i]),
-                    codes[i], i, m.releaseParam(i), controllers[i], locations[i], sequences[i]));
+                    codes[i], i, m.releaseParam(i), controllers[i], locations[i], sequences[i],
+                    Option.LabelKind.CARD, Option.ACTION_NONE));
         }
         boolean canCancel = m.cancelable() != 0;
         if (canCancel) {
             opts.add(Option.cancel());
         }
         return new DuelQuestion(MsgType.SELECT_TRIBUTE, m.player(), Mode.MULTI,
-                "选择解放的怪兽", opts, m.min(), m.max(), canCancel);
+                "选择解放的怪兽", opts, m.min(), m.max(), canCancel, 0, EMPTY_PARAMS,
+                Title.of(TITLE_KEY_PREFIX + "tribute", Integer.toString(m.min()),
+                        Integer.toString(m.max())));
     }
 
     /**
@@ -634,7 +893,8 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
             opts.add(Option.cancel());
         }
         return new DuelQuestion(MsgType.SELECT_UNSELECT_CARD, m.player(), Mode.MULTI,
-                "选择要选中的卡（其余为取消选中）", opts, 1, 1, canCancel);
+                "选择要选中的卡（其余为取消选中）", opts, 1, 1, canCancel, 0, EMPTY_PARAMS,
+                Title.of(TITLE_KEY_PREFIX + "unselect"));
     }
 
     /**
@@ -691,7 +951,9 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
         int need = count > 0 ? count : (type == MsgType.SELECT_PLACE ? 1 : 0);
         return new DuelQuestion(type, player, Mode.PLACES,
                 disable ? "选择要禁用的区域" : "选择放置的位置",
-                opts, need, need, need == 0);
+                opts, need, need, need == 0, 0, EMPTY_PARAMS,
+                Title.of(TITLE_KEY_PREFIX + (disable ? "disfield" : "place"),
+                        Integer.toString(need)));
     }
 
     /**
@@ -735,7 +997,8 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
             int[] v = SumSelect.params(e.sumParam());
             String label = v[1] > 0 ? ("合计 " + v[0] + " 或 " + v[1]) : ("合计 " + v[0]);
             opts.add(new Option(label, e.pureCode(), i, e.sumParam(),
-                    e.controller(), e.location(), e.sequence()));
+                    e.controller(), e.location(), e.sequence(),
+                    Option.LabelKind.SUM, Option.ACTION_NONE));
         }
         int mcount = m.mustCount();
         int[] forced = new int[mcount];
@@ -745,7 +1008,9 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
         String title = "选择合计值恰好为 " + m.acc() + " 的卡"
                 + (mcount > 0 ? "（另有 " + mcount + " 张已被强制计入）" : "");
         return new DuelQuestion(MsgType.SELECT_SUM, m.player(), Mode.SUM, title,
-                opts, m.min(), m.max(), false, m.acc(), forced);
+                opts, m.min(), m.max(), false, m.acc(), forced,
+                Title.of(TITLE_KEY_PREFIX + "sum", Integer.toString(m.acc()),
+                        Integer.toString(mcount)));
     }
 
     private static DuelQuestion position(Msg.SelectPosition m) {
@@ -755,12 +1020,14 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
         addPosition(opts, m, Msg.SelectPosition.FACEDOWN_DEFENSE, "守备表示（背面）");
         addPosition(opts, m, Msg.SelectPosition.FACEDOWN_ATTACK, "攻击表示（背面）");
         return new DuelQuestion(MsgType.SELECT_POSITION, m.player(), Mode.SINGLE,
-                "选择表示形式", opts, 1, 1, false);
+                "选择表示形式", opts, 1, 1, false, 0, EMPTY_PARAMS,
+                Title.of(TITLE_KEY_PREFIX + "position"));
     }
 
     private static void addPosition(List<Option> opts, Msg.SelectPosition m, int bit, String label) {
         if (m.allows(bit)) {
-            opts.add(Option.ofValue(label, m.code(), bit));
+            // 表示形式项没有落点（location 恒为 0），所以界面只能靠 labelKind 认出它。
+            opts.add(Option.ofValue(label, m.code(), bit, Option.LabelKind.POSITION));
         }
     }
 
@@ -779,17 +1046,21 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
         for (int i = 0; i < n; i++) {
             int max = m.cardCounter(i);
             opts.add(new Option("可移除 " + max + " 个", m.codes()[i], i, max,
-                    m.controllers()[i], m.locations()[i], m.sequences()[i]));
+                    m.controllers()[i], m.locations()[i], m.sequences()[i],
+                    Option.LabelKind.COUNTER, Option.ACTION_NONE));
         }
         return new DuelQuestion(MsgType.SELECT_COUNTER, m.player(), Mode.COUNTERS,
-                "分配 " + m.count() + " 个指示物", opts, m.count(), m.count(), false);
+                "分配 " + m.count() + " 个指示物", opts, m.count(), m.count(), false,
+                0, EMPTY_PARAMS,
+                Title.of(TITLE_KEY_PREFIX + "counter", Integer.toString(m.count())));
     }
 
     private static DuelQuestion sort(Msg.SortCard m) {
         int n = m.count();
         List<Option> opts = cardOptions(codes(m), locations(m));
         return new DuelQuestion(MsgType.SORT_CARD, m.player(), Mode.SORT,
-                "调整顺序", opts, n, n, false);
+                "调整顺序", opts, n, n, false, 0, EMPTY_PARAMS,
+                Title.of(TITLE_KEY_PREFIX + "sort", Integer.toString(n)));
     }
 
     private static int[] codes(Msg.SortCard m) {
@@ -815,10 +1086,17 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
             int bit = 1 << i;
             if ((available & bit) != 0) {
                 // 宣言类回的是位掩码本身，不是下标。
-                opts.add(Option.ofValue("位 0x" + Integer.toHexString(bit), 0, bit));
+                // 名字（「光」「战士族」…）来自内核 strings.conf，不归我们翻，
+                // 所以界面在 labelKind=BIT 时拿 value 去查 DataPacks.attributeName/raceName。
+                opts.add(new Option("位 0x" + Integer.toHexString(bit), 0, i, bit, 0, 0, 0,
+                        Option.LabelKind.BIT, Option.ACTION_NONE));
             }
         }
-        return new DuelQuestion(type, player, Mode.SINGLE, title, opts, 1, 1, false);
+        return new DuelQuestion(type, player, Mode.SINGLE, title, opts, 1, 1, false,
+                0, EMPTY_PARAMS,
+                Title.of(TITLE_KEY_PREFIX
+                        + (type == MsgType.ANNOUNCE_RACE ? "announce_race" : "announce_attrib"),
+                        Integer.toString(Integer.bitCount(available))));
     }
 
     /**
@@ -850,10 +1128,13 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
         List<Option> opts = new ArrayList<>(codes.length);
         for (int i = 0; i < codes.length; i++) {
             // cardCode 与 value 都是这个卡号：前者让界面去查卡名/卡图，后者就是应答内容。
-            opts.add(Option.ofValue("#" + codes[i], codes[i], codes[i]));
+            // labelKind=CARD 时界面用 cardCode 查卡名，查不到才退回 #卡号。
+            opts.add(new Option("#" + codes[i], codes[i], 0, codes[i], 0, 0, 0,
+                    Option.LabelKind.CARD, Option.ACTION_NONE));
         }
         return new DuelQuestion(MsgType.ANNOUNCE_CARD, m.player(), Mode.SINGLE,
-                "宣言卡名", opts, 1, 1, false);
+                "宣言卡名", opts, 1, 1, false, 0, EMPTY_PARAMS,
+                Title.of(TITLE_KEY_PREFIX + "announce_card"));
     }
 
     /**
@@ -873,19 +1154,26 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
         List<Option> opts = new ArrayList<>(m.count());
         for (int i = 0; i < m.count(); i++) {
             // cardCode 留 0：这是数字不是卡，别让界面去查卡图。
-            opts.add(Option.ofValue("#" + m.options()[i], 0, i));
+            // labelKind=NUMBER：要展示的那个数在 index 里（value 是应答复用的下标）。
+            opts.add(new Option("#" + m.options()[i], 0, i, i, 0, 0, 0,
+                    Option.LabelKind.NUMBER, Option.ACTION_NONE));
         }
         return new DuelQuestion(MsgType.ANNOUNCE_NUMBER, m.player(), Mode.SINGLE,
-                "宣言数字", opts, 1, 1, false);
+                "宣言数字", opts, 1, 1, false, 0, EMPTY_PARAMS,
+                Title.of(TITLE_KEY_PREFIX + "announce_number"));
     }
 
     private static DuelQuestion rps(Msg.RockPaperScissors m) {
         List<Option> opts = new ArrayList<>();
-        opts.add(Option.ofValue("石头", 0, RPS_ROCK));
-        opts.add(Option.ofValue("剪刀", 0, RPS_SCISSORS));
-        opts.add(Option.ofValue("布", 0, RPS_PAPER));
+        opts.add(new Option("石头", 0, 0, RPS_ROCK, 0, 0, 0,
+                Option.LabelKind.RPS_ITEM, Option.ACTION_NONE));
+        opts.add(new Option("剪刀", 0, 0, RPS_SCISSORS, 0, 0, 0,
+                Option.LabelKind.RPS_ITEM, Option.ACTION_NONE));
+        opts.add(new Option("布", 0, 0, RPS_PAPER, 0, 0, 0,
+                Option.LabelKind.RPS_ITEM, Option.ACTION_NONE));
         return new DuelQuestion(MsgType.ROCK_PAPER_SCISSORS, m.player(), Mode.SINGLE,
-                "猜拳", opts, 1, 1, false);
+                "猜拳", opts, 1, 1, false, 0, EMPTY_PARAMS,
+                Title.of(TITLE_KEY_PREFIX + "rps"));
     }
 
     /**
@@ -922,7 +1210,9 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
      */
     private static DuelQuestion unsupported(Msg msg) {
         return new DuelQuestion(msg.type(), -1, Mode.UNSUPPORTED,
-                "本项目还不能作答的询问：" + MsgType.name(msg.type()), List.of(), 0, 0, false);
+                "本项目还不能作答的询问：" + MsgType.name(msg.type()), List.of(), 0, 0, false,
+                0, EMPTY_PARAMS,
+                Title.of(TITLE_KEY_PREFIX + "unsupported", MsgType.name(msg.type())));
     }
 
     // ── 应答 ──────────────────────────────────────────────────────────────
@@ -1245,17 +1535,16 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
         return out;
     }
 
+    /**
+     * 区域名。
+     *
+     * <p><b>这里返回的是给日志与离线自检看的中性串，不是给玩家看的文案。</b>
+     * 归属（controller）、区域（location）与格号（sequence）都挂在 {@link Option} 上
+     * 跟着选项过线，界面拿它们去语言资源取词（见 {@code DuelScreen.zoneLabel}）。
+     * 在这里拼中文的后果就是「换语言之后界面照样显示写死的中文」——那正是玩家报的问题。
+     */
     private static String zoneLabel(int controller, int location, int sequence) {
-        String side = controller == 0 ? "己方" : "对方";
-        String kind = location == Msg.Location.MZONE ? "怪兽区"
-                : location == Msg.Location.SZONE ? "魔陷区"
-                : location == Msg.Location.GRAVE ? "墓地"
-                : location == Msg.Location.REMOVED ? "除外区"
-                : location == Msg.Location.HAND ? "手牌"
-                : location == Msg.Location.DECK ? "卡组"
-                : location == Msg.Location.EXTRA ? "额外卡组"
-                : "区域" + location;
-        return side + kind + (sequence + 1);
+        return "zone(" + controller + "," + location + "," + sequence + ")";
     }
 
 
