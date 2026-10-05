@@ -138,13 +138,17 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
     private int menuX;
     private int menuY;
 
-    public DuelScreen(DuelBoard board, DuelQuestion question) {
+    /**
+     * @param viewerSeat 服务器给的视角座位（0/1）。<b>不能</b>只从 {@code question} 推：
+     *        没有询问的那一帧（对手回合里每一步末尾都会推一帧）{@code question} 是 null，
+     *        那时就只能默认 0 号席——后手玩家会看到对手的牌桌，也看不见自己的手牌。
+     *        判据在 {@link ClientSeat#of}，可离线断言。
+     */
+    public DuelScreen(DuelBoard board, DuelQuestion question, int viewerSeat) {
         super(Component.literal("决斗"));
         this.board = board;
         this.question = question;
-        if (question != null) {
-            this.mySeat = question.player();
-        }
+        this.mySeat = ClientSeat.of(viewerSeat, question == null ? -1 : question.player());
     }
 
     /** 服务器推来新状态时调用。 */
@@ -159,15 +163,15 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
      * {@code DuelQuestion} 与 {@code Option} 都是 record，{@code equals} 是逐字段比较，
      * 所以这里直接用内容相等来判断「还是不是同一题」。
      */
-    public void update(DuelBoard board, DuelQuestion question) {
+    public void update(DuelBoard board, DuelQuestion question, int viewerSeat) {
         boolean same = java.util.Objects.equals(this.question, question);
         // 「上次已经作答、现在又来了一个询问」= 引擎重问（MSG_RETRY 或重新推送）。
         // 这时必须把界面重新放开，否则玩家被自己上一次的提交永久锁住：
         // 勾选还在、按钮全灭，看起来就是「界面死了」。
         boolean reAsked = submitted;
-        if (question != null) {
-            this.mySeat = question.player();
-        }
+        // 视角座位每帧都跟着来（见 ClientSeat）：只从询问推的话，
+        // 没有询问的帧就只能默认 0 号席——后手玩家会看到对手的牌桌。
+        this.mySeat = ClientSeat.of(viewerSeat, question == null ? -1 : question.player());
         this.board = board;
         this.question = question;
         if (!same) {
@@ -1206,14 +1210,11 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
      * @return 卡号、{@link #BACK_ART}（看不见正面）或 {@link #NO_ART}（空堆）
      */
     private static int topCard(List<DuelBoard.Zone> pile) {
-        for (int i = pile.size() - 1; i >= 0; i--) {
-            DuelBoard.Zone z = pile.get(i);
-            if (z != null && z.occupied()) {
-                int code = z.code() & 0x7fffffff;
-                return code == 0 ? BACK_ART : code;
-            }
-        }
-        return NO_ART;
+        // 判据挪进了纯类（PileBrowse.topArt），好离线断言：
+        // 「里侧除外画牌背」这条以前漏了——只看卡号不看表示形式，
+        // 而我方里侧的除外卡号对我们【是】已知的（visible(mine=true) 恒真），
+        // 于是牌堆顶上直接画出了卡面。
+        return PileBrowse.topArt(pile);
     }
 
     private void outline(GuiGraphics g, FieldLayout.Rect r, int color) {
@@ -1854,7 +1855,7 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
             case FieldCodes.LOCATION_EXTRA -> pb.extra();
             default -> List.of();
         };
-        List<PileBrowse.Row> rows = PileBrowse.rows(zones);
+        List<PileBrowse.Row> rows = PileBrowse.rows(zones, ref.seat() == mySeat);
         browse = new Browse(ref.location(),
                 PileBrowse.title(ref.seat(), ref.location(), rows.size(), mySeat),
                 rows, new CardList(listRect(), rows.size()));
@@ -1897,8 +1898,18 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
             if (name == null || name.isEmpty()) {
                 name = "#" + row.code();
             }
-            g.drawString(font, clip("  " + name, r.w() - 4), r.x() + 2, r.y() + 1,
-                    row.known() ? 0xFFE8F0F8 : 0xFF9AA8B4, true);
+            String line = clip("  " + name, r.w() - 4);
+            if (PileBrowse.italic(row)) {
+                // 我方里侧除外：卡是我们自己盖的，名字当然知道，但它在场上是盖着的。
+                // 斜体就是这个意思（咩咩定）。判据在纯类里，可离线断言。
+                g.drawString(font,
+                        Component.literal(line).withStyle(
+                                net.minecraft.ChatFormatting.ITALIC),
+                        r.x() + 2, r.y() + 1, 0xFFE8F0F8, true);
+            } else {
+                g.drawString(font, line, r.x() + 2, r.y() + 1,
+                        row.known() ? 0xFFE8F0F8 : 0xFF9AA8B4, true);
+            }
         }
         // 末尾的「取消」行：可取消的询问必须留一条不选的路。
         if (cancelIndex() >= 0 && l.count() > piles.size()) {

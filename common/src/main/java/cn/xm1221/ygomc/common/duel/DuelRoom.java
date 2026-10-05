@@ -261,7 +261,7 @@ public final class DuelRoom implements OcgDuel.Observer {
                 // 这一席这一步末尾已经连问题一起发过了；AI 席位没有人收。
                 continue;
             }
-            YgomcNet.sendBoard(humans[seat], snapshot(duel, seat), null);
+            YgomcNet.sendBoard(humans[seat], snapshot(duel, seat), null, seat);
         }
     }
 
@@ -277,7 +277,7 @@ public final class DuelRoom implements OcgDuel.Observer {
         }
         firstFrameSent[seat] = true;
         boardSent[seat] = true;
-        YgomcNet.sendBoard(who, snapshot(currentDuel, seat), hintAware(seat, question));
+        YgomcNet.sendBoard(who, snapshot(currentDuel, seat), hintAware(seat, question), seat);
         // 有询问的那一席已经拿到画面了，另一席还在干等——就在这一刻补给他。
         pushFirstFrame();
     }
@@ -303,7 +303,7 @@ public final class DuelRoom implements OcgDuel.Observer {
                 continue;
             }
             firstFrameSent[seat] = true;
-            YgomcNet.sendBoard(humans[seat], snapshot(currentDuel, seat), null);
+            YgomcNet.sendBoard(humans[seat], snapshot(currentDuel, seat), null, seat);
         }
     }
 
@@ -502,7 +502,8 @@ public final class DuelRoom implements OcgDuel.Observer {
             ACTIVE.remove(who.getUUID());
             // 用「null 牌桌 + null 问题」收尾：客户端据此关掉界面，
             // 而不是把最后一帧的按钮留在屏幕上让玩家空点。
-            YgomcNet.sendBoard(who, null, null);
+            // 收尾帧里的座位没有意义，随便给一个，保持调用形状一致。
+            YgomcNet.sendBoard(who, null, null, seat);
             // 失败必须说出来。以前这里只有干巴巴的「对局结束」，而
             // 「引擎没装配好 -> 对局线程当场抛异常 -> 一局都没跑」在玩家眼里
             // 就是「什么都没发生」——咩咩为此排查了四轮。

@@ -83,10 +83,10 @@ public final class DuelClient {
             return;
         }
         if (screen == null) {
-            screen = new DuelScreen(update.board(), update.question());
+            screen = new DuelScreen(update.board(), update.question(), update.viewerSeat());
             everShown = false;
         } else {
-            screen.update(update.board(), update.question());
+            screen.update(update.board(), update.question(), update.viewerSeat());
         }
         if (DuelScreenFlow.shouldShow(everShown, update.question() != null, mc.screen == screen)) {
             mc.setScreen(screen);

@@ -74,7 +74,7 @@ public final class YgomcNet {
     }
 
     /** 一个 S→C 更新：牌桌 + 当前要问的问题（问题可能为 null，表示只是刷新牌桌）。 */
-    public record BoardUpdate(DuelBoard board, DuelQuestion question) {
+    public record BoardUpdate(DuelBoard board, DuelQuestion question, int viewerSeat) {
     }
 
     // ── 注册 ──────────────────────────────────────────────────────────────
@@ -106,11 +106,15 @@ public final class YgomcNet {
             byte[] board = buf.readByteArray();
             boolean hasQuestion = buf.readBoolean();
             byte[] question = hasQuestion ? buf.readByteArray() : null;
+            // 视角座位跟着【每一帧】一起发。只从询问推座位的话，没有询问的帧
+            // （对手回合里每一步末尾都会发一帧）就只能默认 0 号席：
+            // 后手玩家会看到对手的牌桌，而且看不见自己的手牌。
+            int viewerSeat = buf.readInt();
             // 先解码再排队：解码是纯计算，放在网络线程上没问题，
             // 这样主线程拿到的已经是可用对象，也就把「解析失败」和「界面出错」
             // 这两类故障分到了不同的线程，排查时不会混在一起。
             BoardUpdate update = new BoardUpdate(DuelWire.decodeBoard(board),
-                    hasQuestion ? DuelWire.decodeQuestion(question) : null);
+                    hasQuestion ? DuelWire.decodeQuestion(question) : null, viewerSeat);
             Consumer<BoardUpdate> h = boardHandler;
             if (h != null) {
                 ctx.queue(() -> h.accept(update));
@@ -120,7 +124,16 @@ public final class YgomcNet {
 
     // ── 发送 ──────────────────────────────────────────────────────────────
 
-    public static void sendBoard(ServerPlayer player, DuelBoard board, DuelQuestion question) {
+    /**
+     * 推一帧给某个玩家。
+     *
+     * @param viewerSeat 这份牌桌是<b>从谁的视角</b>做的（{@code FieldCodes.attach} 用的那个座位）。
+     *        必须每帧都带：客户端不能只从询问里推座位——没有询问的帧里推不出来，
+     *        只能默认 0 号席，后手玩家就会看到对手的牌桌、也看不见自己的手牌。
+     *        收尾帧（{@code board == null}）里的值没有意义。
+     */
+    public static void sendBoard(ServerPlayer player, DuelBoard board, DuelQuestion question,
+                                 int viewerSeat) {
         RegistryFriendlyByteBuf buf = new RegistryFriendlyByteBuf(
                 io.netty.buffer.Unpooled.buffer(), player.registryAccess());
         buf.writeByteArray(DuelWire.encodeBoard(board));
@@ -128,6 +141,7 @@ public final class YgomcNet {
         if (question != null) {
             buf.writeByteArray(DuelWire.encodeQuestion(question));
         }
+        buf.writeInt(viewerSeat);
         NetworkManager.sendToPlayer(player, BOARD, buf);
     }
 
