@@ -366,12 +366,19 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
         }
     }
 
-    /** 小窗里的按钮文字：有多余位置就把卡名带上，「发动」单看不知道发动哪张。 */
+    /**
+     * 菜单里的按钮文字。
+     *
+     * <p><b>不带卡名</b>：这排按钮是「点了那张卡之后弹出来的」，是哪张卡本来就一目了然。
+     * ygopro 的 {@code ClientField::ShowMenu}（event_handler.cpp:2260-2299）摆的就是
+     * 「召唤」「攻击」「发动」这种光板标签，卡名是靠菜单挂在哪张卡上来体现的。
+     * 之前无脑拼卡名，于是战斗阶段弹出「攻击 红莲共鸣者」——读起来像另一条指令。
+     *
+     * <p>需要卡名的地方是**连锁询问**那种一列同字选项（每项 label 都是「发动效果」），
+     * 那由 {@link #popupLabel} 单独补，不走这里。
+     */
     private String shortLabel(DuelQuestion.Option o) {
         String s = "变更表示".equals(o.label()) ? repositionLabel(o) : o.label();
-        if ((o.cardCode() & 0x7fffffff) != 0) {
-            s = s + " " + optionName(o);
-        }
         return s.length() > 28 ? s.substring(0, 27) + "…" : s;
     }
 
@@ -771,15 +778,30 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
      * 牌桌要看的是卡面，模糊在这里是纯反效果，还会把格子边缘糊掉，
      * 看起来像「渲染坏了」。
      */
+    /**
+     * 原版背景（压暗 + 高斯模糊）一律不画。
+     *
+     * <p><b>这里就是「整体蒙了一层膜」的根因。</b>1.21 的 {@code Screen.render}
+     * 自己会在<b>最后</b>调一次这个方法（4 参签名就是为此加的），而这里原先填的是
+     * {@code 0xA03C5566}——63% 不透明的蓝灰。在旧版（背景由各界面自己先画）它是
+     * 铺在底下的底色，到了 1.21 就变成盖在<b>整个界面之上</b>的一层膜：
+     * 牌桌、卡图、文字全被洗白一层，看着就是「渲染很奇怪」。
+     *
+     * <p>所以覆写留空，底色改由 {@link #render} 开头<b>自己先铺</b>——
+     * 位置对了，和世界背景的对比度也还在。
+     */
     @Override
     public void renderBackground(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
-        // 不再压成近乎全黑：牌桌本身有牌垫，底色只需要把世界背景压下去一点。
-        g.fill(0, 0, width, height, 0xA03C5566);
+        // 有意为空：见上面注释，这层现在会盖在最上面。
     }
 
     @Override
     public void render(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
-        renderBackground(g, mouseX, mouseY, partialTick);
+        // 底色自己铺。不能靠 renderBackground——它现在被 Screen.render 放在最后调用，
+        // 会盖在整个界面之上（见那个方法的注释）。不压成近乎全黑：牌桌本身有牌垫，
+        // 底色只需要把世界背景压下去一点。
+        g.fill(0, 0, width, height, 0xA03C5566);
+
         FieldLayout L = field();
         if (board == null) {
             // 面板现在在右侧、panel().y() 恒为 0，沿用旧写法会画到屏幕外。
@@ -810,6 +832,24 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
      *   我方手牌
      * </pre>
      */
+    /**
+     * 这个格子用哪张材质。
+     *
+     * <p>位置常量直接用内核的值（{@code MZONE = 0x04}、{@code SZONE = 0x08}）：
+     * 这里只是为了一张图分个类，不值得为此把 {@code Msg.Location} 引进来。
+     * 场地/灵摆区是魔陷区的序号 5、6（{@code playerop.cpp} 与 {@code FieldLayout}
+     * 都按这个分），它们跟普通魔陷区形状不同，单独给一张。
+     */
+    private static String zoneTexture(int location, int sequence) {
+        if (location == 0x04) {
+            return FieldTextureSpec.ZONE_MONSTER;
+        }
+        if (location == 0x08 && sequence >= 5) {
+            return FieldTextureSpec.ZONE_FIELD;
+        }
+        return FieldTextureSpec.ZONE_SPELL;
+    }
+
     private void drawField(GuiGraphics g, FieldLayout L) {
         // 牌垫：把整张场地垫在一层布面上，而不是让格子直接浮在暗背景上。
         // 格子本身是半透明的，没有垫子就会和世界背景糊在一起，边界看不出来。
@@ -818,7 +858,9 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
         int right = L.x0() + bands[0].w() + 4;
         int top = bands[0].y() - 4;
         int bottom = bands[bands.length - 1].bottom() + 4;
-        g.fill(left, top, right, bottom, 0xFF356B52);
+        if (!FieldTextures.tile(g, FieldTextureSpec.MAT, new FieldLayout.Rect(left, top, right - left, bottom - top))) {
+            g.fill(left, top, right, bottom, 0xFF356B52);
+        }
         outline(g, new FieldLayout.Rect(left, top, right - left, bottom - top), 0xFF78C8A4);
         // 中线：分隔双方场地，也让额外怪兽区看起来是「两边共用」
         int mid = L.extraMonsterRow().y() + L.extraMonsterRow().h() / 2;
@@ -923,8 +965,11 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
         if (z == null || !z.occupied()) {
             // 空格子画成半透明的「槽」而不是实心暗块：实心块在牌垫上看着像
             // 已经有卡了，会让人以为格子被占着。
-            g.fill(r.x(), r.y(), r.right(), r.bottom(), emptyFill);
-            outline(g, r, emptyBorder);
+            // 有材质就用材质（半透明照旧由 PNG 自己的 alpha 决定），没有才退回色块。
+            if (!FieldTextures.slot(g, zoneTexture(location, sequence), r)) {
+                g.fill(r.x(), r.y(), r.right(), r.bottom(), emptyFill);
+                outline(g, r, emptyBorder);
+            }
             return;
         }
         cardFace(g, L, z, r, monster, controller, location, sequence);
@@ -1038,7 +1083,13 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
 
     /** 侧格（卡组/额外/墓地/场地/除外）：一个框 + 一行字。 */
     private void pile(GuiGraphics g, FieldLayout L, String label, FieldLayout.Rect r, int fill) {
-        g.fill(r.x(), r.y(), r.right(), r.bottom(), fill);
+        if (FieldTextures.slot(g, FieldTextureSpec.ZONE_PILE, r)) {
+            // 贴图之上压一层薄色：牌堆之间本来靠颜色区分（除外是灰的、卡组是蓝的…），
+            // 只贴图会把这份区别抹掉。压 31% 的色，既留住区别又看得见底纹。
+            g.fill(r.x(), r.y(), r.right(), r.bottom(), (fill & 0x00FFFFFF) | 0x50000000);
+        } else {
+            g.fill(r.x(), r.y(), r.right(), r.bottom(), fill);
+        }
         outline(g, r, 0x70FFFFFF);
         if (r.w() >= 34) {
             g.drawString(font, label, r.x() + 2, r.y() + 2, 0xE0FFFFFF);

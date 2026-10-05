@@ -1,6 +1,8 @@
 package cn.xm1221.ygomc.common.duel;
 
+import cn.xm1221.ygomc.common.data.DescText;
 import cn.xm1221.ygomc.common.net.YgomcNet;
+
 import cn.xm1221.ygomc.common.ocg.DeclareCardName;
 import cn.xm1221.ygomc.common.ocg.DuelSession;
 import cn.xm1221.ygomc.common.ocg.DuelSessions;
@@ -9,6 +11,8 @@ import cn.xm1221.ygomc.common.ocg.OcgDuel;
 import cn.xm1221.ygomc.common.ocg.PlayerResponder;
 import cn.xm1221.ygomc.common.ocg.Responder;
 import cn.xm1221.ygomc.common.ocg.msg.Msg;
+import cn.xm1221.ygomc.common.ocg.msg.MsgType;
+
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
 import org.slf4j.Logger;
@@ -71,6 +75,16 @@ public final class DuelRoom implements OcgDuel.Observer {
     /** 本「步」里是否已经发过牌桌（{@link #onQuestion} 发的是带问题的那一份）。 */
     private boolean boardSentThisStep;
 
+    /** {@code MSG_HINT} 的 hintType：1 = 时点事件、3 = 选择提示（同 ygo 的 HINT_EVENT/HINT_SELECTMSG）。 */
+    private static final int HINT_EVENT = 1;
+    private static final int HINT_SELECTMSG = 3;
+
+    /** 最近一条选择提示的文本，用作随后那个选择框的标题；用完即清。 */
+    private String selectHint;
+
+    /** 最近一条时点事件的文本（「伤害步骤开始时」这类）；只贴在发动询问上，同 ygo。 */
+    private String eventText;
+
     private DuelRoom(ServerPlayer player, PlayerResponder responder, OcgDuel.DeckLoadout loadout) {
         this.player = player;
         this.responder = responder;
@@ -128,6 +142,17 @@ public final class DuelRoom implements OcgDuel.Observer {
     public void onMessage(OcgDuel duel, Msg m, boolean awaitingAnswer) {
         // 记下句柄，供随后同步触发的 listener 取快照用。
         currentDuel = duel;
+        if (m instanceof Msg.Hint h) {
+            // 这两种提示以前整个丢掉了：选择提示是「请选择要解放的卡」这类问句，
+            // 时点是「伤害步骤开始时」这类「现在是什么时候」。
+            // ygo 前者当选择框标题（client_field.cpp:1056），后者贴在
+            // 「是否发动效果」上面（duelclient.cpp:1585）。
+            if (h.hintType() == HINT_EVENT) {
+                eventText = DescText.getDesc(h.description());
+            } else if (h.hintType() == HINT_SELECTMSG) {
+                selectHint = DescText.selectMessage(h.description());
+            }
+        }
     }
 
     /**
@@ -154,7 +179,37 @@ public final class DuelRoom implements OcgDuel.Observer {
     /** 由 {@link PlayerResponder} 在问题诞生时同步调出，跑在对局线程上。 */
     private void onQuestion(DuelQuestion question) {
         boardSentThisStep = true;
-        YgomcNet.sendBoard(player, snapshot(currentDuel), question);
+        YgomcNet.sendBoard(player, snapshot(currentDuel), hintAware(question));
+    }
+
+    /**
+     * 把内核的提示并进询问标题。
+     *
+     * <p>照抄 ygo：{@code HINT_SELECTMSG} 的文本<b>就是</b>随后那个选择框的标题
+     * （{@code client_field.cpp:1056} 的 {@code display_hint}，不是补充说明）；
+     * {@code HINT_EVENT} 是贴在 {@code SELECT_EFFECTYN} 上面的一行
+     * （{@code duelclient.cpp:1585} 的 {@code L"%ls\n%ls"}）——「什么时候」
+     * 配上「要不要发动」才读得懂。
+     *
+     * <p>时点也贴给「选择行动」，这一条是我们自己加的：ygo 靠常驻阶段条显示现在是哪个阶段，
+     * 我们的阶段条只说「能按哪个」、说不出「现在是抽卡阶段」。而抽卡阶段同样要问行动
+     * （可以发动效果），不给阶段名，玩家看到的永远是「选择行动」，那就等于没告诉他在哪个阶段。
+     */
+    private DuelQuestion hintAware(DuelQuestion q) {
+        if (eventText != null && (q.type() == MsgType.SELECT_EFFECTYN
+                || q.type() == MsgType.SELECT_IDLECMD || q.type() == MsgType.SELECT_BATTLECMD)) {
+            // 用完就清：陈旧的时点配一个新问句，比不显示更糟。
+            String e = eventText;
+            eventText = null;
+            return q.withTitle(e + "　" + q.title());
+        }
+        if (selectHint != null) {
+            // 同上，用完就清。
+            String h = selectHint;
+            selectHint = null;
+            return q.withTitle(h);
+        }
+        return q;
     }
 
     /**

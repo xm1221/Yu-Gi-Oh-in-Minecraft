@@ -6,6 +6,7 @@ import cn.xm1221.ygomc.common.ocg.SumSelect;
 import cn.xm1221.ygomc.common.ocg.msg.Msg;
 import cn.xm1221.ygomc.common.ocg.msg.MsgType;
 
+import cn.xm1221.ygomc.common.data.DescText;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -211,8 +212,8 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
             case Msg.SelectBattleCmd m -> battle(m);
             case Msg.SelectChain m -> chain(m);
             case Msg.SelectEffectYn m -> yesNo(msg.type(), m.player(), "是否发动效果？",
-                    m.code(), m.description());
-            case Msg.SelectYesNo m -> yesNo(msg.type(), m.player(), "请选择：", 0, m.description());
+                    m.code(), m.description(), locationName(m.location()));
+            case Msg.SelectYesNo m -> yesNo(msg.type(), m.player(), "请选择：", 0, m.description(), null);
             case Msg.SelectOption m -> option(m);
             case Msg.SelectCard m -> selectCard(m);
             case Msg.SelectTribute m -> tribute(m);
@@ -285,7 +286,7 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
             opts.add(Option.ofValue("进入结束阶段", 0, IDLE_TO_EP));
         }
         return new DuelQuestion(MsgType.SELECT_IDLECMD, m.player(), Mode.SINGLE,
-                "主要阶段：选择行动", opts, 1, 1, false);
+                "选择行动", opts, 1, 1, false);
     }
 
     private static DuelQuestion battle(Msg.SelectBattleCmd m) {
@@ -344,12 +345,36 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
                 forced ? "必须发动一个效果" : "是否发动效果？", opts, 1, 1, !forced);
     }
 
-    /** 是/否。{@code 1 = 是}（内核给简单 AI 的默认值就是 1）。 */
-    private static DuelQuestion yesNo(int type, int player, String title, int cardCode, int desc) {
+    /**
+     * 是/否。{@code 1 = 是}（内核给简单 AI 的默认值就是 1）。
+     *
+     * <p>标题优先用内核的 {@code description} 文本（见 {@link DescText}），
+     * 解析不出来才用中文兜底。旧写法是「兜底 + （说明 N）」——把字符串表的编号
+     * 直接印给玩家看，界面上就会出现「是否发动效果？（说明 122）」。
+     */
+    private static DuelQuestion yesNo(int type, int player, String fallback, int cardCode, int desc,
+                                      String locationName) {
+        String title = type == MsgType.SELECT_EFFECTYN
+                ? DescText.effectyn(desc, cardCode, locationName, fallback)
+                : DescText.yesNo(desc, fallback);
         List<Option> opts = new ArrayList<>();
         opts.add(Option.ofValue("是", cardCode, 1));
         opts.add(Option.ofValue("否", cardCode, 0));
-        return new DuelQuestion(type, player, Mode.SINGLE, title + descSuffix(desc), opts, 1, 1, false);
+        return new DuelQuestion(type, player, Mode.SINGLE, title, opts, 1, 1, false);
+    }
+
+    /** {@code Msg.Location} → 区域名，填系统串里的 {@code %ls} 用。 */
+    /**
+     * 换一个标题。
+     *
+     * <p>给 {@code DuelRoom} 用：内核的提示（选择提示、时点）是另外的消息，
+     * 只有它知道该把它们并到哪一问上。抛掉的那些字段原样带过去。
+     */
+    public DuelQuestion withTitle(String newTitle) {
+        return new DuelQuestion(type, player, mode, newTitle, options, min, max, cancelable, sumTarget, forcedParams);
+    }
+    private static String locationName(Msg.Location l) {
+        return l == null ? null : DescText.location(l.location(), l.sequence());
     }
 
     private static DuelQuestion option(Msg.SelectOption m) {
@@ -1035,16 +1060,7 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
         return side + kind + (sequence + 1);
     }
 
-    /**
-     * 描述文本的补充。
-     *
-     * <p>引擎的 {@code description} 是脚本 {@code str1..str16} 的<b>字符串表编号</b>，
-     * 不是文本本身。本项目的数据包里还没有导出这张表，所以现在只能显示编号——
-     * 这是一个已知缺口：玩家会看到「是否发动效果？(42)」而不是「是否发动「强欲之壶」？」。
-     */
-    private static String descSuffix(int description) {
-        return description == 0 ? "" : "（说明 " + description + "）";
-    }
+
 
     private static void require(boolean ok, String why) {
         if (!ok) {

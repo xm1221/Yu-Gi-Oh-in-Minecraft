@@ -135,22 +135,55 @@ public final class DataPacks {
      * @return 人看的文本；{@code description <= 0} 时返回 null（调用方应显示成「无说明」）
      */
     public static String desc(int description) {
+        String s = descOrNull(description);
+        if (s != null) {
+            return s;
+        }
         if (description <= 0) {
             return null;
         }
-        DataPack pack = get();
-        if (description <= MAX_STRING_ID) {
-            StringsDb strings = pack.strings();
-            String sys = strings == null ? null : strings.sys(description);
-            return (sys == null || sys.isEmpty()) ? "系统文本 " + description : sys;
-        }
-        int code = (description >>> 4) & 0x0FFFFFFF;
-        int n = (description & 0xF) + 1;
-        CardTextDb texts = pack.cardText();
-        String s = texts == null ? null : texts.str(code, n);
-        return (s == null || s.isEmpty()) ? "说明 " + description : s;
+        // 查不到时【故意】显示成这个样子：数据没装会稳定显示「系统文本 N」，
+        // 代码写错（偏移或位运算搞反）则算出个荒唐的编号，两者在界面上长得不一样。
+        return description <= MAX_STRING_ID ? "系统文本 " + description : "说明 " + description;
     }
 
+    /**
+     * 同 {@link #desc(int)}，但查不到时返回 {@code null} 而不是占位文本。
+     *
+     * <p>这是 ygopro {@code DataManager::GetDesc}（data_manager.cpp:267-278）的直译：
+     * {@code strCode <= MAX_STRING_ID} 查系统串，否则拆成「卡号 &lt;&lt; 4 | str 序号」。
+     * 需要「查不到就别显示」的调用方（询问标题）用它，{@link #desc(int)} 只给它加占位。
+     */
+    public static String descOrNull(int strCode) {
+        if (strCode <= 0) {
+            return null;
+        }
+        DataPack pack = get();
+        if (strCode <= MAX_STRING_ID) {
+            StringsDb strings = pack.strings();
+            String sys = strings == null ? null : strings.sys(strCode);
+            return (sys == null || sys.isEmpty()) ? null : sys;
+        }
+        int code = (strCode >>> 4) & 0x0FFFFFFF;
+        int n = (strCode & 0xF) + 1;
+        CardTextDb texts = pack.cardText();
+        String s = texts == null ? null : texts.str(code, n);
+        return (s == null || s.isEmpty()) ? null : s;
+    }
+
+    /**
+     * 系统串原文。
+     *
+     * <p>和 {@link #descOrNull(int)} 的区别：这里<b>不做 {@code strCode <= MAX_STRING_ID}
+     * 的判定</b>，直接按系统串编号查、原样返回（因此可能带 {@code %ls} 占位），
+     * 给需要自己填格式符的调用方用（见 {@code DescText}）。
+     *
+     * @return 原文；编号不在表里返回 {@code null}
+     */
+    public static String sysString(int id) {
+        StringsDb strings = get().strings();
+        return strings == null ? null : strings.sys(id);
+    }
     /**
      * 属性名。
      *
