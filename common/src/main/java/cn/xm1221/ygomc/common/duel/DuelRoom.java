@@ -81,6 +81,18 @@ public final class DuelRoom implements OcgDuel.Observer {
     private final boolean[] boardSent = new boolean[2];
 
     /**
+     * 每个座位「本局收到过第一帧没有」。
+     *
+     * <p>为什么要单独记：对局线程是<b>卡在人身上</b>的——先手那席的询问一到，
+     * {@link PlayerResponder} 就阻塞着等真人作答，这一步没走完
+     * {@code onStepEnd} 根本不会被调到（{@code OcgDuel} 的消息循环是
+     * {@code onMessage → answer（阻塞）→ onStepEnd}）。等的这一席于是连一帧牌桌都收不到，
+     * 「同意后界面不出来」就是这么来的。所以第一帧要在询问诞生时就补出去，
+     * 见 {@link #pushFirstFrame()}。
+     */
+    private final boolean[] firstFrameSent = new boolean[2];
+
+    /**
      * 这一局的会话句柄，用来中止它。
      *
      * <p>没有它的话，「玩家走开导致对局卡住」就只能靠重启服务器解决——
@@ -251,10 +263,40 @@ public final class DuelRoom implements OcgDuel.Observer {
         if (who == null) {
             // AI 席位的询问不发给任何人，也不记「已发过」——
             // 记了会让这一步的牌桌同步对真人那席也哑掉。
+            // 但真人那席可能还一帧都没有：先补上（见 pushFirstFrame）。
+            pushFirstFrame();
             return;
         }
+        firstFrameSent[seat] = true;
         boardSent[seat] = true;
         YgomcNet.sendBoard(who, snapshot(currentDuel, seat), hintAware(seat, question));
+        // 有询问的那一席已经拿到画面了，另一席还在干等——就在这一刻补给他。
+        pushFirstFrame();
+    }
+
+    /**
+     * 把「第一帧」补给还没收到过任何东西的真人席位。
+     *
+     * <p>为什么不能等 {@link #onStepEnd}：对局线程<b>卡在人身上</b>——
+     * 先手那席的询问一到，应答器就阻塞着等真人作答，这一步没走完
+     * {@code onStepEnd} 不会被调到（消息循环是 {@code onMessage → answer（阻塞）→ onStepEnd}）。
+     * 于是等的这一席一帧都收不到：先手那边界面立刻就开了，他那边什么都不出来。
+     * 咩咩 2026-10-05 报的「同意后没有弹出 gui」就是这个。
+     *
+     * <p>选在询问诞生这一刻补，是因为此时内核状态自洽（一次询问的边界，
+     * 与 {@link #onStepEnd} 取快照的时机同类），而且还没有任何阻塞发生。
+     */
+    private void pushFirstFrame() {
+        if (currentDuel == null) {
+            return;
+        }
+        for (int seat = 0; seat < 2; seat++) {
+            if (firstFrameSent[seat] || humans[seat] == null) {
+                continue;
+            }
+            firstFrameSent[seat] = true;
+            YgomcNet.sendBoard(humans[seat], snapshot(currentDuel, seat), null);
+        }
     }
 
     /**

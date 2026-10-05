@@ -52,26 +52,40 @@ public class DuelDiskItem extends Item {
     }
 
     /**
-     * 对着空气右键：以后用于打开「决斗盘界面」（查看当前房间状态 / 取消邀请 / 准备）。
+     * 对着空气右键：
+     * <ul>
+     *   <li><b>自己正有一局</b> → 客户端把对局界面拉回来（决斗盘就是「回到牌桌前」的入口）；</li>
+     *   <li>没有对局 → 和本地贪心对手开一局（单人可测）。</li>
+     * </ul>
+     *
+     * <p>「拉回界面」只能在客户端做：界面是客户端的东西。但客户端不能因此改变
+     * 房间状态（那会造出「客户端以为开了房」的分裂状态），所以客户端那侧只是
+     * 调 {@link DuelDiskHooks}，服务端仍旧是唯一权威。
      *
      * <p>注意返回类型必须是 {@link InteractionResultHolder}，这是
      * {@code Item#use} 在 1.21 的签名（它要把「用完这格物品变成什么」一并带回去）；
      * 写成 {@link InteractionResult} 会编译不过。
      */
-    // TODO(M2): 打开决斗盘 GUI（只读状态面板）；没有进行中的房间时给出提示。
-    //
-    // 目前这一步直接开局：对着空气右键 = 和本地贪心对手打一局（单人可测）。
-    // 之后有了卡组选择界面，这里改成先开面板、由玩家选卡组再开局。
+    // TODO(M2): 打开决斗盘 GUI（只读状态面板）；之后有了卡组选择界面，
+    // 再由面板引导选卡组，而不是直接开局。
     @Override
     public InteractionResultHolder<ItemStack> use(Level level, Player player, InteractionHand hand) {
         ItemStack stack = player.getItemInHand(hand);
         if (level.isClientSide()) {
-            // 客户端只给「挥一下手」的即时反馈。房间的建立与校验一律在服务端，
-            // 客户端这边走一遍状态机只会造出「客户自以为开了房」的分裂状态。
+            // 客户端：手里拿着决斗盘右键空气 = 回到当前对局界面。
+            // 关掉界面之后原本没有任何入口能回来，只能等下一个询问把我拽回去，
+            // 而轮到对手操作时可能很久都没有自己的询问。
+            DuelDiskHooks.reopenScreen();
             return InteractionResultHolder.success(stack);
         }
         if (!(player instanceof net.minecraft.server.level.ServerPlayer server)) {
             return InteractionResultHolder.pass(stack);
+        }
+        if (DuelRoom.isDueling(server)) {
+            // 这一局正开着：界面那侧由客户端自己拉回来（见上面的 isClientSide 分支）。
+            // 这里刻意<b>不</b>报「你已有一局在进行中」——右键一次刷一行字纯属噪音，
+            // 而且这句话会盖住「界面已经回来了」这个真正的结果。
+            return InteractionResultHolder.success(stack);
         }
         String problem = DuelRoom.startFor(server,
                 cn.xm1221.ygomc.common.command.YgomcCommand.loadoutForDuel(),

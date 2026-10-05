@@ -1,5 +1,6 @@
 package cn.xm1221.ygomc.common.client;
 
+import cn.xm1221.ygomc.common.duel.DuelDiskHooks;
 import cn.xm1221.ygomc.common.net.YgomcNet;
 import net.minecraft.client.Minecraft;
 
@@ -21,6 +22,7 @@ import net.minecraft.client.Minecraft;
  *
  * <p>注意「玩家主动关掉界面」和「界面还在」是两回事：玩家关掉之后，
  * 下一个问题会重新开界面。这是有意的——关掉不该让对局永久卡住。
+ * 此外还有一个明确的入口：手持决斗盘右键空气，见 {@link #reopenScreen()}。
  */
 public final class DuelClient {
 
@@ -42,6 +44,30 @@ public final class DuelClient {
 
     public static void init() {
         YgomcNet.registerClient(DuelClient::onUpdate);
+        // 决斗盘右键空气 = 回到对局界面。钩子挂在这里而不是物品类里：
+        // 物品是两端共用的类，直接引用本类会让专用服务器加载到 Minecraft。
+        DuelDiskHooks.installReopen(DuelClient::reopenScreen);
+    }
+
+    /**
+     * 把这一局的界面重新推到玩家眼前。
+     *
+     * <p>玩家自己关掉界面之后，原来唯一的「回来」方式是等下一个询问；
+     * 而轮到对手操作时，可能很久都不会有自己的询问。决斗盘给了个明确入口：
+     * 手持决斗盘对着空气右键。
+     *
+     * @return 有没有一局正开着（没有的话调用方不用响应，交给服务器走原来的开局逻辑）
+     */
+    static boolean reopenScreen() {
+        if (screen == null) {
+            return false;
+        }
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.screen != screen) {
+            mc.setScreen(screen);
+        }
+        everShown = true;
+        return true;
     }
 
     private static void onUpdate(YgomcNet.BoardUpdate update) {
