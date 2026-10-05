@@ -9,7 +9,6 @@ import org.slf4j.LoggerFactory;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -36,9 +35,6 @@ import java.util.List;
 public final class OcgEngine {
 
     private static final Logger LOGGER = LoggerFactory.getLogger("ygomc/engine");
-
-    /** 显式指定脚本根目录：{@code -Dygomc.scripts=<目录>}。 */
-    public static final String SCRIPTS_PROPERTY = "ygomc.scripts";
 
     /** 脚本目录里必须存在的框架脚本。它不存在说明这个目录根本不是脚本根。 */
     private static final String SENTINEL_SCRIPT = "constant.lua";
@@ -88,26 +84,26 @@ public final class OcgEngine {
     }
 
     /**
-     * 按顺序列出可能的脚本根目录。
+     * 脚本根只有一个地方：<b>版本文件夹下的 {@code ygomc/script}</b>（单数，与 ygopro
+     * 自己的目录名一致）。
      *
-     * <p>与数据包同构：显式属性 → 游戏目录下的 {@code ygomc/scripts}
-     * → 从游戏目录逐级向上找 {@code local-data/scripts}（开发用）。
+     * <p>刻意不找别处（咩咩 2026-10-05 定）：
+     * <ul>
+     *   <li>不收复数 {@code ygomc/scripts}——两种命名都认，只会让人把脚本放错地方还以为生效了；</li>
+     *   <li>不认 {@code -Dygomc.scripts} 这类显式属性——那等于给「脚本到底从哪来」留了第二个答案；</li>
+     *   <li>不逐级向上找开发用的 {@code local-data/scripts}——打包版和开发版悄悄走不同目录，
+     *       出问题时两边表现还不一样，正是那四轮排查的成因。</li>
+     * </ul>
      *
-     * <p>不碰文件系统，只拼路径，便于脱离 Minecraft 测试。
+     * <p>目录<b>存在</b>不等于它就是脚本根：还要看里面有没有 {@code constant.lua}
+     * （见 {@link #firstRoot}）。只看名字挑，会选中一个空目录，然后 {@code Ocg.init} 失败。
+     *
+     * <p>仍然返回 {@code List}、仍然不碰文件系统，是为了让错误消息能列出「找过哪里」，
+     * 也便于脱离 Minecraft 断言。
      */
     public static List<Path> scriptCandidates(Path gameDir) {
-        String override = System.getProperty(SCRIPTS_PROPERTY);
-        if (override != null && !override.isBlank()) {
-            return List.of(Path.of(override).toAbsolutePath().normalize());
-        }
-        List<Path> out = new ArrayList<>();
         Path dir = gameDir.toAbsolutePath().normalize();
-        out.add(dir.resolve("ygomc/scripts"));
-        for (int up = 0; up <= 3 && dir != null; up++) {
-            out.add(dir.resolve("local-data/scripts"));
-            dir = dir.getParent();
-        }
-        return out;
+        return List.of(dir.resolve("ygomc/script"));
     }
 
     // ── 内部 ──────────────────────────────────────────────────────────────
@@ -136,26 +132,38 @@ public final class OcgEngine {
     }
 
     private static Path findScriptRoot() {
-        // 只在没有显式指定时才去问 Architectury 要游戏目录。
         // `Platform.getGameFolder()` 在脱离 Minecraft 时会直接抛断言，
         // 而它以前是**无条件**求值的——于是「生产路径能不能离线跑」这件事
         // 被一个本来无关的调用卡死：整条 `OcgDuel.playOut` 在测试里起不来，
         // 那些「点了没反应的静默 bug」就只能靠玩家进游戏一个个撞出来。
-        String override = System.getProperty(SCRIPTS_PROPERTY);
-        boolean explicit = override != null && !override.isBlank();
-        List<Path> candidates = scriptCandidates(explicit ? null : Platform.getGameFolder());
-        for (Path c : candidates) {
-            if (Files.isRegularFile(c.resolve(SENTINEL_SCRIPT))) {
-                return c;
-            }
+        List<Path> candidates = scriptCandidates(Platform.getGameFolder());
+        Path found = firstRoot(candidates);
+        if (found != null) {
+            return found;
         }
         StringBuilder sb = new StringBuilder("找不到 Lua 脚本根目录，已依次查找:");
         for (Path c : candidates) {
             sb.append("\n  - ").append(c);
         }
         sb.append("\n脚本来自 ygopro 客户端（GPLv2，不能随模组分发），请自行准备一份，")
-          .append("目录里应当有 ").append(SENTINEL_SCRIPT).append(" 与 c*.lua；")
-          .append("或用 -D").append(SCRIPTS_PROPERTY).append("=<目录> 指定。");
+          .append("放到版本文件夹下的 ygomc/script，目录里应当有 ")
+          .append(SENTINEL_SCRIPT).append(" 与 c*.lua。");
         throw new IllegalStateException(sb.toString());
+    }
+
+    /**
+     * 从候选里挑第一个<b>真的像脚本根</b>的目录（里面有 {@code constant.lua}）；都不像返回 {@code null}。
+     *
+     * <p>公开是为了能脱离 Minecraft 断言这条规则本身：咩咩 2026-10-05 的四轮排查，
+     * 真因就在这一步——名单里排在前面的 {@code ygomc/scripts} 是个空目录，
+     * 只按名字挑就会选中它，引擎于是永远装配不起来。
+     */
+    public static Path firstRoot(List<Path> candidates) {
+        for (Path c : candidates) {
+            if (Files.isRegularFile(c.resolve(SENTINEL_SCRIPT))) {
+                return c;
+            }
+        }
+        return null;
     }
 }

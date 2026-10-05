@@ -137,6 +137,10 @@ public final class DuelRoom implements OcgDuel.Observer {
         if (ACTIVE.containsKey(player.getUUID())) {
             return "你已有一局在进行中";
         }
+        String engine = engineProblem();
+        if (engine != null) {
+            return engine;
+        }
         DuelRoom room = new DuelRoom();
         room.humans[HUMAN_SEAT] = player;
         room.responders[HUMAN_SEAT] = SeatResponders.humanVsBot(HUMAN_SEAT, greedy(),
@@ -178,6 +182,10 @@ public final class DuelRoom implements OcgDuel.Observer {
         }
         if (ACTIVE.containsKey(second.getUUID())) {
             return second.getName().getString() + " 已有一局在进行中";
+        }
+        String engine = engineProblem();
+        if (engine != null) {
+            return engine;
         }
         DuelRoom room = new DuelRoom();
         room.humans[0] = first;
@@ -483,6 +491,7 @@ public final class DuelRoom implements OcgDuel.Observer {
 
     private void finish(DuelSession session) {
         ended = true;
+        String why = session.failure();
         // 两个人的 UUID 都指向这个房间，撤的时候也要都撤掉，
         // 否则另一个人会被永久记成「正在对局中」。
         for (int seat = 0; seat < 2; seat++) {
@@ -494,7 +503,11 @@ public final class DuelRoom implements OcgDuel.Observer {
             // 用「null 牌桌 + null 问题」收尾：客户端据此关掉界面，
             // 而不是把最后一帧的按钮留在屏幕上让玩家空点。
             YgomcNet.sendBoard(who, null, null);
-            who.displayClientMessage(Component.literal("对局结束"), false);
+            // 失败必须说出来。以前这里只有干巴巴的「对局结束」，而
+            // 「引擎没装配好 -> 对局线程当场抛异常 -> 一局都没跑」在玩家眼里
+            // 就是「什么都没发生」——咩咩为此排查了四轮。
+            // 走 notice：它是排回主线程说的，也会跳过已经断线的人。
+            notice(seat, why == null ? "对局结束" : "对局中断：" + why);
         }
     }
 
@@ -516,5 +529,26 @@ public final class DuelRoom implements OcgDuel.Observer {
         // 交给【他自己那一席】的应答器：双人局里两个人的回信都走这里，
         // 交错了就会把甲的答案填到乙的询问上。
         return room.responders[seat].submit(r);
+    }
+
+    // ── 开局前置检查 ──────────────────────────────────────────────────────
+
+    /**
+     * 开局前的引擎闸。
+     *
+     * <p>为什么非要在开局前拦一道：引擎没装配好时，{@code OcgDuel} 会<b>在对局线程里</b>
+     * 抛「引擎尚未就绪」，而那个异常被 {@link DuelSession} 兜住（它必须兜住任何 Throwable，
+     * 否则状态会永远停在 RUNNING），于是 {@link DuelSessions#start} 照样正常返回。
+     * 结果就是：聊天里打出「对局开始」，实际一局都没跑，两边什么都不会发生。
+     * 咩咩 2026-10-05 为此排查了四轮。
+     *
+     * @return 失败原因；可用返回 {@code null}
+     */
+    private static String engineProblem() {
+        if (cn.xm1221.ygomc.common.ocg.OcgEngine.prepare()) {
+            return null;
+        }
+        return "引擎不可用，无法开局：" + (char) 10
+                + cn.xm1221.ygomc.common.ocg.OcgEngine.problem();
     }
 }
