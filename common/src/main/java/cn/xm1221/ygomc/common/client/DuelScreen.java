@@ -207,6 +207,11 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
      * 点得到的位置对不上。
      */
     private List<DuelTargets.Target> targets() {
+        // 是/否类不摆可点目标：选项上带的位置只用来把那张卡点亮，
+        // 作答走「确认/取消」（咩咩 2026-10-05）。否则点一下那张卡就等于替玩家按了「是」。
+        if (question != null && DuelQuestion.isYesNo(question.type())) {
+            return List.of();
+        }
         if (board == null) {
             return DuelTargets.of(question, field(), mySeat);
         }
@@ -364,6 +369,11 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
         // 常驻的「确认 / 取消」键（右下角）。摆在这里，下面三条路
         // （卡名列表 / 点场地 / 网格按钮）都覆盖得到。
         buildAnswerButtons();
+        if (DuelQuestion.isYesNo(question.type())) {
+            // 是/否类只由右下角那两颗键作答：不再弹窗、也不铺一排「是/否」按钮
+            // （咩咩 2026-10-05）。那张卡已经用黄框点亮，玩家看得到问的是谁。
+            return;
+        }
         // 判据是「有没有落在牌堆上的选项」，不再看询问类型——行动询问同样可能
         // 有好几张墓地的卡可以发动，那同样得给列表（见 pileTargets 的注释）。
         list = question.needsCardList() && !piles.isEmpty()
@@ -678,18 +688,85 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
         int gap = 4;
         int y = height - bh - 4;
         int x = width - bw - 6;
-        if (needsConfirm()) {
-            confirm = Button.builder(Component.literal("确认"), b -> submit())
-                    .bounds(x, y, bw, bh).build();
-            confirm.active = countsOk();
+        // 是/否类（是否发动效果、一般的是/否）：确认＝「是」、取消＝「否」。
+        // 它们没有「勾选」这回事，所以不走 submit()——直接把那一项交出去。
+        int yes = yesOptionIndex();
+        int no = declineOptionIndex();
+        if (yes >= 0 || needsConfirm()) {
+            confirm = Button.builder(Component.literal("确认"), b -> {
+                if (yes >= 0) {
+                    onOption(yes);
+                } else {
+                    submit();
+                }
+            }).bounds(x, y, bw, bh).build();
+            confirm.active = yes >= 0 || countsOk();
             addRenderableWidget(confirm);
             x -= bw + gap;
         }
-        if (cancelIndex() >= 0) {
-            cancelBtn = Button.builder(Component.literal("取消"), b -> cancel())
+        int cancelPick = cancelIndex() >= 0 ? cancelIndex() : no;
+        if (cancelPick >= 0) {
+            final int pick = cancelPick;
+            cancelBtn = Button.builder(Component.literal("取消"), b -> onOption(pick))
                     .bounds(x, y, bw, bh).build();
             addRenderableWidget(cancelBtn);
         }
+    }
+
+    /** 是/否类里「是」那一项的下标（取值 1）；不是是/否类则 -1。 */
+    private int yesOptionIndex() {
+        if (question == null || !DuelQuestion.isYesNo(question.type())) {
+            return -1;
+        }
+        return question.indexOfValueOr(1);
+    }
+
+    /** 是/否类里「否」那一项的下标（取值 0）；不是是/否类则 -1。取消键让它当「拒绝」。 */
+    private int declineOptionIndex() {
+        if (question == null || !DuelQuestion.isYesNo(question.type())) {
+            return -1;
+        }
+        return question.indexOfValueOr(0);
+    }
+
+    /**
+     * 这一格上现在有可做的事吗——有就把那张卡点亮。
+     *
+     * <p>ygo 把可选卡画成高亮框（{@code DrawSelectionLine(..., 0xffffff00)}，
+     * drawing.cpp:583-588），牌堆/区域同理（drawing.cpp:342-357）。咩咩 2026-10-05：
+     * 「同意后让卡/墓地/除外亮起」。判据只问「这一格上有没有选项」，与卡面那个两字标记
+     * （{@link #actionTag}）分开：标记要挑得出两字短名，点亮只看有没有。
+     */
+    private boolean hasOptionAt(int controller, int location, int sequence) {
+        if (question == null || submitted) {
+            return false;
+        }
+        for (DuelQuestion.Option o : question.options()) {
+            if (o.location() == 0) {
+                continue;
+            }
+            if (o.controller() == controller && o.location() == location
+                    && o.sequence() == sequence) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** 这一堆（墓地/除外/额外）上有没有选项。取消项不算——它不是那一堆里的卡。 */
+    private boolean hasPileOption(int seat, int location) {
+        if (question == null || submitted) {
+            return false;
+        }
+        for (DuelQuestion.Option o : question.options()) {
+            if (o.isCancel()) {
+                continue;
+            }
+            if (o.controller() == seat && o.location() == location) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** 菜单每行的宽度（由最长的行动名决定）。 */
@@ -1078,6 +1155,10 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
             return;
         }
         cardFace(g, L, z, r, monster, controller, location, sequence);
+        if (hasOptionAt(controller, location, sequence)) {
+            // 黄框＝这里现在能做点什么（ygo 的高亮色就是 0xffffff00）。
+            outline(g, r, 0xFFFFFF00);
+        }
     }
 
     /**
@@ -1168,6 +1249,10 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
             } else {
                 CardArt.drawBack(g, r.x(), r.y(), r.w(), r.h());
             }
+            // 可选的牌也点亮黄框（咩咩：让卡亮起）。
+            if (!opponent && hasOptionAt(mySeat, FieldCodes.LOCATION_HAND, i)) {
+                outline(g, r, 0xFFFFFF00);
+            }
             // 手牌也一样要标出「现在能做它什么」：召唤、盖放、发动三个动作
             // 全是从手牌出发的，不标的话同样只能靠挨个点一遍才能发现。
             // 对手手牌不标——那些动作不归我们决定。
@@ -1215,6 +1300,10 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
             g.fill(r.x(), r.y(), r.right(), r.bottom(), fill);
         }
         outline(g, r, 0x70FFFFFF);
+        if (hasPileOption(seat, location)) {
+            // 墓地/除外/额外上有可做的事（选一张发动、特殊召唤）就点亮这一堆。
+            outline(g, r, 0xFFFFFF00);
+        }
         if (art != NO_ART) {
             // 内缩 2 像素，别把边框盖掉。
             int ax = r.x() + 2;
@@ -1492,18 +1581,21 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
         if (question == null || submitted || board == null) {
             return "";
         }
+        if (DuelQuestion.isYesNo(question.type())) {
+            return "点「确认」＝同意，点「取消」＝拒绝";
+        }
         if (question.mode() == DuelQuestion.Mode.COUNTERS) {
-            return "左键点卡加指示物　右键确认";
+            return "左键点卡加指示物　右下角「确认」交出";
         }
         if (question.mode() == DuelQuestion.Mode.SUM) {
-            return "左键选卡凑合计值　右键确认";
+            return "左键选卡凑合计值　右下角「确认」交出";
         }
         if (popup != null) {
             return "在弹窗里选";
         }
         if (spatial()) {
             return needsConfirm()
-                    ? "左键选卡/选格　右键确认" + (cancelIndex() >= 0 ? "　右键空地取消" : "")
+                    ? "左键选卡/选格　右下角「确认」" + (cancelIndex() >= 0 ? "　「取消」不选" : "")
                     : "点一下即可";
         }
         return "选择一项";

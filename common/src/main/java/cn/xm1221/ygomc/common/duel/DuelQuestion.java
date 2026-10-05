@@ -212,8 +212,10 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
             case Msg.SelectBattleCmd m -> battle(m);
             case Msg.SelectChain m -> chain(m);
             case Msg.SelectEffectYn m -> yesNo(msg.type(), m.player(), "是否发动效果？",
-                    m.code(), m.description(), locationName(m.location()));
-            case Msg.SelectYesNo m -> yesNo(msg.type(), m.player(), "请选择：", 0, m.description(), null);
+                    m.code(), m.description(), locationName(m.location()),
+                    m.location().controller(), m.location().location(), m.location().sequence());
+            case Msg.SelectYesNo m -> yesNo(msg.type(), m.player(), "请选择：", 0, m.description(),
+                    null, 0, 0, 0);
             case Msg.SelectOption m -> option(m);
             case Msg.SelectCard m -> selectCard(m);
             case Msg.SelectTribute m -> tribute(m);
@@ -247,24 +249,36 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
      * 本轮前面两个「不报错、改动完全没生效」的 bug 都栽在这类地方。
      */
     /**
-     * 这个询问要不要<b>弹窗</b>问——「是否发动效果」这一类。
+     * 这个询问要不要<b>弹窗</b>问。
      *
-     * <p>包含 {@code SELECT_EFFECTYN}（单独一张卡问要不要发动效果）、
-     * {@code SELECT_CHAIN}（连锁时问发动哪个效果）、{@code SELECT_YESNO}（一般的是/否）。
-     * 三者的共同点是「答案是几个固定选项、跟牌桌上的位置无关」——
-     * ygo 对这类询问也是弹对话框，而不是让玩家去场地上点。
+     * <p>现在只剩 {@code SELECT_OPTION}（「要发动哪个效果」）：内核只给了效果编号，
+     * <b>没给位置</b>，界面上无处可点，只能摆出来让玩家选；ygo 对这条也是弹窗
+     * （{@code ClientField::ShowSelectOption}，client_field.cpp:564-617）。
      *
-     * <p>与 {@link #isAction} 的关系：{@code SELECT_CHAIN} 两边都算。
-     * 弹窗优先——它根本不会走到「点卡出菜单」那条路上，所以这个重叠是无害的，
-     * 但必须写清楚，否则以后有人会以为其中一个是死代码。
+     * <p>原先 {@code SELECT_EFFECTYN}（是否发动）/ {@code SELECT_YESNO}（一般的是/否）/
+     * {@code SELECT_CHAIN}（连锁）也走弹窗，咩咩 2026-10-05 否掉了：
+     * 「不要老是弹窗列一大堆选项遮挡场面」——是/否改成场地上的「确认/取消」两颗键，
+     * 连锁改成点亮候选的卡/墓地/除外、由玩家点那张卡作答。ygo 本来就是这么做的：
+     * {@code SELECT_EFFECTYN} 只弹一句询问并把那张卡 {@code is_highlighting}
+     * （duelclient.cpp:1577-1580），{@code SELECT_CHAIN} 把候选设成 {@code is_selectable}
+     * 并提示「请选择要发动的效果」（duelclient.cpp:1806-1835）。
      */
     public static boolean isPopup(int type) {
-        return type == MsgType.SELECT_EFFECTYN || type == MsgType.SELECT_CHAIN
-                || type == MsgType.SELECT_YESNO;
+        return type == MsgType.SELECT_OPTION;
     }
     public static boolean isAction(int type) {
         return type == MsgType.SELECT_IDLECMD || type == MsgType.SELECT_BATTLECMD
                 || type == MsgType.SELECT_CHAIN;
+    }
+
+    /**
+     * 是/否类询问：{@code SELECT_YESNO} 与 {@code SELECT_EFFECTYN}。
+     *
+     * <p>这两类<b>不摆可点目标</b>：它们的选项带着位置（EFFECTYN 要用来点亮那张卡），
+     * 但作答必须走「确认/取消」——点一下卡就发动效果是界面在替玩家做决定。
+     */
+    public static boolean isYesNo(int type) {
+        return type == MsgType.SELECT_YESNO || type == MsgType.SELECT_EFFECTYN;
     }
     private static DuelQuestion idle(Msg.SelectIdleCmd m) {
         List<Option> opts = new ArrayList<>();
@@ -353,13 +367,19 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
      * 直接印给玩家看，界面上就会出现「是否发动效果？（说明 122）」。
      */
     private static DuelQuestion yesNo(int type, int player, String fallback, int cardCode, int desc,
-                                      String locationName) {
+                                      String locationName, int controller, int location, int sequence) {
         String title = type == MsgType.SELECT_EFFECTYN
                 ? DescText.effectyn(desc, cardCode, locationName, fallback)
                 : DescText.yesNo(desc, fallback);
         List<Option> opts = new ArrayList<>();
-        opts.add(Option.ofValue("是", cardCode, 1));
-        opts.add(Option.ofValue("否", cardCode, 0));
+        // 选项带位置：是/否问的是【哪一张卡】，界面靠它把那张卡点亮
+        // （ygo 对 SELECT_EFFECTYN 就是 pcard->is_highlighting = true，
+        // duelclient.cpp:1577-1580）。纯 YESNO 没有卡，位置全是 0，点亮自然不发生。
+        //
+        // 位置<b>不</b>让这一项变成可点的目标：DuelQuestion.isYesNo 会是 true，
+        // 界面因此不摆目标，只画框——点卡作答会变成「点一下就发动效果」。
+        opts.add(Option.ofAction("是", cardCode, 1, controller, location, sequence));
+        opts.add(Option.ofAction("否", cardCode, 0, controller, location, sequence));
         return new DuelQuestion(type, player, Mode.SINGLE, title, opts, 1, 1, false);
     }
 
@@ -1055,6 +1075,16 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
             return cancelable ? indexOfValue(-1) : 0;
         }
         return 0;
+    }
+
+    /** 找出取值等于 {@code v} 的第一个选项；没有就返回 -1（不抛）。界面按它认出「是/否」两项。 */
+    public int indexOfValueOr(int v) {
+        for (int i = 0; i < options.size(); i++) {
+            if (options.get(i).value() == v) {
+                return i;
+            }
+        }
+        return -1;
     }
 
     /** 找出取值等于 {@code v} 的第一个选项；找不到就明确失败，不退回 0。 */
