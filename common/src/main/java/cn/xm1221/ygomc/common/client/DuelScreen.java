@@ -1942,7 +1942,7 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
         int x = menuOriginX(w);
         int y = menuOriginY(menu.size());
         int totalH = menu.size() * rowH - DuelTargets.MENU_ROW_GAP;
-        g.fill(x - 2, y - 2, x + w + 2, y + totalH + 2, 0xF02B3A4A);
+        g.fill(x - 2, y - 2, x + w + 2, y + totalH + 2, 0xFF2B3A4A);
         outline(g, new FieldLayout.Rect(x - 2, y - 2, w + 4, totalH + 4), 0xFF8A9AC0);
         for (int i = 0; i < menu.size(); i++) {
             FieldLayout.Rect r = DuelTargets.menuRow(x, y, w, i);
@@ -2144,7 +2144,7 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
      */
     private void drawStatusBar(GuiGraphics g, FieldLayout L) {
         FieldLayout.Rect s = L.status();
-        g.fill(s.x(), s.y(), s.right(), s.bottom(), 0xE0101A24);
+        g.fill(s.x(), s.y(), s.right(), s.bottom(), 0xFF101A24);
         g.fill(s.x(), s.y(), s.right(), s.y() + 1, 0xFF6E90B4);
 
         // 左下角是我方 LP，正文从徽章右边开始，两者不重叠。
@@ -2367,7 +2367,7 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
             return;
         }
         g.fill(w.x() - 3, w.y() - 3, w.right() + 3, w.bottom() + 3, 0x80000000);
-        g.fill(w.x(), w.y(), w.right(), w.bottom(), 0xF01A2A38);
+        g.fill(w.x(), w.y(), w.right(), w.bottom(), 0xFF1A2A38);
         outline(g, w, 0xFFE0C060);
         int ty = w.y() + POPUP_PAD;
         for (String line : CardTips.wrap(font, questionTitle(), w.w() - 2 * POPUP_PAD)) {
@@ -2613,7 +2613,8 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
         }
         CardList l = b.list();
         FieldLayout.Rect p = l.panel();
-        g.fill(p.x(), p.y(), p.right(), p.bottom(), 0xF0162534);
+        // 同 drawCardList：查看窗要盖住场地，底色必须不透明。
+        g.fill(p.x(), p.y(), p.right(), p.bottom(), 0xFF162534);
         outline(g, p, 0xFF78C8A4);
         g.drawString(font, clip(DuelText.s(DuelText.pileTitleKey(b.seat(), b.location(), mySeat),
                         b.rows().size())
@@ -2678,7 +2679,7 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
             return;
         }
         FieldLayout.Rect p = l.panel();
-        g.fill(p.x(), p.y(), p.right(), p.bottom(), 0xF0162534);
+        g.fill(p.x(), p.y(), p.right(), p.bottom(), 0xFF162534);
         g.fill(p.x(), p.y(), p.right(), p.y() + 1, 0xFF78C8A4);
         g.fill(p.x(), p.bottom() - 1, p.right(), p.bottom(), 0xFF78C8A4);
         g.fill(p.x(), p.y(), p.x() + 1, p.bottom(), 0xFF78C8A4);
