@@ -52,35 +52,22 @@ import java.util.List;
  *       {@code <项目根>/neoforge/run/}（Fabric 侧同理）；</li>
  *   <li>正式环境是用户自己的 {@code .minecraft} 或服务端目录，离项目根更远。</li>
  * </ul>
- * 所以相对路径必须相对于<b>游戏目录</b>来解析，而且要为「开发时数据在项目里、
- * 发布后数据在游戏目录里」这两种完全不同的布局都留位置。
+ * 所以相对路径必须相对于<b>游戏目录</b>来解析。
  *
- * <p>查找顺序见 {@link #candidates}：显式属性 → {@code <游戏目录>/ygomc/datapack}
- * → 从游戏目录逐级向上找 {@code local-data/datapack}（开发用，能命中项目根）。
- * 都没找到时会把<b>找过的每一个位置</b>都列进 {@link #problems()}——
+ * <p>位置只有一个，见 {@link #candidates}：{@code <游戏目录>/ygomc/datapack}。
+ * 刻意不认显式属性、也不逐级向上找开发用的 {@code local-data/datapack}
+ * （咩咩 2026-10-05 定：只认版本文件夹下的 ygomc/）——那种回落会让打包版和
+ * 开发版悄悄走不同目录，出问题时两边表现还不一样。
+ * 找不到时会把<b>找过的每一个位置</b>都列进 {@link #problems()}——
  * 只报「目录不存在」而不说找过哪儿，用户根本不知道该把文件放哪。
  */
 public final class DataPack implements Closeable {
 
-    /**
-     * 显式指定数据包目录的系统属性：{@code -Dygomc.datapack=<目录>}。
-     *
-     * <p>一旦设置就<b>只用它</b>，不再回退到别的位置：用户明确写了路径却写错时，
-     * 应当立刻看到错误，而不是被「恰好还有个默认位置能打开」掩盖过去。
-     */
-    public static final String PROPERTY = "ygomc.datapack";
-
-    /** 正式位置：游戏目录下的 {@code ygomc/datapack}。 */
+    /** 数据包位置：游戏目录（版本文件夹）下的 {@code ygomc/datapack}。 */
     public static final String NESTED_DIR = "ygomc/datapack";
-
-    /** 开发位置：项目根下的 {@code local-data/datapack}（已被 .gitignore 挡掉）。 */
-    public static final String DEV_DIR = "local-data/datapack";
 
     /** 卡背文件名。与 {@code pics.bin} 同级，由 {@code tools/mkpics.py} 一并写出。 */
     public static final String BACK_FILE = "back.jpg";
-
-    /** 从游戏目录向上回溯的层数。开发时游戏目录是 {@code <项目根>/neoforge/run}，需要 2 层。 */
-    private static final int DEV_WALK_UP = 3;
 
 
     private final Path dir;
@@ -132,32 +119,19 @@ public final class DataPack implements Closeable {
     }
 
     /**
-     * 按顺序列出所有可能的数据包位置。
+     * 数据包位置只有一个：游戏目录下的 {@code ygomc/datapack}。
      *
-     * <p>设置过 {@link #PROPERTY} 时只返回那一个位置（原因见该常量的注释）。
+     * <p>仍然返回 {@code List}，是为了让「找不到数据包」的错误消息能列出找过哪里，
+     * 也便于脱离 Minecraft 断言。
      *
      * <p>本方法<b>不碰文件系统</b>，只做路径拼接，因此可以脱离 Minecraft 单独测试。
      * 需要游戏目录的调用方传 {@code dev.architectury.platform.Platform.getGameFolder()}。
      *
-     * @param gameDir 游戏实例目录（开发时是 {@code <项目根>/<平台>/run}）
+     * @param gameDir 游戏实例目录
      */
     public static List<Path> candidates(Path gameDir) {
-        String override = System.getProperty(PROPERTY);
-        if (override != null && !override.isBlank()) {
-            return List.of(Path.of(override).toAbsolutePath().normalize());
-        }
-
-        List<Path> out = new ArrayList<>();
         Path dir = gameDir.toAbsolutePath().normalize();
-        out.add(dir.resolve(NESTED_DIR));
-
-        // 从游戏目录逐级向上找开发用的 local-data/datapack。
-        // 上限是必要的：否则一个放在盘符根附近的实例会让这里一路走到 C:\ 再往上。
-        for (int up = 0; up <= DEV_WALK_UP && dir != null; up++) {
-            out.add(dir.resolve(DEV_DIR));
-            dir = dir.getParent();
-        }
-        return out;
+        return List.of(dir.resolve(NESTED_DIR));
     }
 
     /**
@@ -179,7 +153,7 @@ public final class DataPack implements Closeable {
             sb.append("\n  - ").append(c);
         }
         sb.append("\n请运行 tools/mkdatapack.py 与 tools/mkpics.py 生成，")
-                .append("或用 -D").append(PROPERTY).append("=<目录> 指定。");
+                .append("把产物放到版本文件夹下的 ygomc/datapack。");
         return new DataPack(candidates.get(0), null, null, null, null, List.of(sb.toString()));
     }
 

@@ -6,15 +6,16 @@ import dev.architectury.platform.Platform;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Stream;
 
 /**
  * 卡组文件的查找与加载。
  *
- * <p>与数据包、脚本根同构的定位规则：显式属性 → 游戏目录下的 {@code ygomc/decks}
- * → 从游戏目录逐级向上找 {@code local-data/decks}（开发用）。
+ * <p>与数据包、脚本根同一套定位规则：<b>只有</b>游戏目录（版本文件夹）下的
+ * {@code ygomc/decks}，别处不找（咩咩 2026-10-05 定）。不认 {@code -Dygomc.decks}
+ * 这类显式属性，也不逐级向上找开发用的 {@code local-data/decks}——那种回落会让
+ * 打包版和开发版悄悄走不同目录，出问题时两边表现还不一样。
  *
  * <h2>为什么支持「按名字加载」而不只是「给绝对路径」</h2>
  * 命令的参数是玩家敲进来的，让人去敲一长串绝对路径既不现实也很容易出错。
@@ -23,29 +24,21 @@ import java.util.stream.Stream;
  */
 public final class DeckLibrary {
 
-    /** 显式指定卡组目录：{@code -Dygomc.decks=<目录>}。 */
-    public static final String PROPERTY = "ygomc.decks";
-
     /** 扩展名。ygopro 自己写出来的就是它。 */
     public static final String EXTENSION = ".ydk";
 
     private DeckLibrary() {
     }
 
-    /** 与数据包/脚本根同一套候选规则，见类注释。不碰文件系统。 */
+    /**
+     * 卡组目录只有一个地方：游戏目录（版本文件夹）下的 {@code ygomc/decks}。
+     *
+     * <p>仍然返回 {@code List}，是为了让「找不到卡组目录」的错误消息能列出找过哪里，
+     * 也便于脱离 Minecraft 断言；本方法不碰文件系统。
+     */
     public static List<Path> candidates(Path gameDir) {
-        String override = System.getProperty(PROPERTY);
-        if (override != null && !override.isBlank()) {
-            return List.of(Path.of(override).toAbsolutePath().normalize());
-        }
-        List<Path> out = new ArrayList<>();
         Path dir = gameDir.toAbsolutePath().normalize();
-        out.add(dir.resolve("ygomc/decks"));
-        for (int up = 0; up <= 3 && dir != null; up++) {
-            out.add(dir.resolve("local-data/decks"));
-            dir = dir.getParent();
-        }
-        return out;
+        return List.of(dir.resolve("ygomc/decks"));
     }
 
     /** 第一个真实存在的卡组目录；都不存在时返回 null。 */
