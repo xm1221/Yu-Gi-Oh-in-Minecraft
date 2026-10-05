@@ -1,6 +1,7 @@
 package cn.xm1221.ygomc.common.client;
 
 import cn.xm1221.ygomc.common.duel.DuelBoard;
+import cn.xm1221.ygomc.common.duel.PileBrowse;
 import cn.xm1221.ygomc.common.duel.FieldCodes;
 import cn.xm1221.ygomc.common.duel.DuelQuestion;
 import cn.xm1221.ygomc.common.ocg.msg.MsgType;
@@ -90,6 +91,20 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
 
     /** 卡列表；没有可列的东西时为 null。 */
     private CardList list;
+
+    /** 正在查看的牌堆（自由行动时点牌堆打开）。与选择用的 {@link #list} 不是同一件事。 */
+    private Browse browse;
+
+    /** 本帧画过的牌堆格子：点牌堆查看内容时要知道点的是哪一堆。每帧重填。 */
+    private final List<PileRef> pileRefs = new ArrayList<>();
+
+    /** 画在侧格上的一堆：矩形 + 是谁的 + 哪个区域。 */
+    private record PileRef(FieldLayout.Rect rect, int seat, int location) {
+    }
+
+    /** 查看牌堆内容的窗口状态。 */
+    private record Browse(int location, String title, List<PileBrowse.Row> rows, CardList list) {
+    }
 
     /**
      * 要弹窗问的询问的窗口矩形；没有弹窗时为 null。
@@ -574,6 +589,17 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
             }
             return true;
         }
+        // 正在查看牌堆：右键或点窗口外收起；点窗口内只当「在看」。
+        if (browse != null) {
+            if (button == 1 || !browse.list().panel().contains(mouseX, mouseY)) {
+                browse = null;
+                if (button == 1) {
+                    return true;
+                }
+            } else {
+                return true;
+            }
+        }
         List<DuelTargets.Target> targets = fieldTargets();
         List<Integer> hits = DuelTargets.optionIndicesAt(targets, mouseX, mouseY);
         if (!hits.isEmpty()) {
@@ -595,6 +621,14 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
                 menuX = (int) mouseX;
                 menuY = (int) mouseY;
             }
+            return true;
+        }
+        // 自由行动时点牌堆＝查看那一堆的内容（墓地/除外/额外卡组）。
+        // 只在没有选择列表时这么做：有列表时那一堆正是给你挑的，
+        // 「挑」和「看」同时弹两个窗口只会互相挡。
+        PileRef ref = pileAt(mouseX, mouseY);
+        if (list == null && button == 0 && ref != null && PileBrowse.browsable(ref.location())) {
+            openBrowse(ref);
             return true;
         }
         if (!spatial()) {
@@ -821,6 +855,7 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
         drawPhases(g, L);
         drawOverlay(g, L, mouseX, mouseY);
         drawCardList(g, mouseX, mouseY);
+        drawBrowse(g, mouseX, mouseY);
         drawStatusBar(g, L);
         drawLifeBadges(g, L);
         drawPopup(g);
@@ -860,6 +895,8 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
     }
 
     private void drawField(GuiGraphics g, FieldLayout L) {
+        // 牌堆格子每帧重记：布局随窗口变，旧矩形会点不准。
+        pileRefs.clear();
         // 牌垫：把整张场地垫在一层布面上，而不是让格子直接浮在暗背景上。
         // 格子本身是半透明的，没有垫子就会和世界背景糊在一起，边界看不出来。
         FieldLayout.Rect[] bands = L.bands();
@@ -901,7 +938,8 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
             zone(g, L, at(zones, i), L.col(band, p == me() ? 1 + i : 5 - i), 0x33FFFFFF, 0x66FFFFFF, true,
                     side, FieldCodes.LOCATION_MZONE, i);
         }
-        pile(g, L, "墓地 " + p.graveCount(), L.col(band, mine ? 6 : 0), 0xFF24485C, topCard(p.grave()));
+        pile(g, L, "墓地 " + p.graveCount(), L.col(band, mine ? 6 : 0), 0xFF24485C, topCard(p.grave()),
+                mine ? mySeat : 1 - mySeat, FieldCodes.LOCATION_GRAVE);
     }
 
     private void spellRow(GuiGraphics g, FieldLayout L, DuelBoard.PlayerBoard p,
@@ -911,12 +949,14 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
         }
         List<DuelBoard.Zone> zones = p.spellZones();
         int side = p == me() ? mySeat : 1 - mySeat;
-        pile(g, L, "额外 " + p.extraCount(), L.col(band, p == me() ? 0 : 6), 0xFF24485C, BACK_ART);
+        pile(g, L, "额外 " + p.extraCount(), L.col(band, p == me() ? 0 : 6), 0xFF24485C, BACK_ART,
+                p == me() ? mySeat : 1 - mySeat, FieldCodes.LOCATION_EXTRA);
         for (int i = 0; i < FieldLayout.MAIN_ZONES; i++) {
             zone(g, L, at(zones, i), L.col(band, p == me() ? 1 + i : 5 - i), 0x33DFFFD8, 0x66DFFFD8, false,
                     side, FieldCodes.LOCATION_SZONE, i);
         }
-        pile(g, L, "卡组 " + p.deckCount(), L.col(band, p == me() ? 6 : 0), 0xFF24485C, BACK_ART);
+        pile(g, L, "卡组 " + p.deckCount(), L.col(band, p == me() ? 6 : 0), 0xFF24485C, BACK_ART,
+                p == me() ? mySeat : 1 - mySeat, FieldCodes.LOCATION_DECK);
     }
 
     /**
@@ -961,10 +1001,12 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
         DuelBoard.PlayerBoard me = me();
         DuelBoard.PlayerBoard op = opponent();
         if (op != null) {
-            pile(g, L, "除外 " + op.removedCount(), L.col(band, 0), 0xFF3A4256, topCard(op.removed()));
+            pile(g, L, "除外 " + op.removedCount(), L.col(band, 0), 0xFF3A4256, topCard(op.removed()),
+                    1 - mySeat, FieldCodes.LOCATION_REMOVED);
         }
         if (me != null) {
-            pile(g, L, "除外 " + me.removedCount(), L.col(band, 6), 0xFF3A4256, topCard(me.removed()));
+            pile(g, L, "除外 " + me.removedCount(), L.col(band, 6), 0xFF3A4256, topCard(me.removed()),
+                    mySeat, FieldCodes.LOCATION_REMOVED);
         }
     }
 
@@ -1096,11 +1138,6 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
     /** {@code pile} 的 art 参数：画牌背（看不见正面的堆）。 */
     private static final int BACK_ART = 0;
 
-    /** 侧格（卡组/额外/墓地/场地/除外）：一个框 + 一行字。 */
-    private void pile(GuiGraphics g, FieldLayout L, String label, FieldLayout.Rect r, int fill) {
-        pile(g, L, label, r, fill, NO_ART);
-    }
-
     /**
      * 侧格 + 画在框里的那张牌。
      *
@@ -1108,9 +1145,14 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
      * <b>牌背</b>（本来就不该看见正面，额外卡组连自己也是盖着的），墓地与除外放
      * <b>最顶上那张</b>——ygo 也是把墓地/除外的顶端卡摊在堆上的。
      *
-     * @param art {@link #NO_ART} 不画，{@link #BACK_ART} 画牌背，其余当成卡号画正面
+     * @param art      {@link #NO_ART} 不画，{@link #BACK_ART} 画牌背，其余当成卡号画正面
+     * @param seat     这是谁的堆（查看内容时要按座位取那一份）
+     * @param location {@code FieldCodes.LOCATION_*}
      */
-    private void pile(GuiGraphics g, FieldLayout L, String label, FieldLayout.Rect r, int fill, int art) {
+    private void pile(GuiGraphics g, FieldLayout L, String label, FieldLayout.Rect r, int fill, int art,
+                      int seat, int location) {
+        // 记下来：点它可以查看内容（墓地/除外/额外卡组）。
+        pileRefs.add(new PileRef(r, seat, location));
         if (FieldTextures.slot(g, FieldTextureSpec.ZONE_PILE, r)) {
             // 贴图之上压一层薄色：牌堆之间本来靠颜色区分（除外是灰的、卡组是蓝的…），
             // 只贴图会把这份区别抹掉。压 31% 的色，既留住区别又看得见底纹。
@@ -1229,6 +1271,14 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
         }
         if (board == null) {
             return 0;
+        }
+        // 正在查看的牌堆优先：鼠标停在列表哪一行，右栏就显示那一张。
+        if (browse != null) {
+            int i = browse.list().indexAt(mx, my);
+            if (i >= 0 && i < browse.rows().size()) {
+                PileBrowse.Row row = browse.rows().get(i);
+                return row.known() ? row.code() : 0;
+            }
         }
         FieldLayout L = field();
         for (int side = 0; side < 2; side++) {
@@ -1715,6 +1765,10 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
      */
     @Override
     public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
+        if (browse != null && browse.list().panel().contains(mouseX, mouseY)) {
+            browse.list().scrollBy(scrollY > 0 ? -1 : 1);
+            return true;
+        }
         if (list != null && list.panel().contains(mouseX, mouseY)) {
             list.scrollBy(scrollY > 0 ? -1 : 1);
             return true;
@@ -1735,6 +1789,91 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
      * <p>只画卡名不画卡图：卡图交给右侧信息面板（悬停哪一行就显示哪一张），
      * 这样窄屏上也不会挤成一片看不清的小图。
      */
+    /** 光标下的牌堆格子；不在任何牌堆上返回 null。 */
+    private PileRef pileAt(double mx, double my) {
+        for (PileRef ref : pileRefs) {
+            if (ref.rect().contains(mx, my)) {
+                return ref;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 打开「查看牌堆内容」。
+     *
+     * <p>拿到的就是牌桌里那几张：可见性早在服务端（{@code FieldCodes.visible}）
+     * 定死了——对手的里侧除外、对手的额外卡组到客户端时卡号就是 0。
+     * 这里只把 0 呈现成「盖着的卡」，<b>不再补一层过滤</b>：两边都滤会让人
+     * 误以为边界在界面这一层，而真正的边界在服务端。
+     */
+    private void openBrowse(PileRef ref) {
+        DuelBoard.PlayerBoard pb = board == null ? null : board.playerAt(ref.seat());
+        if (pb == null) {
+            return;
+        }
+        List<DuelBoard.Zone> zones = switch (ref.location()) {
+            case FieldCodes.LOCATION_GRAVE -> pb.grave();
+            case FieldCodes.LOCATION_REMOVED -> pb.removed();
+            case FieldCodes.LOCATION_EXTRA -> pb.extra();
+            default -> List.of();
+        };
+        List<PileBrowse.Row> rows = PileBrowse.rows(zones);
+        browse = new Browse(ref.location(),
+                PileBrowse.title(ref.seat(), ref.location(), rows.size(), mySeat),
+                rows, new CardList(listRect(), rows.size()));
+    }
+
+    /**
+     * 查看牌堆内容：只读的列表窗口。
+     *
+     * <p>与选择用的卡列表刻意长得像（同一套行高、滚动条），但语义不同：
+     * 这里点行不选中任何东西，纯粹是「看」。所以标题带「右键收起」，
+     * 行里也不画勾。
+     */
+    private void drawBrowse(GuiGraphics g, int mouseX, int mouseY) {
+        Browse b = browse;
+        if (b == null) {
+            return;
+        }
+        CardList l = b.list();
+        FieldLayout.Rect p = l.panel();
+        g.fill(p.x(), p.y(), p.right(), p.bottom(), 0xF0162534);
+        outline(g, p, 0xFF78C8A4);
+        g.drawString(font, clip(b.title() + "（右键收起）", p.w() - 8), p.x() + CardList.PAD, p.y() + 3,
+                0xFFFFE060, true);
+        if (b.rows().isEmpty()) {
+            g.drawString(font, clip("  空的", p.w() - 8), p.x() + CardList.PAD,
+                    p.y() + CardList.TITLE_H + 2, 0xFF9AA8B4, true);
+            return;
+        }
+        int hover = l.indexAt(mouseX, mouseY);
+        for (int i = 0; i < b.rows().size(); i++) {
+            FieldLayout.Rect r = l.row(i);
+            if (r == null) {
+                continue;
+            }
+            if (i == hover) {
+                g.fill(r.x(), r.y(), r.right(), r.bottom() - 1, 0xFF3E6E8C);
+            }
+            PileBrowse.Row row = b.rows().get(i);
+            String name = row.known() ? CardTips.name(row.code()) : PileBrowse.unknownLabel();
+            if (name == null || name.isEmpty()) {
+                name = "#" + row.code();
+            }
+            g.drawString(font, clip("  " + name, r.w() - 4), r.x() + 2, r.y() + 1,
+                    row.known() ? 0xFFE8F0F8 : 0xFF9AA8B4, true);
+        }
+        if (l.scrollable()) {
+            FieldLayout.Rect bd = l.body();
+            int trackX = p.right() - CardList.PAD - 3;
+            g.fill(trackX, bd.y(), trackX + 3, bd.bottom(), 0xFF0E1A24);
+            int h = Math.max(6, bd.h() * l.visibleRows() / Math.max(1, l.count()));
+            int y = bd.y() + (bd.h() - h) * l.scroll() / Math.max(1, l.maxScroll());
+            g.fill(trackX, y, trackX + 3, y + h, 0xFF78C8A4);
+        }
+    }
+
     private void drawCardList(GuiGraphics g, int mouseX, int mouseY) {
         CardList l = list;
         if (l == null) {
