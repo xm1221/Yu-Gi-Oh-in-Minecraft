@@ -28,6 +28,13 @@ ordering = "NONE"
 side = "BOTH"
 
 [[dependencies.ygomc]]
+modId = "cloth_config"
+type = "required"
+versionRange = "[15,)"
+ordering = "AFTER"
+side = "BOTH"
+
+[[dependencies.ygomc]]
 modId = "architectury"
 type = "required"
 versionRange = "[13.0.11,)"

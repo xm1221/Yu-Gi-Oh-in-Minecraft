@@ -61,6 +61,13 @@ public final class PlayerResponder implements Responder {
      * 前者正常，后者说明玩家在走开或者界面卡住了。
      */
     private long timeoutAnswers;
+
+    /**
+     * 超时之后该做什么，由外面定：房间接的是「判负」。
+     *
+     * <p>没人接就一直等（见 {@link #fireTimeout}）——无论哪种，都<b>不</b>替他作答。
+     */
+    private volatile Runnable onTimeout;
     private long rejectedSubmits;
 
     /**
@@ -72,7 +79,7 @@ public final class PlayerResponder implements Responder {
      */
     private long chainSkipped;
     /** 待答期间的定时任务，答完/取消后必须撤掉，否则会拿旧题去答新题。 */
-    private java.util.concurrent.ScheduledFuture<?> warnTask;
+    private java.util.concurrent.ScheduledFuture<?> timeoutTask;
     // timeoutTask 随代答一起删掉了：现在只剩提醒这一个定时任务。
     /** 超时后才允许替玩家作答，用来把「提醒」与「代答」分成两段（D22）。 */
     private java.util.concurrent.atomic.AtomicLong timeoutSeq =
@@ -198,13 +205,12 @@ public final class PlayerResponder implements Responder {
             answered = false;
             cancelled = false;
             asked++;
-            // 提醒必须按【这一道题】挂号：拿一个自增序号把它绑到当前问题，
-            // 否则玩家答完 A 题、引擎又问 B 题时，A 的定时器醒来会提醒到 B 上。
-            // 这里【只挂号提醒】，不挂代答——见 onTimeoutWarn。
+            // 超时判负必须按【这一道题】挂号：拿一个自增序号把它绑到当前问题，
+            // 否则玩家答完 A 题、引擎又问 B 题时，A 的定时器醒来会把 B 判负。
             long seq = timeoutSeq.incrementAndGet();
             cancelTimers();
             if (timeoutSeconds > 0) {
-                warnTask = TIMERS.schedule(() -> onTimeoutWarn(seq, question),
+                timeoutTask = TIMERS.schedule(() -> fireTimeout(seq, question),
                         timeoutSeconds, java.util.concurrent.TimeUnit.SECONDS);
             }
             lock.notifyAll();
@@ -245,25 +251,42 @@ public final class PlayerResponder implements Responder {
     }
 
     /**
-     * 超时提醒：只提醒，<b>不代答</b>。
+     * 超时了：判负（咩咩定：超时判负，默认 100 秒，服务端可配）。
      *
-     * <p>咩咩定死的规矩：不许替玩家做决定——从额外卡组特殊召唤之类的都不是强制的，
-     * 只有发动效果的代价、正在处理的效果、必须发动的效果才轮得到「必须做」。
-     * 所以这里提醒完就<b>一直等</b>，等到玩家回来为止。
+     * <p>注意它<b>不回答</b>这一题。不许替玩家做决定这条规矩没变，
+     * 变的只是「他不动」之后怎么收场：原来是提醒完一直等，现在是判他负。
+     * 具体怎么判由 {@code onTimeout} 决定——广播收局、通知两边、让对局线程
+     * 解开，这些只有房间知道（照搬 ygopro {@code SingleDuel::Surrender}：
+     * 它根本不碰内核，是服务端自己造收局消息）。
      *
-     * <p>原来这里是「提醒 + 宽限 + 按默认取向代答」（D22）。代答看着温柔，
-     * 实际是把玩家的局面替他走了一步：他回来只看到棋盘变了，没有任何介入的机会。
-     * 「怕对局永远挂着」这个顾虑由中止阀门解决——{@code /ygomc duel abort}
-     * 随时能把卡住的一局收掉，不需要靠代答去抢回并发名额。
+     * <p>没人接这个回调时（例如纯逻辑自检）退回老行为：只提醒、一直等。
+     * 那样至少不会静默挂住，也绝不会替他作答。
+     *
+     * <p>回调必须按题目序号挂号：玩家答完 A 题、引擎又问 B 题时，
+     * A 的定时器醒来绝不能把 B 判负——只有「这一道题还没被答掉」才算数。
      */
-    private void onTimeoutWarn(long seq, DuelQuestion question) {
+    private void fireTimeout(long seq, DuelQuestion question) {
         synchronized (lock) {
             if (timeoutSeq.get() != seq || answered || pending != question) {
                 return;
             }
         }
-        say("已经等了 " + timeoutSeconds + " 秒还没有收到你的操作；会一直等你。"
-                + "要中止这一局用 /ygomc duel abort。");
+        Runnable action = onTimeout;
+        if (action == null) {
+            say("已经等了 " + timeoutSeconds + " 秒还没有收到你的操作；会一直等你。"
+                    + "要中止这一局用 /ygomc duel abort。");
+            return;
+        }
+        say("已经等了 " + timeoutSeconds + " 秒还没有收到你的操作，本局判负。");
+        action.run();
+    }
+
+    /**
+     * 挂上「超时判负」的执行者。房间在开局时装好（它才知道席位与对手）；
+     * 不装就是「只提醒、一直等」。
+     */
+    public void setOnTimeout(Runnable action) {
+        this.onTimeout = action;
     }
 
     // 代答（onTimeoutAnswer）已经删掉：它违背「不许替玩家做决定」。
@@ -272,9 +295,9 @@ public final class PlayerResponder implements Responder {
 
     /** 撤掉挂着的定时任务。必须在持有 {@code lock} 时调用。 */
     private void cancelTimers() {
-        if (warnTask != null) {
-            warnTask.cancel(false);
-            warnTask = null;
+        if (timeoutTask != null) {
+            timeoutTask.cancel(false);
+            timeoutTask = null;
         }
         // 提醒任务上面已经撤掉了；代答任务不存在了。
     }

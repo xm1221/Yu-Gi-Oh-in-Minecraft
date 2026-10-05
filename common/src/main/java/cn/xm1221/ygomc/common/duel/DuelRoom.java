@@ -130,6 +130,7 @@ public final class DuelRoom implements OcgDuel.Observer {
         room.responders[HUMAN_SEAT] = SeatResponders.humanVsBot(HUMAN_SEAT, greedy(),
                 q -> room.onQuestionOf(HUMAN_SEAT, q), msg -> room.notice(HUMAN_SEAT, msg));
         ACTIVE.put(player.getUUID(), room);
+        room.armTimeout(HUMAN_SEAT);
 
         try {
             room.session = DuelSessions.start("room-" + player.getName().getString(),
@@ -176,6 +177,8 @@ public final class DuelRoom implements OcgDuel.Observer {
         room.responders[1] = pair[1];
         ACTIVE.put(first.getUUID(), room);
         ACTIVE.put(second.getUUID(), room);
+        room.armTimeout(0);
+        room.armTimeout(1);
 
         try {
             room.session = DuelSessions.start(
@@ -344,6 +347,61 @@ public final class DuelRoom implements OcgDuel.Observer {
         return true;
     }
 
+    /** 这一局是否已经有结果。超时判负只能判一次（两席都不动时先到点的那个判负）。 */
+    private volatile boolean ended;
+
+    /** 生效的超时判负秒数，只为报出准确数字，值来自服务端配置。 */
+    private volatile int timeoutSeconds = DuelConfig.DEFAULT_TIMEOUT_SECONDS;
+
+    /**
+     * 给某一席的真人挂上超时判负。
+     *
+     * <p>只给真人席挂：对手那边是 {@code Responder}（AI 或托管），不会挂住等人。
+     * 秒数来自 {@link DuelConfig}（Cloth Config，默认 100 秒）。
+     */
+    private void armTimeout(int seat) {
+        PlayerResponder r = responders[seat];
+        if (r == null) {
+            return;
+        }
+        int seconds = DuelConfig.timeoutSeconds();
+        timeoutSeconds = seconds;
+        r.setTimeouts(seconds, 0);
+        r.setOnTimeout(() -> timeoutLoss(seat));
+    }
+
+    /**
+     * 某一席超时未操作，判他负。
+     *
+     * <p>照搬 ygopro {@code SingleDuel::Surrender}（single_duel.cpp:553-574）：
+     * 它<b>不碰内核</b>——服务端自己造一条 3 字节
+     * {@code MSG_WIN(winner = 1 - 该席, reason = 0)} 发给两边，然后 {@code EndDuel()}。
+     * 内核里也没有「判负」这个 API（Lua 的 {@code Duel.Win} 是给卡片效果用的），
+     * 所以判负本来就该由服务端说出口。
+     *
+     * <p>收摊手段与 {@link #abortFor} 相同：先让阻塞中的应答器解开——
+     * 内核不响应线程中断，只能让它从 {@code answer} 里抛出来，对局线程才有机会
+     * 走完整的收尾路径——再让会话停下。区别只在于「谁赢」由我们自己宣布。
+     */
+    private void timeoutLoss(int seat) {
+        if (ended) {
+            return;
+        }
+        ended = true;
+        int winner = 1 - seat;
+        notice(seat, "你超过 " + timeoutSeconds + " 秒没有操作，本局判负");
+        notice(winner, "对方超时未操作，本局你获胜");
+        for (PlayerResponder r : responders) {
+            if (r != null) {
+                r.cancel();
+            }
+        }
+        DuelSession s = session;
+        if (s != null) {
+            s.abort();
+        }
+    }
+
     /** 是否有玩家正在对局中。 */
     public static boolean isDueling(ServerPlayer player) {
         return ACTIVE.containsKey(player.getUUID());
@@ -382,6 +440,7 @@ public final class DuelRoom implements OcgDuel.Observer {
     }
 
     private void finish(DuelSession session) {
+        ended = true;
         // 两个人的 UUID 都指向这个房间，撤的时候也要都撤掉，
         // 否则另一个人会被永久记成「正在对局中」。
         for (int seat = 0; seat < 2; seat++) {
