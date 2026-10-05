@@ -357,7 +357,7 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
         // 判据是「有没有落在牌堆上的选项」，不再看询问类型——行动询问同样可能
         // 有好几张墓地的卡可以发动，那同样得给列表（见 pileTargets 的注释）。
         list = question.needsCardList() && !piles.isEmpty()
-                ? new CardList(listRect(), piles.size()) : null;
+                ? new CardList(listRect(), piles.size() + (cancelIndex() >= 0 ? 1 : 0)) : null;
         if (list != null || spatial() || actionQuestion()) {
             return;
         }
@@ -586,6 +586,11 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
             int row = list.indexAt(mouseX, mouseY);
             if (row >= 0 && row < piles.size()) {
                 onOption(piles.get(row).optionIndex());
+            } else if (row == piles.size() && cancelIndex() >= 0) {
+                // 列表末尾那一行是「取消」。ygo 的选择窗口左下角也留了一个取消键
+                // （ClientField::ShowSelectCard，client_field.cpp:431-527）：
+                // 从额外卡组特殊召唤不是强制的，不给退路就等于逼玩家挑一只。
+                cancel();
             }
             return true;
         }
@@ -599,6 +604,13 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
             } else {
                 return true;
             }
+        }
+        // 列表开着时的退路：列表内有「取消」行，列表外靠右键。
+        // 没有这一条，点开一堆牌（或点开额外卡组）就只剩「必须挑一张」，
+        // 而很多询问本来就是可选的——不选是合法答案。
+        if (list != null && button == 1 && cancelIndex() >= 0) {
+            cancel();
+            return true;
         }
         List<DuelTargets.Target> targets = fieldTargets();
         List<Integer> hits = DuelTargets.optionIndicesAt(targets, mouseX, mouseY);
@@ -1888,6 +1900,17 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
             g.drawString(font, clip("  " + name, r.w() - 4), r.x() + 2, r.y() + 1,
                     row.known() ? 0xFFE8F0F8 : 0xFF9AA8B4, true);
         }
+        // 末尾的「取消」行：可取消的询问必须留一条不选的路。
+        if (cancelIndex() >= 0 && l.count() > piles.size()) {
+            FieldLayout.Rect cr = l.row(piles.size());
+            if (cr != null) {
+                if (l.indexAt(mouseX, mouseY) == piles.size()) {
+                    g.fill(cr.x(), cr.y(), cr.right(), cr.bottom() - 1, 0xFF3E6E8C);
+                }
+                g.drawString(font, clip("  取消（不选）", cr.w() - 4), cr.x() + 2, cr.y() + 1,
+                        0xFFFFB070, true);
+            }
+        }
         if (l.scrollable()) {
             FieldLayout.Rect bd = l.body();
             int trackX = p.right() - CardList.PAD - 3;
@@ -1923,7 +1946,7 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
                 0xFFFFE060, true);
 
         int hover = l.indexAt(mouseX, mouseY);
-        for (int i = 0; i < l.count(); i++) {
+        for (int i = 0; i < Math.min(l.count(), piles.size()); i++) {
             FieldLayout.Rect r = l.row(i);
             if (r == null) {
                 continue;
@@ -1937,6 +1960,17 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
             String name = cardName(piles.get(i).option());
             g.drawString(font, clip((sel ? "√ " : "  ") + name, r.w() - 4),
                     r.x() + 2, r.y() + 1, sel ? 0xFFFFE060 : 0xFFE8F0F8, true);
+        }
+        // 末尾的「取消」行：可取消的询问必须留一条不选的路。
+        if (cancelIndex() >= 0 && l.count() > piles.size()) {
+            FieldLayout.Rect cr = l.row(piles.size());
+            if (cr != null) {
+                if (l.indexAt(mouseX, mouseY) == piles.size()) {
+                    g.fill(cr.x(), cr.y(), cr.right(), cr.bottom() - 1, 0xFF3E6E8C);
+                }
+                g.drawString(font, clip("  取消（不选）", cr.w() - 4), cr.x() + 2, cr.y() + 1,
+                        0xFFFFB070, true);
+            }
         }
         if (l.scrollable()) {
             FieldLayout.Rect b = l.body();

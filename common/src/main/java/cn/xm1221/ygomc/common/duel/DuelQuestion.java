@@ -395,6 +395,34 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
     public boolean needsCardList() {
         return pileOptionCount() > 0;
     }
+
+    /**
+     * 「取消 / 不选」那一项在 {@link #options()} 里的下标；没有则 -1。
+     *
+     * <p>取消在编码上<b>不是</b>「下标 -1」，而是「某个取值为 -1 的选项的下标」——
+     * {@link #response} 取的是那一项的 {@code value}。抽成方法是为了让界面
+     * （DuelScreen.cancelIndex）与自检用同一条判据，不各写一份。
+     */
+    public int cancelOptionIndex() {
+        for (int i = 0; i < options.size(); i++) {
+            if (options.get(i).isCancel()) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * 卡名列表摆几行：落在牌堆上的选项，可取消时末尾再补一行「取消」。
+     *
+     * <p>这一行不是装饰。牌堆在牌桌上只占一个格子，列表一开，那几张卡就
+     * 只剩「挑一张」这条路了——而「不特殊召唤」「不发动」本来就是合法答案，
+     * 除非它是发动效果的代价、正在处理的效果、或必须发动的效果。
+     * 没有这一行，界面就在替玩家做决定。
+     */
+    public int cardListRows() {
+        return pileOptionCount() + (cancelOptionIndex() >= 0 ? 1 : 0);
+    }
     private static String locationName(Msg.Location l) {
         return l == null ? null : DescText.location(l.location(), l.sequence());
     }
