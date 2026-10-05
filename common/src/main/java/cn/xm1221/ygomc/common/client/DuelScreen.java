@@ -771,6 +771,19 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
         int x = width - bw - 6;
         // 是/否类（是否发动效果、一般的是/否）：确认＝「是」、取消＝「否」。
         // 它们没有「勾选」这回事，所以不走 submit()——直接把那一项交出去。
+        // 「唯一合法答案」的询问（必发连锁、只剩一条路）：只摆「确认」，不摆取消。
+        // 不摆取消不是省事——本来就没有第二个合法答案，摆出来等于给玩家一个内核
+        // 不会接受的应答（必发连锁回「不发动」会吃 MSG_RETRY）。咩咩 2026-10-05：
+        // 必发效果也要问，但界面上只有确认；按确认才把那一项交出去（不是替他选）。
+        int sole = question.soleOption();
+        if (sole >= 0) {
+            final int pick = sole;
+            confirm = Button.builder(Component.literal("确认"), b -> onOption(pick))
+                    .bounds(x, y, bw, bh).build();
+            confirm.active = true;
+            addRenderableWidget(confirm);
+            return;
+        }
         int yes = yesOptionIndex();
         int no = declineOptionIndex();
         if (yes >= 0 || needsConfirm()) {

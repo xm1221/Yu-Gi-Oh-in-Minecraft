@@ -495,6 +495,33 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
     }
 
     /**
+    /**
+     * 「唯一合法答案」那一项的下标；不是唯一合法答案则 -1。
+     *
+     * <p>典型是<b>必发效果</b>的连锁询问：内核只给一个必发项、连「不发动」都不给
+     * （{@code chain} 里 {@code forced} 时不加取消项）。这时候界面上该摆的是
+     * <b>一个确认键</b>——按下去才把那一项交出去（是玩家按的，不是我们替他选的），
+     * 而且<b>不摆取消</b>：本来就没有第二个合法答案，摆出来只会让玩家点到一个内核
+     * 不接受的应答（必发连锁回「不发动」＝ {@code MSG_RETRY}）。
+     *
+     * <p>判据刻意只看「只剩一项、且没有取消项」：有取消项就说明存在第二条合法答案
+     * （哪怕只有一张卡可选，「不选」也是合法的），那就不是唯一合法答案。
+     *
+     * @see #cancelOptionIndex()
+     */
+    public int soleOption() {
+        if (options.size() != 1) {
+            return -1;
+        }
+        return options.get(0).isCancel() ? -1 : 0;
+    }
+
+    /** 这个询问是不是「唯一合法答案」（必发效果、或只剩一条路）。 */
+    public boolean soleChoice() {
+        return soleOption() >= 0;
+    }
+
+    /**
      * 这个询问要不要按「确认」才作答：多选、选址、指示物、排序、合计值。
      *
      * <p>判据原先写在界面里（{@code DuelScreen.needsConfirm}），搬到这里是为了能离线钉住：

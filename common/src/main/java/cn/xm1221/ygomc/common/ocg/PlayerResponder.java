@@ -183,9 +183,10 @@ public final class PlayerResponder implements Responder {
             return fallback.answer(msg);
         }
 
-        // 「明明没有可以发动的效果也要问一遍」——官方客户端在这种时点是【静默回 -1】的
-        // （duelclient.cpp:1836-1844：没有候选项且没开「显示时点」时直接 SendResponse，
-        // 一个像素都不画）。这里照做，并且做成可调项（DuelOptions）。
+        // 「明明没有可以发动的效果也要问一遍」——官方客户端在这种时点默认是【静默回 -1】的
+        // （duelclient.cpp:1836：没有候选项且没开「显示时点」时直接 SendResponse，一个像素
+        // 都不画）。我们【默认反过来】：唯一合法答案也摆给玩家自己按（咩咩 2026-10-05）。
+        // 想省事就在配置里把「唯一合法答案自动应答」打开，那时才是官方那一套。
         if (msg instanceof Msg.SelectChain sc) {
             DuelOptions.ChainAction action =
                     DuelOptions.chainAction(sc.hasForced(), sc.entryList().size());

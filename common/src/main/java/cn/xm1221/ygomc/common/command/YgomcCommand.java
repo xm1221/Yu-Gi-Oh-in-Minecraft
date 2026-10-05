@@ -17,6 +17,7 @@ import cn.xm1221.ygomc.common.ocg.PlayerResponder;
 import java.io.IOException;
 import java.nio.file.Path;
 import cn.xm1221.ygomc.common.ocg.DuelSessions;
+import cn.xm1221.ygomc.common.duel.DuelConfig;
 import cn.xm1221.ygomc.common.ocg.DuelOptions;
 import cn.xm1221.ygomc.common.ocg.FirstChoiceResponder;
 import cn.xm1221.ygomc.common.ocg.Natives;
@@ -65,7 +66,8 @@ public final class YgomcCommand {
      * 没启动过（例如纯客户端）时为 {@code null}，那时 {@code save} 会如实回报
      * 「只在本次运行内有效」，而不是假装写成功。
      */
-    private static volatile java.nio.file.Path optionFile;
+    // 询问策略的落点已经改成 Cloth 配置（config/ygomc.json 里的 DuelConfig.effectPrompt）：
+    // 以前这里是世界目录里的一份 ygomc-duel.properties，同一件事两份配置，谁生效看运气。
 
     // 兜底卡组已挪到 {@link cn.xm1221.ygomc.common.deck.BuiltinDecks}：
     // 原先这里是「同一张卡填满 40 格」，能开局但测试价值几乎为零
@@ -81,11 +83,9 @@ public final class YgomcCommand {
         // 服务器一启动就自动跑一局，给开发/CI 用：dedicated server 上敲命令要占 stdin，
         // 自动化验证不方便，而「启动完就有一行自检结果」可以直接从日志里断言。
         LifecycleEvent.SERVER_STARTED.register(server -> {
-            // 询问策略存在世界目录里：它是【服务器侧】的行为（谁来答那条询问），
-            // 而不是客户端的观感设置，所以跟着存档走、而不是跟着客户端配置目录走。
-            optionFile = server.getWorldPath(net.minecraft.world.level.storage.LevelResource.ROOT)
-                    .resolve("ygomc-duel.properties");
-            LOGGER.info("询问策略：{}", DuelOptions.load(optionFile));
+            // 效果询问策略现在是 Cloth 配置的一项（config/ygomc.json，DuelConfig.effectPrompt）：
+            // 它是【服务器侧】的行为（谁来答那条询问），所以是服务端配置，不是客户端观感设置。
+            LOGGER.info("效果询问策略：{}", DuelConfig.describeEffectPrompt());
             autoDeckAudit();
             autoSelftest();
         });
@@ -117,10 +117,11 @@ public final class YgomcCommand {
                 .then(Commands.literal("option")
                         .executes(ctx -> {
                             ctx.getSource().sendSuccess(() -> Component.literal(
-                                    "当前询问策略：" + DuelOptions.describe()
+                                    "当前效果询问策略：" + DuelConfig.describeEffectPrompt()
                                             + "\n/ygomc option chain <skip|always|never>"
-                                            + "\n    skip=没有可发动的效果就不问（默认）"
-                                            + "　always=每个时点都问　never=一律不问"
+                                            + "\n    always=每个时点都问（默认）"
+                                            + "　skip=只在真有可发动的效果时才问（官方的「可用时点」）"
+                                            + "　never=一律不问（官方的「忽略时点」）"
                                             + "\n/ygomc option autoforced <on|off>"
                                             + "\n    on=必发效果自动发动，不再询问"), false);
                             return 1;
@@ -129,21 +130,24 @@ public final class YgomcCommand {
                                 .then(Commands.argument("mode", StringArgumentType.word())
                                         .executes(ctx -> {
                                             String mode = StringArgumentType.getString(ctx, "mode");
-                                            DuelOptions.ChainPrompt v = switch (mode) {
-                                                case "skip" -> DuelOptions.ChainPrompt.SKIP_EMPTY;
-                                                case "always" -> DuelOptions.ChainPrompt.ALWAYS;
-                                                case "never" -> DuelOptions.ChainPrompt.NEVER;
-                                                default -> null;
-                                            };
-                                            if (v == null) {
-                                                ctx.getSource().sendFailure(Component.literal(
-                                                        "chain 只接受 skip / always / never，收到：" + mode));
-                                                return 0;
+                                            switch (mode) {
+                                                case "always" -> {
+                                                    DuelConfig.setIgnoreChainTiming(false);
+                                                    DuelConfig.setAutoAnswerSoleChain(false);
+                                                }
+                                                case "skip" -> {
+                                                    DuelConfig.setIgnoreChainTiming(false);
+                                                    DuelConfig.setAutoAnswerSoleChain(true);
+                                                }
+                                                case "never" -> DuelConfig.setIgnoreChainTiming(true);
+                                                default -> {
+                                                    ctx.getSource().sendFailure(Component.literal(
+                                                            "chain 只接受 skip / always / never，收到：" + mode));
+                                                    return 0;
+                                                }
                                             }
-                                            DuelOptions.setChainPrompt(v);
-                                            String saved = DuelOptions.save(optionFile);
                                             ctx.getSource().sendSuccess(() -> Component.literal(
-                                                    "已设置：" + DuelOptions.describe() + "　" + saved), false);
+                                                    "已设置：" + DuelConfig.describeEffectPrompt()), false);
                                             return 1;
                                         })))
                         .then(Commands.literal("autoforced")
@@ -160,10 +164,9 @@ public final class YgomcCommand {
                                                         "autoforced 只接受 on / off，收到：" + mode));
                                                 return 0;
                                             }
-                                            DuelOptions.setAutoForcedChain(on);
-                                            String saved = DuelOptions.save(optionFile);
+                                            DuelConfig.setAutoForcedChain(on);
                                             ctx.getSource().sendSuccess(() -> Component.literal(
-                                                    "已设置：" + DuelOptions.describe() + "　" + saved), false);
+                                                    "已设置：" + DuelConfig.describeEffectPrompt()), false);
                                             return 1;
                                         }))))
                 .then(Commands.literal("selftest")
