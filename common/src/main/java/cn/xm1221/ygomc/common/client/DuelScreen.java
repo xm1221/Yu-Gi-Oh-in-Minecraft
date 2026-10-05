@@ -5,7 +5,9 @@ import cn.xm1221.ygomc.common.duel.PileBrowse;
 import cn.xm1221.ygomc.common.duel.FieldCodes;
 import cn.xm1221.ygomc.common.duel.DuelQuestion;
 import cn.xm1221.ygomc.common.ocg.msg.MsgType;
+import cn.xm1221.ygomc.common.duel.ChainNotice;
 import cn.xm1221.ygomc.common.duel.DuelWire;
+import cn.xm1221.ygomc.common.data.DescText;
 import cn.xm1221.ygomc.common.net.YgomcNet;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
@@ -163,15 +165,25 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
     private int menuY;
 
     /**
+     * 内核自己发动的必发效果那条一次性提示；null 表示没有。
+     *
+     * <p>它<b>不是询问</b>：不挡任何按钮，玩家按「确认」只把它收起来，
+     * 不回任何应答给内核（见 {@link ChainNotice}）。
+     */
+    private ChainNotice notice;
+
+    /**
      * @param viewerSeat 服务器给的视角座位（0/1）。<b>不能</b>只从 {@code question} 推：
      *        没有询问的那一帧（对手回合里每一步末尾都会推一帧）{@code question} 是 null，
      *        那时就只能默认 0 号席——后手玩家会看到对手的牌桌，也看不见自己的手牌。
      *        判据在 {@link ClientSeat#of}，可离线断言。
+     * @param notice 随这一帧来的必发提示（{@link ChainNotice}）；没有给 null。
      */
-    public DuelScreen(DuelBoard board, DuelQuestion question, int viewerSeat) {
+    public DuelScreen(DuelBoard board, DuelQuestion question, int viewerSeat, ChainNotice notice) {
         super(Component.literal("决斗"));
         this.board = board;
         this.question = question;
+        this.notice = notice;
         this.mySeat = ClientSeat.of(viewerSeat, question == null ? -1 : question.player());
     }
 
@@ -187,7 +199,7 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
      * {@code DuelQuestion} 与 {@code Option} 都是 record，{@code equals} 是逐字段比较，
      * 所以这里直接用内容相等来判断「还是不是同一题」。
      */
-    public void update(DuelBoard board, DuelQuestion question, int viewerSeat) {
+    public void update(DuelBoard board, DuelQuestion question, int viewerSeat, ChainNotice notice) {
         boolean same = java.util.Objects.equals(this.question, question);
         // 「上次已经作答、现在又来了一个询问」= 引擎重问（MSG_RETRY 或重新推送）。
         // 这时必须把界面重新放开，否则玩家被自己上一次的提交永久锁住：
@@ -207,8 +219,18 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
             extraListOpen = false;
             extraMenuRef = null;
         }
+        // 提示是一次性的：只有带着新提示的帧才覆盖它。不带提示的帧（每一步末尾的
+        // 牌桌刷新）不能把它清掉——那样玩家还没看清就没了。
+        boolean noticeChanged = !java.util.Objects.equals(this.notice, notice);
+        if (notice != null) {
+            this.notice = notice;
+        }
         if (!same || reAsked) {
             submitted = false;
+            rebuild();
+        } else if (noticeChanged) {
+            // 只是来了一条提示：不能走上面那条路——那会把 submitted 放开，
+            // 让已经答完的询问又能再答一次。这里只重摆一次控件。
             rebuild();
         }
     }
@@ -395,6 +417,12 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
         // 那颗「收起」键就得跟着重摆，否则窗口还在、键没了。
         if (browse != null) {
             addBrowseCloseButton();
+        }
+        if (notice != null) {
+            // 提示不属于询问，而且它往往是<b>没有询问</b>的那一帧带来的
+            // （必发自己发动的那一步没有询问）——所以必须在下面那句
+            // 「没有询问就返回」之前摆上，否则永远看不到它。
+            addNoticeConfirmButton();
         }
         confirm = null;
         cancelBtn = null;
@@ -1092,6 +1120,7 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
         drawCardList(g, mouseX, mouseY);
         drawBrowse(g, mouseX, mouseY);
         drawStatusBar(g, L);
+        drawNotice(g, L);
         drawLifeBadges(g, L);
         drawPopup(g);
         // 信息面板最后画：它在场地右侧，是独立的一块，压在最上层最省心。
@@ -2121,6 +2150,56 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
     private void closeBrowse() {
         browse = null;
         rebuild();
+    }
+
+    /**
+     * 摆上必发提示里那颗唯一的「确认」。
+     *
+     * <p>整条提示<b>只有</b>这一颗键：它没有第二个答案，也不需要第二个
+     * （提示不是询问）。位置取 {@link FieldLayout#notice()}，与提示框同一个来源。
+     */
+    private void addNoticeConfirmButton() {
+        FieldLayout.Rect box = field().notice();
+        int bw = Math.max(28, font.width(ChainNotice.CONFIRM_LABEL) + 12);
+        int bh = Math.max(10, box.h() - 4);
+        int bx = box.right() - bw - 3;
+        int by = box.y() + (box.h() - bh) / 2;
+        addRenderableWidget(Button.builder(Component.literal(ChainNotice.CONFIRM_LABEL),
+                b -> dismissNotice()).bounds(bx, by, bw, bh).build());
+    }
+
+    /**
+     * 收掉必发提示。
+     *
+     * <p><b>只清本地这一份</b>：这不是询问，回一个答案给内核会真的影响对局
+     * ——那就成了替玩家做决定。服务端那边也是取走即清空（{@link ChainNotice.Slot}），
+     * 同一条提示不会再来第二次。
+     */
+    private void dismissNotice() {
+        notice = null;
+        rebuild();
+    }
+
+    /**
+     * 画必发提示条：一行字 + 一颗「确认」，压在状态条右端（坐标见
+     * {@link FieldLayout#notice()}）。
+     *
+     * <p>卡名与效果文案都在客户端合成（{@code CardTips} / {@link DescText}）：
+     * 服务端只送卡号与描述号，所以玩家看到的名字跟他自己的语言与数据包一致。
+     */
+    private void drawNotice(GuiGraphics g, FieldLayout L) {
+        ChainNotice n = notice;
+        if (n == null) {
+            return;
+        }
+        FieldLayout.Rect box = L.notice();
+        g.fill(box.x() - 1, box.y() - 1, box.right() + 1, box.bottom() + 1, 0xFFE0B050);
+        g.fill(box.x(), box.y(), box.right(), box.bottom(), 0xF02A1E0C);
+        int bw = Math.max(28, font.width(ChainNotice.CONFIRM_LABEL) + 12);
+        String line = ChainNotice.text(CardTips.name(n.code()),
+                DescText.getDesc(n.description()));
+        g.drawString(font, clip(line, Math.max(8, box.w() - bw - 10)), box.x() + 4,
+                box.y() + (box.h() - 8) / 2, 0xFFFFE0A0, true);
     }
 
     /**

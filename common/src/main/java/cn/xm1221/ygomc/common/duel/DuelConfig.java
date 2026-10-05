@@ -74,11 +74,26 @@ public class DuelConfig implements ConfigData {
          */
         public boolean autoForcedChain = false;
 
+        /**
+         * 内核<b>自己发动</b>的必发效果，要不要在界面上告知玩家。
+         *
+         * <p>默认 true＝提示（咩咩 2026-10-05）。判据在 {@code MandatoryEffect}：连锁的
+         * 发动者是我方、而且这条连锁不是玩家刚回答某个询问（「要不要发动」/
+         * 「发动哪个效果」）造成的——也就是内核没问过就直接发动的那一种。
+         * 玩家自己点了发动的不提示（他知道自己按了什么），对手那边的也不提示。
+         *
+         * <p>提示<b>只告知，不回任何答案</b>：界面上只有一颗「确认」，按下去只把提示
+         * 收起来。ygo 官方客户端在这件事上是什么都不显示的（{@code duelclient.cpp:3010}
+         * 只放音效和连锁动画），所以关掉这个开关只是变回官方表现，不影响对局。
+         */
+        public boolean notifyMandatoryEffects = true;
+
         /** 一行摘要，供命令回执与日志使用。 */
         public String describe() {
             return "唯一合法答案自动应答=" + autoAnswerSoleChain
                     + "　忽略时点=" + ignoreChainTiming
-                    + "　必发自动发动=" + autoForcedChain;
+                    + "　必发自动发动=" + autoForcedChain
+                    + "　必发提示=" + notifyMandatoryEffects;
         }
     }
 
@@ -142,9 +157,17 @@ public class DuelConfig implements ConfigData {
     }
 
     /** 设置「必发自动发动」。 */
+    /** 设置「必发自动发动」。 */
     public static void setAutoForcedChain(boolean v) {
         get().effectPrompt.autoForcedChain = v;
         DuelOptions.setAutoForcedChain(v);
+        saveQuietly();
+    }
+
+    /** 设置「必发提示」：内核自己发动的必发效果要不要在界面上告知。 */
+    public static void setNotifyMandatoryEffects(boolean v) {
+        get().effectPrompt.notifyMandatoryEffects = v;
+        DuelOptions.setNotifyMandatoryEffects(v);
         saveQuietly();
     }
 
@@ -165,6 +188,7 @@ public class DuelConfig implements ConfigData {
         DuelOptions.setAutoAnswerSoleChain(p.autoAnswerSoleChain);
         DuelOptions.setIgnoreChainTiming(p.ignoreChainTiming);
         DuelOptions.setAutoForcedChain(p.autoForcedChain);
+        DuelOptions.setNotifyMandatoryEffects(p.notifyMandatoryEffects);
     }
 
     private static void saveQuietly() {

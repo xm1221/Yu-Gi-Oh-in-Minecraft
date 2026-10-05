@@ -36,8 +36,13 @@ public final class DuelWire {
      * <p>v2 起问题多了两个「求和选择」专用字段（目标合计值与强制卡参数表）。
      * 它们只在 {@code Mode.SUM} 下非零，但必须一起编进来：客户端要拿它们
      * 校验玩家的选择并拼出应答，缺了就只能自己再猜一遍。
+     *
+     * <p>v3 起多了一样东西：必发效果通知（{@link ChainNotice}）。它是牌桌帧尾巴上
+     * 捎带的一份独立小载荷，但统一用一个版本号——装完新 jar 必须重启游戏，
+     * 两端才在同一个版本上（otherwise 老客户端读到新帧会当场解码失败，这是有意的：
+     * 错位解读比直接报错难查得多）。
      */
-    public static final int VERSION = 2;
+    public static final int VERSION = 3;
 
     /**
      * 牌桌快照的格式版本，<b>独立于 {@link #VERSION}</b>。
@@ -111,6 +116,39 @@ public final class DuelWire {
                     sumTarget, forcedParams);
         } catch (IOException e) {
             throw new UncheckedIOException("解码问题失败", e);
+        }
+    }
+
+    // ── 必发通知 ──────────────────────────────────────────────────────────
+
+    /**
+     * 编码「某某的效果发动（必发）」这条一次性通知。
+     *
+     * <p>与问题/应答共用 {@link #VERSION}：它是同一条协议里的东西，两端必须一起换。
+     */
+    public static byte[] encodeNotice(ChainNotice n) {
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream(32);
+        try (DataOutputStream out = new DataOutputStream(bytes)) {
+            out.writeInt(VERSION);
+            out.writeInt(n.code());
+            out.writeInt(n.description());
+            out.writeInt(n.controller());
+            out.writeInt(n.location());
+            out.writeInt(n.sequence());
+            out.writeInt(n.chainCount());
+        } catch (IOException e) {
+            throw new UncheckedIOException("编码必发通知失败", e);
+        }
+        return bytes.toByteArray();
+    }
+
+    public static ChainNotice decodeNotice(byte[] data) {
+        try (DataInputStream in = new DataInputStream(new ByteArrayInputStream(data))) {
+            requireVersion(in.readInt());
+            return new ChainNotice(in.readInt(), in.readInt(), in.readInt(), in.readInt(),
+                    in.readInt(), in.readInt());
+        } catch (IOException e) {
+            throw new UncheckedIOException("解码必发通知失败", e);
         }
     }
 

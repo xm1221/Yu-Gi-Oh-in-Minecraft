@@ -1,5 +1,6 @@
 package cn.xm1221.ygomc.common.net;
 
+import cn.xm1221.ygomc.common.duel.ChainNotice;
 import cn.xm1221.ygomc.common.duel.DuelBoard;
 import cn.xm1221.ygomc.common.duel.DuelQuestion;
 import cn.xm1221.ygomc.common.duel.DuelWire;
@@ -73,8 +74,12 @@ public final class YgomcNet {
     private YgomcNet() {
     }
 
-    /** 一个 S→C 更新：牌桌 + 当前要问的问题（问题可能为 null，表示只是刷新牌桌）。 */
-    public record BoardUpdate(DuelBoard board, DuelQuestion question, int viewerSeat) {
+    /**
+     * 一个 S→C 更新：牌桌 + 当前要问的问题（问题可能为 null，表示只是刷新牌桌）
+     * + 一条一次性的必发通知（没有也是常态，那时为 null）。
+     */
+    public record BoardUpdate(DuelBoard board, DuelQuestion question, int viewerSeat,
+                              ChainNotice notice) {
     }
 
     // ── 注册 ──────────────────────────────────────────────────────────────
@@ -110,11 +115,15 @@ public final class YgomcNet {
             // （对手回合里每一步末尾都会发一帧）就只能默认 0 号席：
             // 后手玩家会看到对手的牌桌，而且看不见自己的手牌。
             int viewerSeat = buf.readInt();
+            // 必发通知：一次性，绝大多数帧没有它（服务端取走就没了）。
+            boolean hasNotice = buf.readBoolean();
+            byte[] notice = hasNotice ? buf.readByteArray() : null;
             // 先解码再排队：解码是纯计算，放在网络线程上没问题，
             // 这样主线程拿到的已经是可用对象，也就把「解析失败」和「界面出错」
             // 这两类故障分到了不同的线程，排查时不会混在一起。
             BoardUpdate update = new BoardUpdate(DuelWire.decodeBoard(board),
-                    hasQuestion ? DuelWire.decodeQuestion(question) : null, viewerSeat);
+                    hasQuestion ? DuelWire.decodeQuestion(question) : null, viewerSeat,
+                    hasNotice ? DuelWire.decodeNotice(notice) : null);
             Consumer<BoardUpdate> h = boardHandler;
             if (h != null) {
                 ctx.queue(() -> h.accept(update));
@@ -127,13 +136,14 @@ public final class YgomcNet {
     /**
      * 推一帧给某个玩家。
      *
+     * @param notice     随这一帧捎带的一次性必发通知（{@link ChainNotice}）；没有给 null。
      * @param viewerSeat 这份牌桌是<b>从谁的视角</b>做的（{@code FieldCodes.attach} 用的那个座位）。
      *        必须每帧都带：客户端不能只从询问里推座位——没有询问的帧里推不出来，
      *        只能默认 0 号席，后手玩家就会看到对手的牌桌、也看不见自己的手牌。
      *        收尾帧（{@code board == null}）里的值没有意义。
      */
     public static void sendBoard(ServerPlayer player, DuelBoard board, DuelQuestion question,
-                                 int viewerSeat) {
+                                 ChainNotice notice, int viewerSeat) {
         RegistryFriendlyByteBuf buf = new RegistryFriendlyByteBuf(
                 io.netty.buffer.Unpooled.buffer(), player.registryAccess());
         buf.writeByteArray(DuelWire.encodeBoard(board));
@@ -142,6 +152,12 @@ public final class YgomcNet {
             buf.writeByteArray(DuelWire.encodeQuestion(question));
         }
         buf.writeInt(viewerSeat);
+        // 通知放在最后：它是一次性的、大多数帧没有。放尾巴上时，
+        // 老客户端读到自己认识的字段就停手，不会把牌桌/询问读错位。
+        buf.writeBoolean(notice != null);
+        if (notice != null) {
+            buf.writeByteArray(DuelWire.encodeNotice(notice));
+        }
         NetworkManager.sendToPlayer(player, BOARD, buf);
     }
 

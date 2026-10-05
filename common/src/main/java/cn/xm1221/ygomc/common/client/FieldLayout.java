@@ -175,6 +175,24 @@ public record FieldLayout(int width, int height,
         return new Rect(0, height() - STATUS_H, fieldW(), STATUS_H);
     }
 
+    /**
+     * 必发效果提示条：「内核自己发动的必发效果」那条一次性告知（见 {@code ChainNotice}）。
+     *
+     * <p>为什么不另开一行：牌桌纵向已经被 7 行加状态条占满（{@link #compute} 里
+     * 显式把这些减掉了），再挤一行就要把卡压小——而这条提示是<b>一次性的</b>，
+     * 玩家按一下「确认」就没了，不值得为它长期缩掉牌桌。所以它压在状态条上，
+     * 取状态条的右端：左端永远是我方 LP 徽章，右端只有在窄屏上才让给对手 LP
+     * （见 {@code DuelScreen.oppLpInStatusWidth}），那几秒的重叠由这里认下。
+     *
+     * <p>压在状态条上也就<b>不压任何一行卡</b>：手牌那一行的操作提示
+     * （「召唤」「发动」）画在卡的下缘，被盖住就没法点着操作了。
+     */
+    public Rect notice() {
+        int w = Math.max(40, Math.min(300, fieldW() - 8));
+        int h = Math.max(12, STATUS_H - 6);
+        return new Rect(Math.max(0, fieldW() - w - 4), height() - STATUS_H + 3, w, h);
+    }
+
     /** 某一行里第 {@code col} 列的格子（0 = 左侧格，1..5 = 区域格，6 = 右侧格）。 */
     public Rect col(Rect band, int col) {
         return new Rect(x0 + col * (cellW + gapX), band.y(), cellW, band.h());

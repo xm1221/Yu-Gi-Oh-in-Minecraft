@@ -7,6 +7,7 @@ import cn.xm1221.ygomc.common.ocg.DeclareCardName;
 import cn.xm1221.ygomc.common.ocg.DuelSession;
 import cn.xm1221.ygomc.common.ocg.DuelSessions;
 import cn.xm1221.ygomc.common.ocg.FirstChoiceResponder;
+import cn.xm1221.ygomc.common.ocg.MandatoryEffect;
 import cn.xm1221.ygomc.common.ocg.OcgDuel;
 import cn.xm1221.ygomc.common.ocg.PlayerResponder;
 import cn.xm1221.ygomc.common.ocg.Responder;
@@ -91,6 +92,28 @@ public final class DuelRoom implements OcgDuel.Observer {
      * 见 {@link #pushFirstFrame()}。
      */
     private final boolean[] firstFrameSent = new boolean[2];
+
+    /**
+     * 每一席「本步内刚回答过一条可能引发自己发动的询问」
+     * （判据见 {@link MandatoryEffect#answerExplains}）。
+     *
+     * <p>写与读都在<b>对局线程</b>上：询问是在 {@code PlayerResponder.answer} 里
+     * 先回调、再阻塞等待的，所以「这一席刚被问了这条询问」与「这一席刚提交了应答」
+     * 在对局线程眼里是同一件事——标记可以在询问诞生时打，不必等应答回来
+     * （等的话就要跨线程传状态，而两者之间只差一次 {@code lock.wait()}）。
+     * 每一步结束（见 {@link #onStepEnd}）清一次：跨步的陈旧标记会把真正的必发吞掉。
+     */
+    private final boolean[] answeredChain = new boolean[2];
+
+    /**
+     * 每一席待发的必发通知。
+     *
+     * <p>用 {@link ChainNotice.Slot} 而不是普通引用：这个槽的语义就是
+     * <b>取走即清空</b>，而「只送一次」正是要的——同一条通知不能每帧重发，
+     * 否则玩家按掉之后下一帧又冒出来。
+     */
+    private final ChainNotice.Slot[] pendingNotice =
+            {new ChainNotice.Slot(), new ChainNotice.Slot()};
 
     /**
      * 这一局的会话句柄，用来中止它。
@@ -239,6 +262,40 @@ public final class DuelRoom implements OcgDuel.Observer {
                 selectHints[seat] = DescText.selectMessage(h.description());
             }
         }
+        if (m instanceof Msg.Chaining c) {
+            onChaining(c);
+        }
+    }
+
+    /**
+     * 内核报「某张卡加入连锁」。
+     *
+     * <p>这里<b>只判断要不要给玩家一条提示，不做任何应答</b>：必发效果是内核
+     * 自己发动的，玩家没有可选的答案，提示只是告知（见 {@link MandatoryEffect}）。
+     *
+     * <p>ygo 的对应实现是 {@code duelclient.cpp:3010} 的 {@code MSG_CHAINING}：
+     * 音效、把那张卡举一下、在连锁链上记一笔，<b>也不问玩家</b>。所以我们这条
+     * 提示是有意加的，抄的是「哪些情形算玩家自己发动」这层判断。
+     *
+     * <p>无论判成什么，这一趟都会把两席的「刚回答过」标记清掉：这条连锁就是那次
+     * 应答的结果（如果有的话），下一次连锁要重新判。不清的话，玩家自己发动一次之后，
+     * 整步里后面真正「内核自己发动」的必发都会被吞掉。
+     */
+    private void onChaining(Msg.Chaining c) {
+        int trigger = c.location().controller();
+        boolean enabled = cn.xm1221.ygomc.common.ocg.DuelOptions.notifyMandatoryEffects();
+        for (int seat = 0; seat < 2; seat++) {
+            boolean caused = answeredChain[seat];
+            answeredChain[seat] = false;
+            if (seat != trigger || humans[seat] == null) {
+                continue;
+            }
+            if (MandatoryEffect.shouldNotify(trigger, seat, caused, enabled)) {
+                pendingNotice[seat].put(new ChainNotice(c.pureCode(), c.description(),
+                        c.location().controller(), c.location().location(),
+                        c.location().sequence(), c.chainCount()));
+            }
+        }
     }
 
     /**
@@ -255,13 +312,21 @@ public final class DuelRoom implements OcgDuel.Observer {
     @Override
     public void onStepEnd(OcgDuel duel) {
         for (int seat = 0; seat < 2; seat++) {
+            // 这一步结束了：本步内「刚回答过」的标记到这里作废（见 onChaining）。
+            answeredChain[seat] = false;
+        }
+        for (int seat = 0; seat < 2; seat++) {
             boolean sent = boardSent[seat];
             boardSent[seat] = false;
-            if (sent || humans[seat] == null) {
-                // 这一席这一步末尾已经连问题一起发过了；AI 席位没有人收。
+            ChainNotice notice = pendingNotice[seat].take();
+            if (humans[seat] == null || (sent && notice == null)) {
+                // 这一席这一步末尾已经连问题一起发过了，而且没有新通知要捎；
+                // AI 席位没有人收。
                 continue;
             }
-            YgomcNet.sendBoard(humans[seat], snapshot(duel, seat), null, seat);
+            // 有通知时，即使这一步已经发过牌桌也要再发一帧：通知是一次性的，
+            // 不能等下一步（对手回合里下一步可能很久之后）。
+            YgomcNet.sendBoard(humans[seat], snapshot(duel, seat), null, notice, seat);
         }
     }
 
@@ -275,9 +340,16 @@ public final class DuelRoom implements OcgDuel.Observer {
             pushFirstFrame();
             return;
         }
+        // 这一席刚被问了这条询问。若它可能是「玩家自己点的发动」，
+        // 就把「本步内刚回答过」记上（见 onChaining：询问诞生与应答提交
+        // 在对局线程眼里是同一件事）。
+        if (MandatoryEffect.answerExplains(question.type())) {
+            answeredChain[seat] = true;
+        }
         firstFrameSent[seat] = true;
         boardSent[seat] = true;
-        YgomcNet.sendBoard(who, snapshot(currentDuel, seat), hintAware(seat, question), seat);
+        YgomcNet.sendBoard(who, snapshot(currentDuel, seat), hintAware(seat, question),
+                pendingNotice[seat].take(), seat);
         // 有询问的那一席已经拿到画面了，另一席还在干等——就在这一刻补给他。
         pushFirstFrame();
     }
@@ -303,7 +375,8 @@ public final class DuelRoom implements OcgDuel.Observer {
                 continue;
             }
             firstFrameSent[seat] = true;
-            YgomcNet.sendBoard(humans[seat], snapshot(currentDuel, seat), null, seat);
+            YgomcNet.sendBoard(humans[seat], snapshot(currentDuel, seat), null,
+                    pendingNotice[seat].take(), seat);
         }
     }
 
@@ -502,8 +575,8 @@ public final class DuelRoom implements OcgDuel.Observer {
             ACTIVE.remove(who.getUUID());
             // 用「null 牌桌 + null 问题」收尾：客户端据此关掉界面，
             // 而不是把最后一帧的按钮留在屏幕上让玩家空点。
-            // 收尾帧里的座位没有意义，随便给一个，保持调用形状一致。
-            YgomcNet.sendBoard(who, null, null, seat);
+            // 收尾帧里的座位与通知都没有意义（客户端收到就关界面）。
+            YgomcNet.sendBoard(who, null, null, null, seat);
             // 失败必须说出来。以前这里只有干巴巴的「对局结束」，而
             // 「引擎没装配好 -> 对局线程当场抛异常 -> 一局都没跑」在玩家眼里
             // 就是「什么都没发生」——咩咩为此排查了四轮。

@@ -83,12 +83,17 @@ public final class DuelClient {
             return;
         }
         if (screen == null) {
-            screen = new DuelScreen(update.board(), update.question(), update.viewerSeat());
+            screen = new DuelScreen(update.board(), update.question(), update.viewerSeat(),
+                    update.notice());
             everShown = false;
         } else {
-            screen.update(update.board(), update.question(), update.viewerSeat());
+            screen.update(update.board(), update.question(), update.viewerSeat(),
+                    update.notice());
         }
-        if (DuelScreenFlow.shouldShow(everShown, update.question() != null, mc.screen == screen)) {
+        // 必发提示也算「值得把界面推到玩家眼前」：那正是「我什么都没按，它自己动了」
+        // 的时刻，界面不在最前面的话玩家根本看不到（它是一次性的）。
+        boolean worthShowing = update.question() != null || update.notice() != null;
+        if (DuelScreenFlow.shouldShow(everShown, worthShowing, mc.screen == screen)) {
             mc.setScreen(screen);
             everShown = true;
         }

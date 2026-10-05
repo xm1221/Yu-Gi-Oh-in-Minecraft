@@ -65,6 +65,14 @@ public final class DuelOptions {
      */
     private static volatile boolean autoForcedChain = false;
 
+    /**
+     * 内核自己发动的必发效果要不要在界面上告知玩家（默认开）。
+     *
+     * <p>与上面三个开关不同，它<b>不改变任何作答</b>：提示没有答案，
+     * 玩家按「确认」只把提示收起来。判定见 {@code MandatoryEffect.shouldNotify}。
+     */
+    private static volatile boolean notifyMandatoryEffects = true;
+
     private DuelOptions() {
     }
 
@@ -114,10 +122,19 @@ public final class DuelOptions {
         autoForcedChain = v;
     }
 
+    public static boolean notifyMandatoryEffects() {
+        return notifyMandatoryEffects;
+    }
+
+    public static void setNotifyMandatoryEffects(boolean v) {
+        notifyMandatoryEffects = v;
+    }
+
     /** 当前策略的一行摘要，供命令回执与日志使用。 */
     public static String describe() {
         return "唯一合法答案自动应答=" + autoAnswerSoleChain
                 + "　忽略时点=" + ignoreChainTiming
-                + "　必发自动发动=" + autoForcedChain;
+                + "　必发自动发动=" + autoForcedChain
+                + "　必发提示=" + notifyMandatoryEffects;
     }
 }
