@@ -81,6 +81,28 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
     private final List<Integer> menu = new ArrayList<>();
 
     /**
+     * 额外卡组那份菜单里的两项：「特殊召唤」与「查看列表」。
+     *
+     * <p>它们<b>不是选项下标</b>，是这个菜单自己的动作，所以给两个具名哨兵。
+     * 直接在别处写 -1/-2 会让「菜单第几项」与「选项第几项」再也分不清——
+     * 而 {@code menu} 里存的正是选项下标，两者混在一起没有任何东西拦得住。
+     */
+    private static final int MENU_SUMMON = -2;
+    private static final int MENU_VIEW_LIST = -1;
+
+    /** 上一份「特殊召唤 / 查看列表」菜单挂在哪一堆上；不是这类菜单时为 null。 */
+    private PileRef extraMenuRef;
+
+    /**
+     * 额外卡组的卡名列表被玩家点开过没有（点的是菜单里的「特殊召唤」）。
+     *
+     * <p>刻意<b>不</b>在 {@link #rebuild()} 里清零：点「特殊召唤」本身就会触发一次
+     * rebuild，在那里重置的话列表刚摊开就又被收走。只在<b>询问换了</b>时重置
+     * （{@link #update} 里），新一轮询问总是从「没点开」开始。
+     */
+    private boolean extraListOpen;
+
+    /**
      * 「不在场上、只能靠列表选」的那些选项——墓地/卡组/额外/除外。
      *
      * <p>这些区域在牌桌上只有一堆，所有卡共用一个格子，所以点它等于同时点中 N 项；
@@ -180,6 +202,10 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
             chosen.clear();
             counterAmounts = question == null ? new int[0] : new int[question.options().size()];
             menu.clear();
+            // 额外卡组的列表是「这一问才点开」的状态，换了一问就回到没点开。
+            // 放在这里而不是 rebuild() 里：点「特殊召唤」也会触发 rebuild。
+            extraListOpen = false;
+            extraMenuRef = null;
         }
         if (!same || reAsked) {
             submitted = false;
@@ -294,16 +320,33 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
      */
     private List<DuelTargets.Target> fieldTargets() {
         List<DuelTargets.Target> all = targets();
-        if (list == null) {
-            return all;
-        }
         List<DuelTargets.Target> out = new ArrayList<>(all.size());
         for (DuelTargets.Target t : all) {
-            if (!isPile(t.option().location())) {
-                out.add(t);
+            // 卡列表开着时，列表负责的那些堆不再走格子——否则点那一堆还是会弹出
+            // 一个看不出区别的菜单，等于留了条错路。
+            if (list != null && isPile(t.option().location())) {
+                continue;
             }
+            // 额外卡组有可特殊召唤的怪兽时，它也不走「点格子弹菜单」这条路：
+            // 它有自己的菜单（特殊召唤 / 查看列表），见 mouseClicked。分流必须在这里做，
+            // 否则点它会被当成普通目标——只有一个选项时还会直接作答，那是替玩家做决定。
+            if (extraPileTarget(t)) {
+                continue;
+            }
+            out.add(t);
         }
         return out;
+    }
+
+    /**
+     * 这个目标是不是「额外卡组那一堆，且现在该走特殊召唤菜单」。
+     *
+     * <p>列表已经摊开（玩家点过「特殊召唤」）就不再算——那时候走的是列表，不是菜单。
+     */
+    private boolean extraPileTarget(DuelTargets.Target t) {
+        return question != null && !extraListOpen
+                && t.option().location() == FieldCodes.LOCATION_EXTRA
+                && question.extraNeedsMenu(t.option().controller());
     }
 
     /**
@@ -348,6 +391,11 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
      */
     private void rebuild() {
         clearWidgets();
+        // 「查看牌堆内容」的窗口不属于询问：界面重建时它可能还开着，
+        // 那颗「收起」键就得跟着重摆，否则窗口还在、键没了。
+        if (browse != null) {
+            addBrowseCloseButton();
+        }
         confirm = null;
         cancelBtn = null;
         popup = null;
@@ -376,7 +424,10 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
         }
         // 判据是「有没有落在牌堆上的选项」，不再看询问类型——行动询问同样可能
         // 有好几张墓地的卡可以发动，那同样得给列表（见 pileTargets 的注释）。
-        list = question.needsCardList() && !piles.isEmpty()
+        // 额外卡组的选项不自动摊开：它要先由「特殊召唤 / 查看列表」菜单入场
+        // （咩咩 2026-10-05）。墓地/除外照旧——那是上一轮验证过的行为。
+        boolean autoList = question.pileOptionCountExcept(FieldCodes.LOCATION_EXTRA) > 0;
+        list = question.needsCardList() && !piles.isEmpty() && (autoList || extraListOpen)
                 ? new CardList(listRect(), piles.size() + (cancelIndex() >= 0 ? 1 : 0)) : null;
         if (list != null || spatial() || actionQuestion()) {
             return;
@@ -573,6 +624,7 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
             // 它现在只用来收起已经打开的窗口。
             if (!menu.isEmpty()) {
                 menu.clear();
+                extraMenuRef = null;
                 return true;
             }
             if (browse != null) {
@@ -596,7 +648,19 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
         if (!menu.isEmpty()) {
             int picked = menuHit(mouseX, mouseY);
             menu.clear();
-            if (picked >= 0) {
+            PileRef extra = extraMenuRef;
+            extraMenuRef = null;
+            if (picked == MENU_VIEW_LIST) {
+                // 「查看列表」＝只读的 browse 窗口（咩咩要的第二项）。
+                if (extra != null) {
+                    openBrowse(extra);
+                }
+            } else if (picked == MENU_SUMMON) {
+                // 「特殊召唤」＝把卡名列表摊开，让玩家自己挑一只。
+                // 这里绝不自作主张挑一张——额外卡组特殊召唤不是强制的（咩咩：不许替玩家做决定）。
+                extraListOpen = true;
+                rebuild();
+            } else if (picked >= 0) {
                 onOption(picked);
             }
             return true;
@@ -647,10 +711,27 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
             }
             return true;
         }
-        // 自由行动时点牌堆＝查看那一堆的内容（墓地/除外/额外卡组）。
+        // 自由行动时点牌堆：额外卡组有可特殊召唤的怪兽就先弹它自己的菜单
+        // （特殊召唤 / 查看列表），其余情况＝查看那一堆的内容（墓地/除外/额外卡组）。
         // 只在没有选择列表时这么做：有列表时那一堆正是给你挑的，
         // 「挑」和「看」同时弹两个窗口只会互相挡。
         PileRef ref = pileAt(mouseX, mouseY);
+        if (button == 0 && ref != null && ref.location() == FieldCodes.LOCATION_EXTRA
+                && question.extraNeedsMenu(ref.seat())) {
+            // 咩咩 2026-10-05：额外卡组有可特殊召唤的怪兽时不要直接把列表摊开，
+            // 先让玩家自己挑「特殊召唤」还是「查看列表」。ygo 那边点额外卡组是直接摆
+            // 卡名列表（ClientField::ShowSelectCard，client_field.cpp:431-527），
+            // 这里多一道菜单是咩咩要的：先把「能做什么」摆出来，再让玩家决定。
+            // 这里刻意不吃 list == null 这个条件：亮了黄框就得点得动，
+            // 否则会出现「这一堆亮着却什么也不发生」。
+            menu.clear();
+            menu.add(MENU_SUMMON);
+            menu.add(MENU_VIEW_LIST);
+            menuX = (int) mouseX;
+            menuY = (int) mouseY;
+            extraMenuRef = ref;
+            return true;
+        }
         if (list == null && button == 0 && ref != null && PileBrowse.browsable(ref.location())) {
             openBrowse(ref);
             return true;
@@ -758,24 +839,34 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
         if (question == null || submitted) {
             return false;
         }
-        for (DuelQuestion.Option o : question.options()) {
-            if (o.isCancel()) {
-                continue;
-            }
-            if (o.controller() == seat && o.location() == location) {
-                return true;
-            }
-        }
-        return false;
+        // 判据在 DuelQuestion 里（可离线断言）。界面与「点得出菜单」共用同一条规则，
+        // 所以亮起来的堆一定点得出东西，不会出现「亮了却点不动」。
+        return question.pileOptionCountAt(seat, location) > 0;
     }
 
     /** 菜单每行的宽度（由最长的行动名决定）。 */
+    /**
+     * 菜单某一行的字。
+     *
+     * <p>{@code menu} 里既可能是选项下标，也可能是这份菜单自己的动作
+     * （{@link #MENU_SUMMON}/{@link #MENU_VIEW_LIST}，负数）。算宽度与画字两处都走这里，
+     * 免得哨兵只在其中一处被认出来——那会画成一条「?」，或者量出一个错的宽度。
+     */
+    private String menuLabel(int idx) {
+        if (idx == MENU_SUMMON) {
+            return "特殊召唤";
+        }
+        if (idx == MENU_VIEW_LIST) {
+            return "查看列表";
+        }
+        List<DuelQuestion.Option> options = question == null ? List.of() : question.options();
+        return idx >= 0 && idx < options.size() ? shortLabel(options.get(idx)) : "?";
+    }
+
     private int menuWidth() {
         int w = 60;
         for (int idx : menu) {
-            if (question != null && idx < question.options().size()) {
-                w = Math.max(w, font.width(shortLabel(question.options().get(idx))) + 14);
-            }
+            w = Math.max(w, font.width(menuLabel(idx)) + 14);
         }
         return Math.min(w, Math.max(60, width - 8));
     }
@@ -1496,12 +1587,11 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
         int totalH = menu.size() * rowH - DuelTargets.MENU_ROW_GAP;
         g.fill(x - 2, y - 2, x + w + 2, y + totalH + 2, 0xF02B3A4A);
         outline(g, new FieldLayout.Rect(x - 2, y - 2, w + 4, totalH + 4), 0xFF8A9AC0);
-        List<DuelQuestion.Option> options = question.options();
         for (int i = 0; i < menu.size(); i++) {
             FieldLayout.Rect r = DuelTargets.menuRow(x, y, w, i);
-            int idx = menu.get(i);
-            String label = idx < options.size() ? shortLabel(options.get(idx)) : "?";
-            g.drawString(font, label, r.x() + 4, r.y() + 3, 0xFFFFFFFF);
+            // 字走 menuLabel：额外卡组那份菜单里有两项是动作（特殊召唤 / 查看列表），
+            // 不是选项下标。
+            g.drawString(font, menuLabel(menu.get(i)), r.x() + 4, r.y() + 3, 0xFFFFFFFF);
         }
     }
 
@@ -1990,6 +2080,20 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
                 PileBrowse.title(ref.seat(), ref.location(), rows.size(), mySeat),
                 rows, new CardList(listRect(), rows.size()));
         // 「收起」键：咩咩说查看额外卡组的列表不好关掉——以前只有右键一条路。
+        addBrowseCloseButton();
+    }
+
+    /**
+     * 把「查看牌堆内容」窗口右上角那颗「收起」键摆上。
+     *
+     * <p>单独抽出来是因为它<b>不属于询问</b>：界面每次 rebuild 都会 clearWidgets，
+     * 而窗口自己还开着，不重摆的话就成了「窗口还在、键没了」——那正是
+     * 「查看额外不好关掉」的一半原因。
+     */
+    private void addBrowseCloseButton() {
+        if (browse == null) {
+            return;
+        }
         FieldLayout.Rect p = browse.list().panel();
         addRenderableWidget(Button.builder(Component.literal("收起"), b -> closeBrowse())
                 .bounds(p.right() - 38, p.y() + 1, 36, 12).build());

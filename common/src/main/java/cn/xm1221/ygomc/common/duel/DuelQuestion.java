@@ -417,6 +417,56 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
     }
 
     /**
+     * 这一堆（{@code controller} 的 {@code location} 区域）上有几个可做的选项：取消项不算。
+     *
+     * <p>与 {@link #pileOptionCount()} 同源，多带一个「哪一堆」。界面靠它决定两件事，
+     * 而且**必须是同一件**：这一堆要不要点亮黄框、点它要不要先弹菜单。
+     * 两处各写一份判据的话，就会出现「亮了却点不动」这种没法解释的状态。
+     */
+    public int pileOptionCountAt(int controller, int location) {
+        int n = 0;
+        for (Option o : options) {
+            if (o.isCancel()) {
+                continue;
+            }
+            if (o.controller() == controller && o.location() == location) {
+                n++;
+            }
+        }
+        return n;
+    }
+
+    /**
+     * 额外卡组这一堆要不要先弹「特殊召唤 / 查看列表」菜单，再进卡名列表。
+     *
+     * <p>只看「这一堆上有没有可做的选项」，不看询问类型。咩咩 2026-10-05：
+     * 额外卡组有可特殊召唤的怪兽时不要弹窗、也不要直接把列表摊开，
+     * 而是把边框亮起来、玩家点它之后从菜单里自己挑。
+     */
+    public boolean extraNeedsMenu(int viewerSeat) {
+        return pileOptionCountAt(viewerSeat, FieldCodes.LOCATION_EXTRA) > 0;
+    }
+
+    /**
+     * 除 {@code location} 这个区域之外，落在牌堆上的选项有几个。
+     *
+     * <p>卡名列表要不要**自动**摊开看这个：额外卡组的选项要等玩家点过
+     * 「特殊召唤」才摊（见 {@link #extraNeedsMenu}），墓地/除外照旧自动摊开。
+     */
+    public int pileOptionCountExcept(int location) {
+        int n = 0;
+        for (Option o : options) {
+            if (o.isCancel() || !o.hasPlace() || !FieldCodes.isPileLocation(o.location())) {
+                continue;
+            }
+            if (o.location() != location) {
+                n++;
+            }
+        }
+        return n;
+    }
+
+    /**
      * 「取消 / 不选」那一项在 {@link #options()} 里的下标；没有则 -1。
      *
      * <p>取消在编码上<b>不是</b>「下标 -1」，而是「某个取值为 -1 的选项的下标」——
