@@ -373,6 +373,28 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
     public DuelQuestion withTitle(String newTitle) {
         return new DuelQuestion(type, player, mode, newTitle, options, min, max, cancelable, sumTarget, forcedParams);
     }
+    /**
+     * 这一问里落在牌堆（墓地/卡组/额外/除外）上的选项有几个。
+     *
+     * <p>牌堆在牌桌上只占一个格子，所以「从墓地选一张」会产生 N 个落在<b>同一矩形</b>
+     * 的目标。这种情况必须走卡名列表（ygo 的 {@code ClientField::ShowSelectCard}，
+     * client_field.cpp:431-527），不能走「点卡弹菜单」——菜单里会摆出一列
+     * 一模一样的「发动效果」，玩家根本分不出点的是哪一张。
+     */
+    public int pileOptionCount() {
+        int n = 0;
+        for (Option o : options) {
+            if (!o.isCancel() && o.hasPlace() && FieldCodes.isPileLocation(o.location())) {
+                n++;
+            }
+        }
+        return n;
+    }
+
+    /** @return 要不要用卡名列表，见 {@link #pileOptionCount()} */
+    public boolean needsCardList() {
+        return pileOptionCount() > 0;
+    }
     private static String locationName(Msg.Location l) {
         return l == null ? null : DescText.location(l.location(), l.sequence());
     }

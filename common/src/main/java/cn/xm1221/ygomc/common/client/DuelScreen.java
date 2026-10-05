@@ -243,11 +243,17 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
      * 只能靠列表选的选项。行动类询问不算——那时候点卡是「做这个行动」，
      * 不是「从一堆里挑一张」，弹列表反而是挡路。
      */
+    /**
+     * 落在牌堆上的可点目标。
+     *
+     * <p><b>行动询问同样要收</b>：以前这里对 {@code SELECT_IDLECMD/SELECT_BATTLECMD/
+     * SELECT_CHAIN} 直接返回空，于是「墓地有好几张卡的效果可以发动」「额外卡组有好几只
+     * 可以特殊召唤」这两件事都落到了「点卡弹菜单」那条路上——而牌堆只占一个格子，
+     * 菜单里就摆出一列一模一样的「发动效果」，玩家没法挑。
+     * ygo 对这类是摆卡名列表（{@code ClientField::ShowSelectCard}），不是点卡菜单。
+     */
     private List<DuelTargets.Target> pileTargets() {
         List<DuelTargets.Target> out = new ArrayList<>();
-        if (question == null || DuelQuestion.isAction(question.type())) {
-            return out;
-        }
         for (DuelTargets.Target t : targets()) {
             if (isPile(t.option().location())) {
                 out.add(t);
@@ -333,7 +339,10 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
         }
         // 卡列表与下面那排按钮是互斥的两条路：有列表就以列表为准。
         piles = pileTargets();
-        list = piles.isEmpty() ? null : new CardList(listRect(), piles.size());
+        // 判据是「有没有落在牌堆上的选项」，不再看询问类型——行动询问同样可能
+        // 有好几张墓地的卡可以发动，那同样得给列表（见 pileTargets 的注释）。
+        list = question.needsCardList() && !piles.isEmpty()
+                ? new CardList(listRect(), piles.size()) : null;
         if (list != null || spatial() || actionQuestion()) {
             return;
         }
@@ -892,7 +901,7 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
             zone(g, L, at(zones, i), L.col(band, p == me() ? 1 + i : 5 - i), 0x33FFFFFF, 0x66FFFFFF, true,
                     side, FieldCodes.LOCATION_MZONE, i);
         }
-        pile(g, L, "墓地 " + p.graveCount(), L.col(band, mine ? 6 : 0), 0xFF24485C);
+        pile(g, L, "墓地 " + p.graveCount(), L.col(band, mine ? 6 : 0), 0xFF24485C, topCard(p.grave()));
     }
 
     private void spellRow(GuiGraphics g, FieldLayout L, DuelBoard.PlayerBoard p,
@@ -902,12 +911,12 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
         }
         List<DuelBoard.Zone> zones = p.spellZones();
         int side = p == me() ? mySeat : 1 - mySeat;
-        pile(g, L, "额外 " + p.extraCount(), L.col(band, p == me() ? 0 : 6), 0xFF24485C);
+        pile(g, L, "额外 " + p.extraCount(), L.col(band, p == me() ? 0 : 6), 0xFF24485C, BACK_ART);
         for (int i = 0; i < FieldLayout.MAIN_ZONES; i++) {
             zone(g, L, at(zones, i), L.col(band, p == me() ? 1 + i : 5 - i), 0x33DFFFD8, 0x66DFFFD8, false,
                     side, FieldCodes.LOCATION_SZONE, i);
         }
-        pile(g, L, "卡组 " + p.deckCount(), L.col(band, p == me() ? 6 : 0), 0xFF24485C);
+        pile(g, L, "卡组 " + p.deckCount(), L.col(band, p == me() ? 6 : 0), 0xFF24485C, BACK_ART);
     }
 
     /**
@@ -952,10 +961,10 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
         DuelBoard.PlayerBoard me = me();
         DuelBoard.PlayerBoard op = opponent();
         if (op != null) {
-            pile(g, L, "除外 " + op.removedCount(), L.col(band, 0), 0xFF3A4256);
+            pile(g, L, "除外 " + op.removedCount(), L.col(band, 0), 0xFF3A4256, topCard(op.removed()));
         }
         if (me != null) {
-            pile(g, L, "除外 " + me.removedCount(), L.col(band, 6), 0xFF3A4256);
+            pile(g, L, "除外 " + me.removedCount(), L.col(band, 6), 0xFF3A4256, topCard(me.removed()));
         }
     }
 
@@ -1081,8 +1090,27 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
         }
     }
 
+    /** {@code pile} 的 art 参数：不画牌面，只留色块。 */
+    private static final int NO_ART = -1;
+
+    /** {@code pile} 的 art 参数：画牌背（看不见正面的堆）。 */
+    private static final int BACK_ART = 0;
+
     /** 侧格（卡组/额外/墓地/场地/除外）：一个框 + 一行字。 */
     private void pile(GuiGraphics g, FieldLayout L, String label, FieldLayout.Rect r, int fill) {
+        pile(g, L, label, r, fill, NO_ART);
+    }
+
+    /**
+     * 侧格 + 画在框里的那张牌。
+     *
+     * <p>牌堆放一张牌上去是为了「一眼看出这是什么堆、里面是什么」：卡组与额外卡组放
+     * <b>牌背</b>（本来就不该看见正面，额外卡组连自己也是盖着的），墓地与除外放
+     * <b>最顶上那张</b>——ygo 也是把墓地/除外的顶端卡摊在堆上的。
+     *
+     * @param art {@link #NO_ART} 不画，{@link #BACK_ART} 画牌背，其余当成卡号画正面
+     */
+    private void pile(GuiGraphics g, FieldLayout L, String label, FieldLayout.Rect r, int fill, int art) {
         if (FieldTextures.slot(g, FieldTextureSpec.ZONE_PILE, r)) {
             // 贴图之上压一层薄色：牌堆之间本来靠颜色区分（除外是灰的、卡组是蓝的…），
             // 只贴图会把这份区别抹掉。压 31% 的色，既留住区别又看得见底纹。
@@ -1091,9 +1119,47 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
             g.fill(r.x(), r.y(), r.right(), r.bottom(), fill);
         }
         outline(g, r, 0x70FFFFFF);
+        if (art != NO_ART) {
+            // 内缩 2 像素，别把边框盖掉。
+            int ax = r.x() + 2;
+            int ay = r.y() + 2;
+            int aw = r.w() - 4;
+            int ah = r.h() - 4;
+            if (aw > 4 && ah > 4) {
+                if (art > 0) {
+                    CardArt.draw(g, art, ax, ay, aw, ah, null);
+                } else {
+                    CardArt.drawBack(g, ax, ay, aw, ah);
+                }
+            }
+        }
         if (r.w() >= 34) {
+            if (art != NO_ART) {
+                // 牌堆上压了牌面之后，白字直接写在卡图上会看不清——先压一条暗底。
+                g.fill(r.x() + 1, r.y() + 1, r.right() - 1, r.y() + 11, 0xC8101820);
+            }
             g.drawString(font, label, r.x() + 2, r.y() + 2, 0xE0FFFFFF);
         }
+    }
+
+    /**
+     * 牌堆最顶上那张，用来画在堆上。
+     *
+     * <p>ocgcore 报墓地/除外时是<b>按放入顺序</b>给的，最后一张就是最上面那张
+     * （ygo 客户端也是拿最后一张摊在堆上）。卡号为 0 表示看不见正面——对手的
+     * 里侧除外、或尚未翻开的里侧除外——那就画牌背。
+     *
+     * @return 卡号、{@link #BACK_ART}（看不见正面）或 {@link #NO_ART}（空堆）
+     */
+    private static int topCard(List<DuelBoard.Zone> pile) {
+        for (int i = pile.size() - 1; i >= 0; i--) {
+            DuelBoard.Zone z = pile.get(i);
+            if (z != null && z.occupied()) {
+                int code = z.code() & 0x7fffffff;
+                return code == 0 ? BACK_ART : code;
+            }
+        }
+        return NO_ART;
     }
 
     private void outline(GuiGraphics g, FieldLayout.Rect r, int color) {
