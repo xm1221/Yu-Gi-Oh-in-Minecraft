@@ -33,6 +33,31 @@ public final class DuelScreenFlow {
      *       一直摆一颗点不动的键，看起来就是咩咩说的「时灵时不灵」。</li>
      * </ul>
      */
+    /**
+     * 必发提示条该留还是该收——这是本条提示的<b>生命周期</b>规则。
+     *
+     * <p>咩咩 2026-10-05 报的「最底下那圈黄框是错误的残留」就是这里：
+     * 原来的写法是 `if (notice != null) this.notice = notice;`，只有<b>来新提示</b>才覆盖，
+     * 于是那条金黄边会一直挂在状态条右端，直到下一次必发为止。
+     *
+     * <p>规则：来了新的就覆盖旧的；没来的话，只要还停在同一问上就留着
+     * （对手回合每一步末尾都会推不带提示的牌桌帧，那些帧不能把它清掉——
+     * 否则玩家还没看清就没了）；一旦<b>换了询问</b>，上一条就已经过期，收掉。
+     *
+     * <p>另外玩家一旦作答（{@code DuelScreen.dispatch}）也立刻收掉：他动了手，
+     * 就是看过了。提示不是询问，收掉它不产生任何应答。
+     *
+     * @param current      现在挂着的那条（可为 null）
+     * @param incoming     这一帧带来的（可为 null）
+     * @param sameQuestion 这一帧是不是还停在同一个询问上
+     */
+    public static <T> T nextNotice(T current, T incoming, boolean sameQuestion) {
+        if (incoming != null) {
+            return incoming;
+        }
+        return sameQuestion ? current : null;
+    }
+
     public static boolean showFinish(boolean askStage, boolean yesNo, boolean ready) {
         return askStage || yesNo || ready;
     }

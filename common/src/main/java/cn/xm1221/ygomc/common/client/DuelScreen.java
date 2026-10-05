@@ -159,6 +159,10 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
 
     /** 状态条正文至少要留出的宽度，否则标题会被截断成没意义的一小截。 */
     private static final int MIN_TEXT_W = 40;
+    /** 右下角「确认 / 取消」两颗键的尺寸。状态条让位的宽度也照这个算，不许两处各写一份。 */
+    private static final int ANSWER_BTN_W = 54;
+    private static final int ANSWER_BTN_H = 18;
+    private static final int ANSWER_BTN_GAP = 4;
 
     /** 右面板卡文滚到第几行。换一张卡就归零。 */
     private int descScroll;
@@ -229,12 +233,11 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
             chainAgreed = false;
             extraMenuRef = null;
         }
-        // 提示是一次性的：只有带着新提示的帧才覆盖它。不带提示的帧（每一步末尾的
-        // 牌桌刷新）不能把它清掉——那样玩家还没看清就没了。
+        // 必发提示的生命周期走 DuelScreenFlow.nextNotice（纯判据，可离线断言）：
+        // 来了新的覆盖旧的；没来的话停在同一问上就留着，换了询问就收掉。
+        // 玩家一作答也会收掉（见 dispatch）。它<b>只影响本地显示</b>，不产生任何应答。
         boolean noticeChanged = !java.util.Objects.equals(this.notice, notice);
-        if (notice != null) {
-            this.notice = notice;
-        }
+        this.notice = DuelScreenFlow.nextNotice(this.notice, notice, same);
         if (!same || reAsked) {
             submitted = false;
             rebuild();
@@ -433,12 +436,9 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
         if (browse != null) {
             addBrowseCloseButton();
         }
-        if (notice != null) {
-            // 提示不属于询问，而且它往往是<b>没有询问</b>的那一帧带来的
-            // （必发自己发动的那一步没有询问）——所以必须在下面那句
-            // 「没有询问就返回」之前摆上，否则永远看不到它。
-            addNoticeConfirmButton();
-        }
+        // 必发提示条不再显示（咩咩 2026-10-05：「这个不用显示」）。服务端仍会把那条
+        // 一次性告知送过来（线格式 v3 的帧尾），客户端只收下不用；要彻底去掉得连服务端
+        // 与线格式一起改，等咩咩发话。
         confirm = null;
         cancelBtn = null;
         popup = null;
@@ -660,8 +660,15 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
      */
     @Override
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
+        // 控件永远在最上层：先把这一下给它们，命中就到此为止。
+        // 以前左键从没先问过控件——底部那两颗「确认 / 取消」的点击会掉进下面那条
+        // 「点空白处＝确认」的路：点「取消」有时变成确认、有时什么都不发生，
+        // 正是咩咩说的「取消键时灵时不灵」。
+        if (super.mouseClicked(mouseX, mouseY, button)) {
+            return true;
+        }
         if (question == null || submitted || board == null) {
-            return super.mouseClicked(mouseX, mouseY, button);
+            return false;
         }
         if (button == 1) {
             // 右键不再当作答（咩咩 2026-10-05）：确认与取消都有独立按键了，
@@ -678,17 +685,13 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
             return true;
         }
         if (button != 0) return super.mouseClicked(mouseX, mouseY, button);
-        // 弹窗是模态的：只由弹窗里的按钮作答，牌桌与阶段条都不响应。
+        // 弹窗是模态的：它自己的按钮已经在上面那句里吃掉了这一下，这里直接到此为止
+        // （再转交一次会绕过下面所有判定）。
         if (popup != null) {
-            return super.mouseClicked(mouseX, mouseY, button);
+            return true;
         }
-        for (int i = 0; i < PHASES.length; i++) {
-            int option = phaseOption(PHASES[i]);
-            if (option >= 0 && field().phase(i).contains(mouseX, mouseY)) {
-                onOption(option);
-                return true;
-            }
-        }
+        // 阶段条的判定在下面（卡名列表 / 查看窗 / 卡片菜单之后）——
+        // 绘制顺序是 阶段条 < 列表/查看窗/菜单，命中顺序必须跟着一样。
         // 菜单开着的时候，点击只作用于菜单
         if (!menu.isEmpty()) {
             int picked = menuHit(mouseX, mouseY);
@@ -733,6 +736,14 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
             }
         }
 
+        // 阶段条在绘制上比场地高、比卡名列表/查看窗/卡片菜单低，命中顺序照同一个次序来。
+        for (int i = 0; i < PHASES.length; i++) {
+            int option = phaseOption(PHASES[i]);
+            if (option >= 0 && field().phase(i).contains(mouseX, mouseY)) {
+                onOption(option);
+                return true;
+            }
+        }
         List<DuelTargets.Target> targets = fieldTargets();
         List<Integer> hits = DuelTargets.optionIndicesAt(targets, mouseX, mouseY);
         if (!hits.isEmpty()) {
@@ -811,9 +822,9 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
         if (question == null || submitted) {
             return;
         }
-        int bw = 54;
-        int bh = 18;
-        int gap = 4;
+        int bw = ANSWER_BTN_W;
+        int bh = ANSWER_BTN_H;
+        int gap = ANSWER_BTN_GAP;
         int y = height - bh - 4;
         int x = width - bw - 6;
         int yes = yesOptionIndex();
@@ -968,6 +979,24 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
         return idx >= 0 && idx < options.size() ? shortLabel(options.get(idx)) : "?";
     }
 
+    /**
+     * 卡片菜单的左上角。
+     *
+     * <p>绘制与命中共用这两个数：各写一套的症状是「看得见但点不中」，
+     * 而那和「这个操作不合法」在界面上长得一模一样。
+     *
+     * <p>横向夹在<b>场地</b>内，不夹到整屏：夹到整屏的话，贴右边缘弹出的菜单会滑到
+     * 右侧信息面板底下，画在面板下面看不见、点也点不到。
+     */
+    private int menuOriginX(int w) {
+        return Math.min(Math.max(2, menuX), Math.max(2, field().fieldW() - w - 2));
+    }
+
+    private int menuOriginY(int rows) {
+        int rowH = DuelTargets.MENU_ROW_H + DuelTargets.MENU_ROW_GAP;
+        return Math.min(Math.max(2, menuY), Math.max(2, height - rows * rowH - 2));
+    }
+
     private int menuWidth() {
         int w = 60;
         for (int idx : menu) {
@@ -979,9 +1008,8 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
     /** 命中菜单第几行；没命中返回 -1。几何与 {@link #drawMenu} 用的是同一份。 */
     private int menuHit(double mx, double my) {
         int w = menuWidth();
-        int x = Math.min(Math.max(2, menuX), Math.max(2, width - w - 2));
-        int y = Math.min(Math.max(2, menuY), Math.max(2, height - menu.size()
-                * (DuelTargets.MENU_ROW_H + DuelTargets.MENU_ROW_GAP) - 2));
+        int x = menuOriginX(w);
+        int y = menuOriginY(menu.size());
         for (int i = 0; i < menu.size(); i++) {
             FieldLayout.Rect r = DuelTargets.menuRow(x, y, w, i);
             if (mx >= r.x() && mx < r.right() && my >= r.y() && my < r.bottom()) {
@@ -1191,11 +1219,16 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
         drawCardList(g, mouseX, mouseY);
         drawBrowse(g, mouseX, mouseY);
         drawStatusBar(g, L);
-        drawNotice(g, L);
         drawLifeBadges(g, L);
-        drawPopup(g);
-        // 信息面板最后画：它在场地右侧，是独立的一块，压在最上层最省心。
+        // 图层顺序（咩咩 2026-10-05 报的「图层问题」）：
+        //   底色 → 场地 → 阶段条 → 场内高亮 → 卡名列表 → 查看窗 → 状态条 → LP 徽章
+        //   → 卡片菜单 → 右侧信息面板 → 弹窗 → 控件（按钮永远最上）。
+        // 修掉的三处：弹窗原来画在信息面板【之前】（面板压掉弹窗右半边）；卡片菜单画得
+        // 比状态条还早（贴着手牌行弹出的菜单被压住，看着像「点了没反应」）；
+        // 必发提示条已按咩咩要求不再显示。
+        drawMenu(g);
         drawInfoPanel(g, L, mouseX, mouseY);
+        drawPopup(g);
         super.render(g, mouseX, mouseY, partialTick);
     }
 
@@ -1592,7 +1625,7 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
                 outline(g, targets.get(hov).rect(), 0xFFFFFFFF);
             }
         }
-        drawMenu(g);
+        // 菜单不在这里画：它要压在状态条与卡列表之上，见 render() 的图层顺序。
     }
 
     /**
@@ -1694,9 +1727,10 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
             return;
         }
         int w = menuWidth();
-        int x = Math.min(Math.max(2, menuX), Math.max(2, width - w - 2));
         int rowH = DuelTargets.MENU_ROW_H + DuelTargets.MENU_ROW_GAP;
-        int y = Math.min(Math.max(2, menuY), Math.max(2, height - menu.size() * rowH - 2));
+        // 坐标与命中判定共用 menuOriginX/Y：各写一套的症状是「看得见但点不中」。
+        int x = menuOriginX(w);
+        int y = menuOriginY(menu.size());
         int totalH = menu.size() * rowH - DuelTargets.MENU_ROW_GAP;
         g.fill(x - 2, y - 2, x + w + 2, y + totalH + 2, 0xF02B3A4A);
         outline(g, new FieldLayout.Rect(x - 2, y - 2, w + 4, totalH + 4), 0xFF8A9AC0);
@@ -1845,10 +1879,13 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
         drawLifeBadge(g, s.x() + 2, s.y() + 4, mineW, me() == null ? 0 : me().lp(),
                 "我方", 0xFF7FD8A0, false);
 
-        // 对手 LP 退到状态条右端时，正文要把那一段让出来，否则会叠在徽章上。
-        int reserve = oppLpInStatusWidth(L);
+        // 正文右侧要让出来的宽度：对手 LP ＋ 必发提示条 ＋ 右下角那两颗键。
+        // 少让任何一项，提示尾巴都会被压在下面——这就是咩咩说的「提示显示不全」的一部分。
+        // 正文右侧要让出来的宽度：对手 LP ＋ 右下角那两颗键（见 statusReserve）。
+        // 少让任何一项，提示尾巴都会被压在下面——这就是咩咩说的「提示显示不全」的一部分。
+        int reserve = statusReserve(L);
         int textX = s.x() + mineW + 8;
-        int w = s.right() - 4 - textX - (reserve == 0 ? 0 : reserve + 6);
+        int w = s.right() - 4 - textX - reserve;
         if (w < MIN_TEXT_W) {
             return;
         }
@@ -1864,9 +1901,15 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
         String counts = questionCounts();
         String tail = counts.isEmpty() ? hint : hint + "　" + counts;
         if (!tail.isEmpty() && ty + 9 <= s.bottom() - 1) {
-            // 提示这一行仍然截断：它只是操作提示，不是内容；
-            // 内容（卡名/卡文/标题）必须完整显示，那才是「信息不全」。
-            g.drawString(font, clip(tail, w), textX, ty, 0xFFA8E8B0);
+            // 提示行也换行，不再 clip：截断的尾巴看着就是「提示不全」。
+            // 行数受状态条高度限制，画不下就到此为止（宁可少一行，也不压到牌上）。
+            for (String line : CardTips.wrap(font, tail, w)) {
+                if (ty + 9 > s.bottom() - 1) {
+                    break;
+                }
+                g.drawString(font, line, textX, ty, 0xFFA8E8B0);
+                ty += 9;
+            }
         }
     }
 
@@ -1905,6 +1948,27 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
      * <p>状态条的正文与这个徽章必须照着同一个数排版，所以只在这里算一次——
      * 两边各算一遍迟早算岔，表现就是文字和徽章叠在一起。
      */
+    /**
+     * 状态条正文右侧被别的东西占掉的宽度（对手 LP ／ 必发提示条 ／ 右下角那两颗键）。
+     *
+     * <p>只在这里算一次，排版与徽章共用同一个数：两边各算一遍迟早算岔，
+     * 表现就是文字和徽章叠在一起。
+     */
+    private int statusReserve(FieldLayout L) {
+        int reserve = 0;
+        int opp = oppLpInStatusWidth(L);
+        if (opp > 0) {
+            reserve += opp + 6;
+        }
+        if (confirm != null) {
+            reserve += ANSWER_BTN_W + ANSWER_BTN_GAP;
+        }
+        if (cancelBtn != null) {
+            reserve += ANSWER_BTN_W + ANSWER_BTN_GAP;
+        }
+        return reserve;
+    }
+
     private int oppLpInStatusWidth(FieldLayout L) {
         if (board == null) {
             return 0;
@@ -2233,13 +2297,7 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
      * （提示不是询问）。位置取 {@link FieldLayout#notice()}，与提示框同一个来源。
      */
     private void addNoticeConfirmButton() {
-        FieldLayout.Rect box = field().notice();
-        int bw = Math.max(28, font.width(ChainNotice.CONFIRM_LABEL) + 12);
-        int bh = Math.max(10, box.h() - 4);
-        int bx = box.right() - bw - 3;
-        int by = box.y() + (box.h() - bh) / 2;
-        addRenderableWidget(Button.builder(Component.literal(ChainNotice.CONFIRM_LABEL),
-                b -> dismissNotice()).bounds(bx, by, bw, bh).build());
+        // 提示条不再显示，这颗键也就不摆了（同上）。
     }
 
     /**
@@ -2262,18 +2320,9 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
      * 服务端只送卡号与描述号，所以玩家看到的名字跟他自己的语言与数据包一致。
      */
     private void drawNotice(GuiGraphics g, FieldLayout L) {
-        ChainNotice n = notice;
-        if (n == null) {
-            return;
-        }
-        FieldLayout.Rect box = L.notice();
-        g.fill(box.x() - 1, box.y() - 1, box.right() + 1, box.bottom() + 1, 0xFFE0B050);
-        g.fill(box.x(), box.y(), box.right(), box.bottom(), 0xF02A1E0C);
-        int bw = Math.max(28, font.width(ChainNotice.CONFIRM_LABEL) + 12);
-        String line = ChainNotice.text(CardTips.name(n.code()),
-                DescText.getDesc(n.description()));
-        g.drawString(font, clip(line, Math.max(8, box.w() - bw - 10)), box.x() + 4,
-                box.y() + (box.h() - 8) / 2, 0xFFFFE0A0, true);
+        // 必发提示条不再显示（咩咩 2026-10-05：「这个不用显示」）。
+        // 那条金黄边就是它——挂在状态条右端，还压掉提示尾巴。
+        // 服务端仍会送（线格式 v3 的帧尾），客户端只收下不用。
     }
 
     /**
