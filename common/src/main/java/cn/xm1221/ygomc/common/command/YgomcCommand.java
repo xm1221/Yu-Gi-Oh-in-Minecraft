@@ -7,6 +7,7 @@ import cn.xm1221.ygomc.common.deck.BuiltinDecks;
 import cn.xm1221.ygomc.common.deck.DeckLibrary;
 import cn.xm1221.ygomc.common.deck.DeckValidator;
 import cn.xm1221.ygomc.common.duel.AutoPlayer;
+import cn.xm1221.ygomc.common.duel.DuelLobby;
 import cn.xm1221.ygomc.common.duel.DuelRoom;
 import cn.xm1221.ygomc.common.duel.DuelSnapshotProbe;
 import cn.xm1221.ygomc.common.duel.DuelStreamRecorder;
@@ -27,6 +28,7 @@ import dev.architectury.event.events.common.CommandRegistrationEvent;
 import dev.architectury.event.events.common.LifecycleEvent;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
+import net.minecraft.commands.arguments.EntityArgument;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
 import org.slf4j.Logger;
@@ -173,6 +175,17 @@ public final class YgomcCommand {
                         .executes(ctx -> launch(ctx.getSource(), null, false))
                         .then(Commands.literal("abort")
                                 .executes(ctx -> abort(ctx.getSource())))
+                        .then(Commands.literal("deck")
+                                .executes(ctx -> versusDeck(ctx.getSource(), null))
+                                .then(Commands.argument("name", StringArgumentType.greedyString())
+                                        .executes(ctx -> versusDeck(ctx.getSource(),
+                                                StringArgumentType.getString(ctx, "name")))))
+                        .then(Commands.literal("invite")
+                                .then(Commands.argument("player", EntityArgument.player())
+                                        .executes(ctx -> versusInvite(ctx.getSource(),
+                                                EntityArgument.getPlayer(ctx, "player")))))
+                        .then(Commands.literal("accept")
+                                .executes(ctx -> versusAccept(ctx.getSource())))
                         .then(Commands.argument("name", StringArgumentType.greedyString())
                                 .executes(ctx -> launch(ctx.getSource(),
                                         StringArgumentType.getString(ctx, "name"), false)))));
@@ -199,6 +212,87 @@ public final class YgomcCommand {
         return 1;
     }
 
+    // ── 双人自选卡组（先以指令形式，咩咩要的是「能测」） ─────────────────────
+
+    /**
+     * 双人局：给自己选一副卡组。
+     *
+     * <p>刻意<b>不</b>在这里开局：两人各自选，谁先选完都不该开局。
+     * 「选」和「开始」分成两条命令，是为了能分别测——选错了能重选，
+     * 开局失败也不会把选择一起吃掉。
+     */
+    private static int versusDeck(CommandSourceStack source, String deckName) {
+        ServerPlayer player = source.getPlayer();
+        if (player == null) {
+            reply(source, "这条命令要由玩家执行");
+            return 0;
+        }
+        Resolved res = resolveDeck(source, deckName);
+        if (res == null) {
+            return 0;
+        }
+        DuelLobby.chooseDeck(player, toLoadout(res.deck()), res.label(), res.warnings());
+        return 1;
+    }
+
+    /** 双人局：邀请某位玩家。 */
+    private static int versusInvite(CommandSourceStack source, ServerPlayer target) {
+        ServerPlayer player = source.getPlayer();
+        if (player == null) {
+            reply(source, "这条命令要由玩家执行");
+            return 0;
+        }
+        reply(source, DuelLobby.invite(player, target));
+        return 1;
+    }
+
+    /** 双人局：接受邀请；两副卡组都在就开局。 */
+    private static int versusAccept(CommandSourceStack source) {
+        ServerPlayer player = source.getPlayer();
+        if (player == null) {
+            reply(source, "这条命令要由玩家执行");
+            return 0;
+        }
+        String result = DuelLobby.accept(player);
+        reply(source, result);
+        return result.startsWith("对局开始") ? 1 : 0;
+    }
+
+    /**
+     * 读一副卡组并校验；失败时已经回过话，返回 {@code null}。
+     *
+     * <p>有错就不开：内核收到未知卡号不会报错，只会把它当成一张全零属性的空卡，
+     * 之后的对局行为无从预期——那种「能跑但结果没意义」比直接拒绝更糟。
+     * 抽出来是因为「开局」与「双人选卡组」两条路都要过同一道校验，
+     * 各写一遍迟早会分叉（一边放宽了另一边没放宽）。
+     */
+    private static Resolved resolveDeck(CommandSourceStack source, String deckName) {
+        DeckData deck;
+        String label;
+        if (deckName == null) {
+            deck = BuiltinDecks.testPool();
+            label = BuiltinDecks.TEST_POOL_LABEL;
+        } else {
+            try {
+                deck = DeckLibrary.load(deckName);
+                label = deckName;
+            } catch (Exception e) {
+                reply(source, "读取卡组失败：" + e.getMessage());
+                return null;
+            }
+        }
+        DeckValidator.Report report = DeckValidator.validate(deck, DataPacks.get());
+        if (!report.ok()) {
+            reply(source, "「" + label + "」不能用于开局：\n" + report.describe());
+            return null;
+        }
+        return new Resolved(deck, label, report.warnings().size());
+    }
+
+    /** {@link #resolveDeck} 的结果：卡组、显示名、校验提示条数。 */
+    private record Resolved(DeckData deck, String label, int warnings) {
+    }
+
     // ── 开局 ──────────────────────────────────────────────────────────────
 
     /**
@@ -212,29 +306,12 @@ public final class YgomcCommand {
             return 0;
         }
 
-        DeckData deck;
-        String label;
-        if (deckName == null) {
-            deck = BuiltinDecks.testPool();
-            label = BuiltinDecks.TEST_POOL_LABEL;
-        } else {
-            try {
-                deck = DeckLibrary.load(deckName);
-                label = deckName;
-            } catch (Exception e) {
-                reply(source, "读取卡组失败：" + e.getMessage());
-                return 0;
-            }
-        }
-
-        // 有错就不开：内核收到未知卡号不会报错，只会把它当成一张全零属性的空卡，
-        // 之后的对局行为无从预期——那种「能跑但结果没意义」比直接拒绝更糟。
-        DeckValidator.Report report = DeckValidator.validate(deck, DataPacks.get());
-        if (!report.ok()) {
-            reply(source, "「" + label + "」不能用于开局：\n" + report.describe());
+        Resolved res = resolveDeck(source, deckName);
+        if (res == null) {
             return 0;
         }
-
+        DeckData deck = res.deck();
+        String label = res.label();
         OcgDuel.DeckLoadout loadout = toLoadout(deck);
         try {
             DuelSessions.start(label, new OcgDuel.DeckLoadout[]{loadout, loadout},
@@ -251,12 +328,14 @@ public final class YgomcCommand {
         StringBuilder sb = new StringBuilder("已开局「").append(label).append("」")
                 .append("（主 ").append(deck.main().size())
                 .append(" / 额外 ").append(deck.extra().size()).append("）");
-        if (!report.warnings().isEmpty()) {
-            sb.append("，有 ").append(report.warnings().size()).append(" 项提示，用 /ygomc deck ")
+        if (res.warnings() > 0) {
+            sb.append("，有 ").append(res.warnings()).append(" 项提示，用 /ygomc deck ")
               .append(label).append(" 查看");
         }
         sb.append("\n双方都用同一副卡组，由「第一个合法项」策略自动应答——");
-        sb.append("这是 M1 的观战形态，真正的双人对战在 M2。");
+        sb.append("这是观战形态。两个真人各自选卡组的对战：");
+        sb.append("/ygomc duel deck <卡组> 各自选，/ygomc duel invite <玩家> 邀请，");
+        sb.append("/ygomc duel accept 接受。");
         reply(source, sb.toString());
         return 1;
     }
