@@ -73,7 +73,7 @@ public final class PlayerResponder implements Responder {
     private long chainSkipped;
     /** 待答期间的定时任务，答完/取消后必须撤掉，否则会拿旧题去答新题。 */
     private java.util.concurrent.ScheduledFuture<?> warnTask;
-    private java.util.concurrent.ScheduledFuture<?> timeoutTask;
+    // timeoutTask 随代答一起删掉了：现在只剩提醒这一个定时任务。
     /** 超时后才允许替玩家作答，用来把「提醒」与「代答」分成两段（D22）。 */
     private java.util.concurrent.atomic.AtomicLong timeoutSeq =
             new java.util.concurrent.atomic.AtomicLong();
@@ -198,16 +198,14 @@ public final class PlayerResponder implements Responder {
             answered = false;
             cancelled = false;
             asked++;
-            // 超时兜底必须按【这一道题】挂号：拿一个自增序号把提醒与代答绑到当前问题，
-            // 否则玩家答完 A 题、引擎又问 B 题时，A 的定时器醒来会把 B 答掉。
+            // 提醒必须按【这一道题】挂号：拿一个自增序号把它绑到当前问题，
+            // 否则玩家答完 A 题、引擎又问 B 题时，A 的定时器醒来会提醒到 B 上。
+            // 这里【只挂号提醒】，不挂代答——见 onTimeoutWarn。
             long seq = timeoutSeq.incrementAndGet();
             cancelTimers();
             if (timeoutSeconds > 0) {
                 warnTask = TIMERS.schedule(() -> onTimeoutWarn(seq, question),
                         timeoutSeconds, java.util.concurrent.TimeUnit.SECONDS);
-                timeoutTask = TIMERS.schedule(() -> onTimeoutAnswer(seq, question),
-                        timeoutSeconds + Math.max(0, graceSeconds),
-                        java.util.concurrent.TimeUnit.SECONDS);
             }
             lock.notifyAll();
         }
@@ -247,10 +245,16 @@ public final class PlayerResponder implements Responder {
     }
 
     /**
-     * 超时提醒：只提醒，不代答（D22）。
+     * 超时提醒：只提醒，<b>不代答</b>。
      *
-     * <p>先提醒再宽限，是为了让「走开一下」和「卡住了」分开：如果一超时就代答，
-     * 玩家回来只会看到局面莫名其妙地走了一步，完全没有介入的机会。
+     * <p>咩咩定死的规矩：不许替玩家做决定——从额外卡组特殊召唤之类的都不是强制的，
+     * 只有发动效果的代价、正在处理的效果、必须发动的效果才轮得到「必须做」。
+     * 所以这里提醒完就<b>一直等</b>，等到玩家回来为止。
+     *
+     * <p>原来这里是「提醒 + 宽限 + 按默认取向代答」（D22）。代答看着温柔，
+     * 实际是把玩家的局面替他走了一步：他回来只看到棋盘变了，没有任何介入的机会。
+     * 「怕对局永远挂着」这个顾虑由中止阀门解决——{@code /ygomc duel abort}
+     * 随时能把卡住的一局收掉，不需要靠代答去抢回并发名额。
      */
     private void onTimeoutWarn(long seq, DuelQuestion question) {
         synchronized (lock) {
@@ -258,46 +262,13 @@ public final class PlayerResponder implements Responder {
                 return;
             }
         }
-        say("已经等了 " + timeoutSeconds + " 秒还没有收到你的操作；"
-                + (graceSeconds > 0 ? graceSeconds + " 秒后将按默认取向代答" : "现在按默认取向代答"));
+        say("已经等了 " + timeoutSeconds + " 秒还没有收到你的操作；会一直等你。"
+                + "要中止这一局用 /ygomc duel abort。");
     }
 
-    /**
-     * 超时候答：把这一题按默认取向答掉，让对局线程解开。
-     *
-     * <p>这是兜底而不是常态逻辑。没有它的时候，玩家一收起界面走开，
-     * 对局线程就永远挂在这一行上——那一局的并发名额再也回不来，
-     * 而且因为内核不响应中断，停服也只能等它。
-     */
-    private void onTimeoutAnswer(long seq, DuelQuestion question) {
-        synchronized (lock) {
-            if (timeoutSeq.get() != seq || answered || pending != question) {
-                return;
-            }
-        }
-        boolean done;
-        try {
-            done = answerWithDefault();
-        } catch (RuntimeException e) {
-            // 兜底自己失败时<b>必须让对局明确结束</b>，不能就这么放着。
-            // 这不是假想的：defaultChoice() 里对「凑不出合计值」之类的非法局面是
-            // 明确抛异常的（宁可报错也不要发一个必被 RETRY 打回的应答），
-            // 而异常抛在这条守护线程上会被调度器吞掉——症状是
-            // 「超时了、聊天栏说了要代答、然后什么都没有发生」，对局永远挂在那儿。
-            synchronized (lock) {
-                timeoutAnswers++;
-            }
-            say("超时后无法按默认取向作答（" + e.getMessage() + "），已中止这一局");
-            cancel();
-            return;
-        }
-        if (done) {
-            synchronized (lock) {
-                timeoutAnswers++;
-            }
-            say("等待超时，已按默认取向替你作答");
-        }
-    }
+    // 代答（onTimeoutAnswer）已经删掉：它违背「不许替玩家做决定」。
+    // answerWithDefault() 仍然留着——「托管」（AutoPlayer）用它是有意的，
+    // 那是玩家明确要求替自己打；超时路径不再碰它。
 
     /** 撤掉挂着的定时任务。必须在持有 {@code lock} 时调用。 */
     private void cancelTimers() {
@@ -305,10 +276,7 @@ public final class PlayerResponder implements Responder {
             warnTask.cancel(false);
             warnTask = null;
         }
-        if (timeoutTask != null) {
-            timeoutTask.cancel(false);
-            timeoutTask = null;
-        }
+        // 提醒任务上面已经撤掉了；代答任务不存在了。
     }
 
     private void say(String message) {
@@ -412,6 +380,12 @@ public final class PlayerResponder implements Responder {
      *
      * <p>0 或负数表示不限时。默认 300 + 60（D22）。
      * 测试要能在几秒内跑完，所以不能把时限写死。
+     */
+    /**
+     * 设超时提醒的时限。
+     *
+     * <p>{@code graceSeconds} 已经<b>不再起作用</b>（宽限期是给代答用的，而代答取消了）。
+     * 留着这个参数只是不想惊动已有调用方；下次动这个 API 时把它删掉。
      */
     public void setTimeouts(long timeoutSeconds, long graceSeconds) {
         this.timeoutSeconds = timeoutSeconds;
