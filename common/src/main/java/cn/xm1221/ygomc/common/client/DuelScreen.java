@@ -497,19 +497,50 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
         if (list != null || spatial() || actionQuestion()) {
             return;
         }
-        List<DuelQuestion.Option> options = question.options();
-        if (options.isEmpty()) {
-            return;
+        // 网格里只摆「牌桌上点不到」的选项：带位置的选项一律去点那张卡/那个格子。
+        // 同一条答复不该有两条路——有按钮摆在旁边时，玩家会以为「从这排按钮发动」
+        // 才是正常玩法（咩咩 2026-10-05：「点了之后会发动一些效果，但是实际上不需要
+        // 它们来发动，有其他很正常方法」）。取消也不进网格：它由右下角常驻那颗负责。
+        //
+        // 这一条同时堵住了<b>连锁第一段</b>的漏洞：那一段的候选是故意不亮、也点不动的
+        // （见 {@link #targets()}），于是「没有可点目标」会让整排候选变成按钮，
+        // 等于绕开「先问要不要发动」，直接把效果发出去。
+        List<Integer> indices = new ArrayList<>();
+        for (int i = 0; i < question.options().size(); i++) {
+            DuelQuestion.Option o = question.options().get(i);
+            if (!o.isCancel() && !o.hasPlace()) {
+                indices.add(i);
+            }
+        }
+        if (indices.isEmpty()) {
+            // 兜底：万一某个带位置的选项既没算出可点矩形（{@code TargetCheck} 有一条
+            // 「每个带位置的选项都点得到」的不变量在守着），又没有「确认/取消」可按，
+            // 就退回原来的样子——宁可多一条路，也不能让玩家无处可答。
+            //
+            // 连锁第一段不会落到这里：那一段有常驻的「确认/取消」（{@code cancelable}），
+            // 玩家正是靠它表态，所以上面这一串判断会直接 return。
+            if (spatial() || question.soleOption() >= 0 || question.cancelable()
+                    || question.needsConfirm() || DuelQuestion.isYesNo(question.type())) {
+                return;
+            }
+            for (int i = 0; i < question.options().size(); i++) {
+                if (!question.options().get(i).isCancel()) {
+                    indices.add(i);
+                }
+            }
+            if (indices.isEmpty()) {
+                return;
+            }
         }
         FieldLayout L = field();
         int gap = 2;
         int bh = 16;
         int bw = 60;
-        for (DuelQuestion.Option o : options) {
-            bw = Math.max(bw, font.width(shortLabel(o)) + 18);
+        for (int index : indices) {
+            bw = Math.max(bw, font.width(shortLabel(question.options().get(index))) + 18);
         }
         bw = Math.min(bw, Math.max(60, width / 2));
-        int n = options.size();
+        int n = indices.size();
         // 项数多（宣言种族/属性）就折成两列，别顶到屏幕上边
         int cols = n * (bh + gap) > height - 70 ? 2 : 1;
         int rows = (n + cols - 1) / cols;
@@ -518,11 +549,12 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
         int y0 = Math.max(4, L.panel().y() - totalH - 8);
 
         for (int i = 0; i < n; i++) {
-            final int index = i;
+            final int index = indices.get(i);
             int x = x0 + (i % cols) * (bw + gap);
             int y = y0 + (i / cols) * (bh + gap);
-            addRenderableWidget(Button.builder(Component.literal(shortLabel(options.get(i))),
-                    b -> onOption(index)).bounds(x, y, bw, bh).build());
+            addRenderableWidget(Button.builder(
+                            Component.literal(shortLabel(question.options().get(index))),
+                            b -> onOption(index)).bounds(x, y, bw, bh).build());
         }
     }
 
