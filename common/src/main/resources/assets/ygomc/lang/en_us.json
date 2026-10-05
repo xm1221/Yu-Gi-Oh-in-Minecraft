@@ -125,6 +125,15 @@
   "ygomc.duel.status.waiting": "Waiting for the server...",
   "ygomc.duel.status.submitted": "Sent, waiting for the opponent...",
   "ygomc.duel.status.no_board": "No field data yet",
+  "ygomc.duel.status.chain": "Chain %s",
+
+  "ygomc.duel.result.win": "You win",
+  "ygomc.duel.result.lose": "You lose",
+  "ygomc.duel.result.draw": "Draw",
+  "ygomc.duel.result.reason": "Reason: %s",
+  "ygomc.duel.result.reason_unknown": "Result reason %s",
+  "ygomc.duel.result.lp": "Life points　You %s / Opponent %s",
+  "ygomc.duel.result.turns": "Turns　%s",
 
   "ygomc.duel.panel.no_art": "(no image for this card)",
   "ygomc.duel.panel.hover_card": "Hover a card",
@@ -179,7 +188,7 @@
   "ygomc.duel.list.title": "Pick %d/%d",
   "ygomc.duel.list.title_no_max": "Pick %d",
   "ygomc.duel.list.cancel_row": "  Cancel (select nothing)",
-  "ygomc.duel.list.confirm_outside": "Click empty space to confirm",
+  "ygomc.duel.list.confirm_hint": "Confirm with the button at the bottom right",
   "ygomc.duel.list.picked": "%d picked",
 
   "ygomc.duel.browse.collapse": "Close",

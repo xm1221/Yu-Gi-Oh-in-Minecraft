@@ -70,8 +70,37 @@ public final class DuelClient {
         return true;
     }
 
+    /**
+     * 收局画面关掉之后，把这个屏忘掉。
+     *
+     * <p>不摘的话，决斗盘右键会把它再拽回来（见 {@link #reopenScreen}）——
+     * 而那一局已经结束了，回来只会看到一块再也点不动的板。
+     */
+    static void forgetScreen(DuelScreen s) {
+        if (screen == s) {
+            screen = null;
+            everShown = false;
+        }
+    }
+
     private static void onUpdate(YgomcNet.BoardUpdate update) {
         Minecraft mc = Minecraft.getInstance();
+        if (update.result() != null) {
+            // 收局帧。牌桌一般是 null（服务端只带结果），界面会自己留着上一帧当背景
+            // （见 DuelScreen.update 的收局分支），所以这里不能走下面那条「关界面」的路。
+            if (screen == null) {
+                screen = new DuelScreen(update.board(), null, update.viewerSeat(), update.notice());
+                everShown = false;
+            }
+            screen.update(update.board(), null, update.viewerSeat(), update.notice(),
+                    update.result());
+            // 结果必须让玩家看见：他可能早就把界面关掉了（等对手操作时很常见）。
+            if (mc.screen != screen) {
+                mc.setScreen(screen);
+            }
+            everShown = true;
+            return;
+        }
         if (update.board() == null && update.question() == null) {
             // 收尾信号。必须按「是不是当前这个屏」判断再关：
             // 玩家可能已经自己关掉并开了别的界面，这时不该把他从那儿拽出来。

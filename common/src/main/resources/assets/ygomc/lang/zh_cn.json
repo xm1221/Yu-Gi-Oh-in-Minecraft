@@ -125,6 +125,15 @@
   "ygomc.duel.status.waiting": "等待服务器…",
   "ygomc.duel.status.submitted": "已提交，等待对手…",
   "ygomc.duel.status.no_board": "还没有牌桌数据",
+  "ygomc.duel.status.chain": "连锁 %s",
+
+  "ygomc.duel.result.win": "你赢了",
+  "ygomc.duel.result.lose": "你输了",
+  "ygomc.duel.result.draw": "平局",
+  "ygomc.duel.result.reason": "原因：%s",
+  "ygomc.duel.result.reason_unknown": "胜负原因 %s",
+  "ygomc.duel.result.lp": "生命值　我方 %s ／ 对手 %s",
+  "ygomc.duel.result.turns": "回合数　%s",
 
   "ygomc.duel.panel.no_art": "（这张卡没有卡图）",
   "ygomc.duel.panel.hover_card": "把光标移到卡上",
@@ -179,7 +188,7 @@
   "ygomc.duel.list.title": "选卡 %d/%d",
   "ygomc.duel.list.title_no_max": "选卡 %d",
   "ygomc.duel.list.cancel_row": "  取消（不选）",
-  "ygomc.duel.list.confirm_outside": "点空白处确认",
+  "ygomc.duel.list.confirm_hint": "点右下角「确认」交卷",
   "ygomc.duel.list.picked": "已选 %d 张",
 
   "ygomc.duel.browse.collapse": "收起",

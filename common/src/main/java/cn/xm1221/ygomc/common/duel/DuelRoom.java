@@ -78,6 +78,20 @@ public final class DuelRoom implements OcgDuel.Observer {
     /** 每个座位最近一条时点事件（{@code HINT_EVENT}）。 */
     private final String[] eventTexts = new String[2];
 
+    /**
+     * 当前阶段（内核 {@code PHASE_*}）与已开始的回合数。
+     *
+     * <p>这两样<b>不在快照里</b>——{@code MSG_RELOAD_FIELD} 既不带阶段也不带回合，
+     * 只能靠 {@code MSG_NEW_PHASE} / {@code MSG_NEW_TURN} 另记，取快照时盖上去。
+     * 都只在<b>对局线程</b>上写读（与 {@link #eventTexts} 同理）。
+     *
+     * <p>回合数用「收到过几条 {@code MSG_NEW_TURN}」来数：内核在每个回合开始时
+     * 发一条，所以先手第一回合就是 1。这条计数是给收局画面用的
+     * （「第 N 回合」）——它是观测值，不参与任何规则判定。
+     */
+    private int currentPhase = DuelBoard.PHASE_UNKNOWN;
+    private int turnCount;
+
     /** 每个座位本「步」是否已经连牌桌一起发过。 */
     private final boolean[] boardSent = new boolean[2];
 
@@ -262,8 +276,60 @@ public final class DuelRoom implements OcgDuel.Observer {
                 selectHints[seat] = DescText.selectMessage(h.description());
             }
         }
+        if (m instanceof Msg.NewPhase np) {
+            // 阶段位（0x01 抽卡 … 0x200 结束）。战斗阶段内部会依次经过
+            // 0x08/0x10/0x20/0x40/0x80 五个值，全部照收——界面自己按
+            // DuelBoard.phaseBarIndex 把它们映到同一格。
+            currentPhase = np.phase();
+        } else if (m instanceof Msg.NewTurn) {
+            // 内核在每个回合开始时发一条，先手第一回合即 1。
+            turnCount++;
+        }
+        if (m instanceof Msg.Win w) {
+            latchResult(duel, w);
+        }
         if (m instanceof Msg.Chaining c) {
             onChaining(c);
+        }
+    }
+
+    /**
+     * 记下内核判出来的收局结果（只记第一条，见 {@link #result}）。
+     *
+     * <p>跑在对局线程上，所以这里能安全地现取一份内核快照拿收局那一刻的 LP——
+     * 那两个数字得和玩家最后看到的牌桌对得上，晚一步取就会被后面的消息改掉。
+     */
+    private void latchResult(OcgDuel duel, Msg.Win w) {
+        if (result != null) {
+            return;
+        }
+        // 内核已经判了，就轮不到超时判负再插一句话。
+        // 这一句防的是「计时器正在响、内核同时判完」那一下：超时判负只会看 ended，
+        // 看不到 result，晚了半步就会把内核的胜负覆盖成一个超时。
+        ended = true;
+        int[] lp = lpNow(duel);
+        result = new DuelResult(w.winner(), w.reason(), lp[0], lp[1], turnCount);
+        LOGGER.info("内核判定收局：{}，原因 0x{}，LP {}:{}，第 {} 回合",
+                w.isDraw() ? "平局" : ("赢家是 " + w.winner() + " 号席"),
+                Integer.toHexString(w.reason()), lp[0], lp[1], turnCount);
+    }
+
+    /**
+     * 取这一瞬间双方的 LP；取不到给 {@link DuelResult#LP_UNKNOWN}。
+     *
+     * <p>只允许在拿得到内核句柄的线程（对局线程）上调用。
+     */
+    private static int[] lpNow(OcgDuel duel) {
+        if (duel == null) {
+            return new int[]{DuelResult.LP_UNKNOWN, DuelResult.LP_UNKNOWN};
+        }
+        try {
+            Msg.ReloadField f = duel.snapshot();
+            return new int[]{f.playerAt(0).lp(), f.playerAt(1).lp()};
+        } catch (RuntimeException e) {
+            // 取不到不算致命：收局画面少一行 LP，总好过整局没有收局画面。
+            LOGGER.warn("收局时取 LP 失败：{}", e.toString());
+            return new int[]{DuelResult.LP_UNKNOWN, DuelResult.LP_UNKNOWN};
         }
     }
 
@@ -425,13 +491,17 @@ public final class DuelRoom implements OcgDuel.Observer {
         }
         DuelBoard board;
         try {
-            board = DuelBoard.of(duel.snapshot());
+            // 快照给形状，阶段/回合从本房间记的消息里盖上去（见字段注释）。
+            board = DuelBoard.of(duel.snapshot()).withPhaseTurn(currentPhase, turnCount);
         } catch (RuntimeException e) {
             // 取快照失败不该把对局打死：牌桌这一帧画不出来，
             // 但问题本身是好的，玩家仍然能作答。
             LOGGER.warn("取牌桌快照失败，这一帧只发问题：{}", e.toString());
             return null;
         }
+        // 留一份给超时判负用（它跑在调度线程上，那时不能碰内核句柄）。
+        // LP 是公开信息，两席视角的快照里都一样，所以哪一席的都能用。
+        lastBoard = board;
         try {
             // 快照只有形状没有卡号，卡号必须在这里、在对局线程上另查。
             // 界面能画出一张具体的卡，全靠这一步。
@@ -475,6 +545,23 @@ public final class DuelRoom implements OcgDuel.Observer {
     /** 这一局是否已经有结果。超时判负只能判一次（两席都不动时先到点的那个判负）。 */
     private volatile boolean ended;
 
+    /**
+     * 这一局的收局结果；{@code null} 表示还没有结果（对局进行中，或者中断了）。
+     *
+     * <p>只认<b>第一条</b> {@code MSG_WIN}：内核把它当「胜负判定通知」，
+     * 判完<b>不会停</b>——win check 每回合都可能再报一次（卡组耗尽后尤其明显）。
+     * 结果画面要在玩家看到的那一刻就定下来，所以后到的直接丢。
+     */
+    private volatile DuelResult result;
+
+    /**
+     * 最近一份发出去的牌桌，只用来在超时判负时报出双方 LP。
+     *
+     * <p>那份快照是对局线程取的、对象不可变，这里只是留个引用给别的线程读，
+     * 所以是 volatile。超时判负跑在调度线程上，那时<b>不能</b>再去碰内核句柄。
+     */
+    private volatile DuelBoard lastBoard;
+
     /** 生效的超时判负秒数，只为报出准确数字，值来自服务端配置。 */
     private volatile int timeoutSeconds = DuelConfig.DEFAULT_TIMEOUT_SECONDS;
 
@@ -499,14 +586,16 @@ public final class DuelRoom implements OcgDuel.Observer {
      * 某一席超时未操作，判他负。
      *
      * <p>照搬 ygopro {@code SingleDuel::Surrender}（single_duel.cpp:553-574）：
-     * 它<b>不碰内核</b>——服务端自己造一条 3 字节
-     * {@code MSG_WIN(winner = 1 - 该席, reason = 0)} 发给两边，然后 {@code EndDuel()}。
+     * 它<b>不碰内核</b>——服务端自己宣布胜负，然后 {@code EndDuel()}。
      * 内核里也没有「判负」这个 API（Lua 的 {@code Duel.Win} 是给卡片效果用的），
      * 所以判负本来就该由服务端说出口。
      *
+     * <p>原因码取 {@link DuelResult#REASON_TIMEOUT}（{@code !victory 0x3 超时}），
+     * <b>不是</b> 0：0 在那张表里是「投降」，用它报超时会告诉玩家一个错的原因。
+     *
      * <p>收摊手段与 {@link #abortFor} 相同：先让阻塞中的应答器解开——
      * 内核不响应线程中断，只能让它从 {@code answer} 里抛出来，对局线程才有机会
-     * 走完整的收尾路径——再让会话停下。区别只在于「谁赢」由我们自己宣布。
+     * 走完整的收尾路径——再让会话停下。区别只在于「谁赢、为什么」由我们自己宣布。
      */
     private void timeoutLoss(int seat) {
         if (ended) {
@@ -514,6 +603,11 @@ public final class DuelRoom implements OcgDuel.Observer {
         }
         ended = true;
         int winner = 1 - seat;
+        DuelBoard last = lastBoard;
+        result = new DuelResult(winner, DuelResult.REASON_TIMEOUT,
+                last == null ? DuelResult.LP_UNKNOWN : last.playerAt(0).lp(),
+                last == null ? DuelResult.LP_UNKNOWN : last.playerAt(1).lp(),
+                turnCount);
         notice(seat, "你超过 " + timeoutSeconds + " 秒没有操作，本局判负");
         notice(winner, "对方超时未操作，本局你获胜");
         for (PlayerResponder r : responders) {
@@ -567,6 +661,10 @@ public final class DuelRoom implements OcgDuel.Observer {
     private void finish(DuelSession session) {
         ended = true;
         String why = session.failure();
+        // 有结果就发收局帧（客户端留着最后一帧牌桌当背景，再弹收局画面）；
+        // 没有结果（引擎出错、掉线、被取消）就发收尾帧（客户端据此关界面）。
+        // 两种都用同一个载荷，靠「带不带结果」区分，客户端不必猜。
+        DuelResult r = result;
         // 两个人的 UUID 都指向这个房间，撤的时候也要都撤掉，
         // 否则另一个人会被永久记成「正在对局中」。
         for (int seat = 0; seat < 2; seat++) {
@@ -575,15 +673,18 @@ public final class DuelRoom implements OcgDuel.Observer {
                 continue;
             }
             ACTIVE.remove(who.getUUID());
-            // 用「null 牌桌 + null 问题」收尾：客户端据此关掉界面，
-            // 而不是把最后一帧的按钮留在屏幕上让玩家空点。
-            // 收尾帧里的座位与通知都没有意义（客户端收到就关界面）。
-            YgomcNet.sendBoard(who, null, null, null, seat);
+            YgomcNet.sendBoard(who, null, null, null, seat, r);
             // 失败必须说出来。以前这里只有干巴巴的「对局结束」，而
             // 「引擎没装配好 -> 对局线程当场抛异常 -> 一局都没跑」在玩家眼里
             // 就是「什么都没发生」——咩咩为此排查了四轮。
             // 走 notice：它是排回主线程说的，也会跳过已经断线的人。
-            notice(seat, why == null ? "对局结束" : "对局中断：" + why);
+            //
+            // 但【有结果】时不能说「中断」：超时判负是先宣布胜负、再 abort 掉会话，
+            // 于是 session.failure() 是「被中止」——照抄进聊天，玩家会同时看到
+            // 收局画面写着「超时」、聊天里写着「对局中断：被中止」，两句话对不上。
+            // 有结果就是正常收局，这一句只是给关掉界面的那一方一个响。
+            String tail = r != null ? "对局结束" : (why == null ? "对局结束" : "对局中断：" + why);
+            notice(seat, tail);
         }
     }
 

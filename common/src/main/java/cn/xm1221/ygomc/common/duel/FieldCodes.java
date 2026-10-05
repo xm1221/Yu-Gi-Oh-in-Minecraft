@@ -428,7 +428,10 @@ public final class FieldCodes {
                     b.handCount(), b.graveCount(), b.removedCount(), b.extraCount(),
                     b.extraPCount(), hand, grave, removed, extra);
         }
-        return new DuelBoard(board.duelRule(), board.chainCount(), sides[0], sides[1]);
+        // 阶段与回合是快照之外另记的（见 DuelBoard 的类注释），这里必须原样带过去——
+        // 用五参构造会静默把它们清成「未知」，表现为阶段条上的当前格时有时无。
+        return new DuelBoard(board.duelRule(), board.chainCount(), sides[0], sides[1],
+                board.phase(), board.turn());
     }
 
     /** 怪兽区 / 魔陷区：段与「快照里占用的槽」按升序配对。 */

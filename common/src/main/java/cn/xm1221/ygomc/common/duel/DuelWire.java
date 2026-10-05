@@ -57,8 +57,13 @@ public final class DuelWire {
      * <p>v2 起 {@code Zone} 多了一个卡号字段、{@code PlayerBoard} 多了四个逐张列表。
      * 版本号单独走是因为牌桌只在「出问题」时才发，改动节奏和问题/应答不一样；
      * 解码端<b>同时接受 1 与 2</b>，见 {@link #decodeBoard}。
+     *
+     * <p>v3 起牌桌顶上多了「阶段」与「回合数」两个字段（{@code chainCount} 之后）。
+     * 它们不在内核快照里，是服务端从 {@code MSG_NEW_PHASE} / {@code MSG_NEW_TURN}
+     * 另记后盖上去的（见 {@link DuelBoard#withPhaseTurn}）。解码端同时接受 2 与 3：
+     * 收到 v2 帧时这两项就是「阶段未知、回合 0」。
      */
-    public static final int BOARD_VERSION = 2;
+    public static final int BOARD_VERSION = 3;
 
     private DuelWire() {
     }
@@ -233,12 +238,31 @@ public final class DuelWire {
 
     // ── 牌桌 ──────────────────────────────────────────────────────────────
 
+    /**
+     * 编码牌桌。
+     *
+     * <p>{@code null} 编成<b>空载荷</b>——这是收尾帧的约定（「这一局散了，把界面关掉」），
+     * 与 {@link #decodeBoard} 的空载荷分支对称。
+     *
+     * <p>不这么写就会在收局那一刻炸 NPE：{@code DuelRoom.finish} 正是传 null 让它发收尾帧的，
+     * 而 {@code b.duelRule()} 会当场抛。所以这个约定必须写在这里而不是靠调用方自觉——
+     * 那条 NPE 以前被会话层的 {@code Throwable} 兜住，症状是「收局后界面不自己关、
+     * 聊天里也没有『对局结束』」，看起来像网络问题，其实是这里。
+     */
     public static byte[] encodeBoard(DuelBoard b) {
+        if (b == null) {
+            // 空数组与 null 在编/解码两侧含义相同；统一给空数组，因为
+            // 有的载荷实现写 byte[] 时会先读长度，不接受 null。
+            return new byte[0];
+        }
         ByteArrayOutputStream bytes = new ByteArrayOutputStream(128);
         try (DataOutputStream out = new DataOutputStream(bytes)) {
             out.writeInt(BOARD_VERSION);
             out.writeInt(b.duelRule());
             out.writeInt(b.chainCount());
+            // v3 新增：阶段与回合。顺序固定为 阶段、回合，解码端按同一顺序读。
+            out.writeInt(b.phase());
+            out.writeInt(b.turn());
             encodePlayer(out, b.player0());
             encodePlayer(out, b.player1());
         } catch (IOException e) {
@@ -281,25 +305,37 @@ public final class DuelWire {
     }
 
     /**
-     * 解码牌桌。<b>同时接受版本 1 与 2</b>。
+     * 解码牌桌。<b>同时接受版本 1、2 与 3</b>。
      *
      * <p>版本 1 是加卡号之前的线格式：没有 {@code code} 字段、也没有逐张列表。
      * 老服务端发来的 v1 帧因此仍然能解出来，只是所有 {@code Zone.code()} 都是 0、
      * 四个列表都是空的（手牌只剩 {@code handCount()}）。反过来，老客户端收到 v2 帧
      * 会在它自己的版本检查上拒绝——那一侧我们改不了，实际部署时两端是一起发的。
+     *
+     * <p>版本 3 多的是阶段与回合数（{@code chainCount} 之后）；v2 帧解码后这两项是
+     * {@link DuelBoard#PHASE_UNKNOWN} 与 0，界面表现为「阶段条没有当前格」，
+     * 与加这两个字段之前的行为一致。
      */
     public static DuelBoard decodeBoard(byte[] data) {
+        // 收尾帧：服务端用【空载荷】表示「这一局散了，把界面关掉」。
+        // 约定写在这里而不是让调用方判空，是因为这条路径以前会把 null 一路传到
+        // encodeBoard 里炸掉（见 DuelRoom.finish 的注释）。
+        if (data == null || data.length == 0) {
+            return null;
+        }
         try (DataInputStream in = new DataInputStream(new ByteArrayInputStream(data))) {
             int version = in.readInt();
-            if (version != 1 && version != BOARD_VERSION) {
+            if (version != 1 && version != 2 && version != BOARD_VERSION) {
                 throw new IllegalStateException("牌桌线格式版本不支持：收到 " + version
-                        + "，本端支持 1（旧，无卡号）与 " + BOARD_VERSION + "（当前）");
+                        + "，本端支持 1（旧，无卡号）、2（有卡号）与 " + BOARD_VERSION + "（当前）");
             }
             int rule = in.readInt();
             int chain = in.readInt();
+            int phase = version >= 3 ? in.readInt() : DuelBoard.PHASE_UNKNOWN;
+            int turn = version >= 3 ? in.readInt() : 0;
             DuelBoard.PlayerBoard p0 = decodePlayer(in, version);
             DuelBoard.PlayerBoard p1 = decodePlayer(in, version);
-            return new DuelBoard(rule, chain, p0, p1);
+            return new DuelBoard(rule, chain, p0, p1, phase, turn);
         } catch (IOException e) {
             throw new UncheckedIOException("解码牌桌失败", e);
         }
@@ -346,6 +382,70 @@ public final class DuelWire {
     private static void requireVersion(int got) {
         if (got != VERSION) {
             throw new IllegalStateException("线格式版本不符：收到 " + got + "，本端是 " + VERSION);
+        }
+    }
+
+    // ── 收局结果 ──────────────────────────────────────────────────────────
+
+    /**
+     * 结果尾巴的版本。
+     *
+     * <p>它挂在牌桌帧的<b>最末尾</b>（通知之后），与 {@link #BOARD_VERSION} 各自演进：
+     * 牌桌内容改版时动 {@code BOARD_VERSION}，只动结果字段时动这个号。
+     * 分成两个号是因为老客户端读到牌桌版本就停手了——尾巴多一段它看不见也不报错，
+     * 而牌桌版本号一改它就会明确拒绝。
+     */
+    public static final int RESULT_VERSION = 1;
+
+    /**
+     * 编码收局结果。
+     *
+     * <p>版式：{@code i32 版本, u8 赢家, i16 原因, i32 P0 的 LP, i32 P1 的 LP, i32 回合数}。
+     * 原因用 16 位：内核 {@code MSG_WIN} 里它是 u8，但值域来自 {@code !victory 0x…}
+     * 那张表，留出 16 位就不必在想加码时改版式。LP 允许 {@link DuelResult#LP_UNKNOWN}
+     * （负数），所以用 int 而不是无符号。
+     */
+    public static byte[] encodeResult(DuelResult r) {
+        if (r == null) {
+            return new byte[0];
+        }
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream(32);
+        try (DataOutputStream out = new DataOutputStream(bytes)) {
+            out.writeInt(RESULT_VERSION);
+            out.writeByte(r.winner());
+            out.writeShort(r.reason());
+            out.writeInt(r.lp0());
+            out.writeInt(r.lp1());
+            out.writeInt(r.turns());
+        } catch (IOException e) {
+            throw new UncheckedIOException("编码收局结果失败", e);
+        }
+        return bytes.toByteArray();
+    }
+
+    /**
+     * 解码收局结果；空载荷（没有这一段）返回 {@code null}。
+     *
+     * <p>空载荷是常态而不是异常：大多数帧根本没有结果，收尾帧（对局中断）也没有。
+     */
+    public static DuelResult decodeResult(byte[] data) {
+        if (data == null || data.length == 0) {
+            return null;
+        }
+        try (DataInputStream in = new DataInputStream(new ByteArrayInputStream(data))) {
+            int version = in.readInt();
+            if (version != RESULT_VERSION) {
+                throw new IllegalStateException("收局结果线格式版本不支持：收到 " + version
+                        + "，本端是 " + RESULT_VERSION);
+            }
+            int winner = in.readUnsignedByte();
+            int reason = in.readShort();
+            int lp0 = in.readInt();
+            int lp1 = in.readInt();
+            int turns = in.readInt();
+            return new DuelResult(winner, reason, lp0, lp1, turns);
+        } catch (IOException e) {
+            throw new UncheckedIOException("解码收局结果失败", e);
         }
     }
 }

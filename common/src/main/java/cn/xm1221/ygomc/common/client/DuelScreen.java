@@ -4,6 +4,7 @@ import cn.xm1221.ygomc.common.duel.DuelBoard;
 import cn.xm1221.ygomc.common.duel.PileBrowse;
 import cn.xm1221.ygomc.common.duel.FieldCodes;
 import cn.xm1221.ygomc.common.duel.DuelQuestion;
+import cn.xm1221.ygomc.common.duel.DuelResult;
 import cn.xm1221.ygomc.common.ocg.SumSelect;
 import cn.xm1221.ygomc.common.ocg.msg.MsgType;
 import cn.xm1221.ygomc.common.ocg.msg.Msg;
@@ -167,6 +168,15 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
 
     /** 状态条正文至少要留出的宽度，否则标题会被截断成没意义的一小截。 */
     private static final int MIN_TEXT_W = 40;
+
+    /**
+     * 状态条上「内核时点」那一行的缩放。
+     *
+     * <p>比正文小一号（0.8），是为了让它一眼看去就是<b>修饰</b>而不是问句本体：
+     * ygopro 里时点行与问句行字号相同、但玩家的注意力全在问句上；
+     * 我们的状态条空间紧，靠字号把主次分开比靠颜色更稳。
+     */
+    private static final float HINT_SCALE = 0.8f;
     /** 右下角「确认 / 取消」两颗键的尺寸。状态条让位的宽度也照这个算，不许两处各写一份。 */
     private static final int ANSWER_BTN_W = 54;
     private static final int ANSWER_BTN_H = 18;
@@ -194,6 +204,29 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
     private ChainNotice notice;
 
     /**
+     * 收局结果；{@code null} 表示这一局还在打。
+     *
+     * <p>一旦有它，界面就进了「收局模式」：只画最后那一帧牌桌当背景，
+     * 上面盖一块模态面板，唯一的键是「确定」（见 {@link #drawResult}）。
+     * 没有「再来一局」——再来一局是外面的事，界面上不该替玩家做这个决定。
+     */
+    private DuelResult result;
+
+    /**
+     * 上一帧各座位的 LP，用来推这一帧的增减（{@code Integer.MIN_VALUE} = 还没见过）。
+     *
+     * <p>为什么不解析内核的 {@code MSG_DAMAGE}/{@code MSG_RECOVER}：那两条只覆盖
+     * 「效果造成的伤害与回复」，而 LP 还会因为战斗伤害、代价等别的原因变化。
+     * 牌桌帧上的 LP 是内核的当前值，前后两帧之差就是玩家真正看到的那个数字——
+     * 从它推，一条都不漏，也不会重复计。
+     */
+    private final int[] lastLp = {Integer.MIN_VALUE, Integer.MIN_VALUE};
+
+    /** 各座位最近一次 LP 变动的数值与发生时刻（毫秒），供徽章旁飘一下。 */
+    private final int[] lpDelta = new int[2];
+    private final long[] lpDeltaAt = new long[2];
+
+    /**
      * @param viewerSeat 服务器给的视角座位（0/1）。<b>不能</b>只从 {@code question} 推：
      *        没有询问的那一帧（对手回合里每一步末尾都会推一帧）{@code question} 是 null，
      *        那时就只能默认 0 号席——后手玩家会看到对手的牌桌，也看不见自己的手牌。
@@ -208,7 +241,6 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
         this.mySeat = ClientSeat.of(viewerSeat, question == null ? -1 : question.player());
     }
 
-    /** 服务器推来新状态时调用。 */
     /**
      * 服务器推来新状态时调用。
      *
@@ -221,6 +253,44 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
      * 所以这里直接用内容相等来判断「还是不是同一题」。
      */
     public void update(DuelBoard board, DuelQuestion question, int viewerSeat, ChainNotice notice) {
+        update(board, question, viewerSeat, notice, null);
+    }
+
+    /**
+     * 服务器推来新状态时调用，收局那一帧还带着结果。
+     *
+     * @param result 收局结果；非 null 表示这一局结束了，界面切到收局画面
+     */
+    public void update(DuelBoard board, DuelQuestion question, int viewerSeat, ChainNotice notice,
+                       DuelResult result) {
+        if (result != null) {
+            // 收局帧。牌桌一般是 null（服务端只带结果），这时【保留】上一帧：
+            // 收局画面的背景就是玩家刚打完的那一屏，清掉等于把他这一局当场抹掉。
+            this.result = result;
+            if (board != null) {
+                this.board = board;
+                this.mySeat = ClientSeat.of(viewerSeat, -1);
+            }
+            // 对局结束了：询问与它的按钮一律收掉，不能再作答（也不能再提交）。
+            this.question = null;
+            this.notice = null;
+            this.submitted = false;
+            this.chosen.clear();
+            this.menu.clear();
+            this.extraMenuRef = null;
+            this.chainAgreed = false;
+            this.extraListOpen = false;
+            this.browse = null;
+            rebuild();
+            return;
+        }
+        // 收到「没有结果」的帧 = 这一局还在打（服务端只有收尾那一帧会带结果，
+        // 见 DuelRoom.finish），所以上一局的收局画面到这里就必须撤掉。
+        // 不撤会怎样：玩家不按「确定」就去开下一局（面板开着照样能按 T 打字开局），
+        // 新一局的每一帧都还背着旧的 result，rebuild() 早退成「只摆一颗确定」，
+        // 新一局的询问就被一块旧面板挡在后面——点不动、也答不了。
+        boolean staleResult = this.result != null;
+        this.result = null;
         boolean same = java.util.Objects.equals(this.question, question);
         // 「上次已经作答、现在又来了一个询问」= 引擎重问（MSG_RETRY 或重新推送）。
         // 这时必须把界面重新放开，否则玩家被自己上一次的提交永久锁住：
@@ -231,6 +301,7 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
         this.mySeat = ClientSeat.of(viewerSeat, question == null ? -1 : question.player());
         this.board = board;
         this.question = question;
+        trackLpDeltas(board);
         if (!same) {
             chosen.clear();
             counterAmounts = question == null ? new int[0] : new int[question.options().size()];
@@ -246,7 +317,7 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
         // 玩家一作答也会收掉（见 dispatch）。它<b>只影响本地显示</b>，不产生任何应答。
         boolean noticeChanged = !java.util.Objects.equals(this.notice, notice);
         this.notice = DuelScreenFlow.nextNotice(this.notice, notice, same);
-        if (!same || reAsked) {
+        if (!same || reAsked || staleResult) {
             submitted = false;
             rebuild();
         } else if (noticeChanged) {
@@ -322,13 +393,33 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
     }
 
     private void drawPhases(GuiGraphics g, FieldLayout layout) {
+        // 当前阶段来自内核 MSG_NEW_PHASE（经牌桌帧过来）。三态是照 ygopro 分的：
+        // 当前那格最亮、能去的次之、其余灰——不加这一层，玩家只能靠状态条的文字
+        // 猜「现在在哪个阶段」，对手回合时更是一点信息都没有。
+        int current = currentPhaseBar();
         for (int i = 0; i < PHASES.length; i++) {
             var r = layout.phase(i);
             boolean enabled = phaseOption(PHASES[i]) >= 0;
-            g.fill(r.x(), r.y(), r.right(), r.bottom(), enabled ? 0xFF35634B : 0xFF25313B);
+            boolean here = i == current;
+            g.fill(r.x(), r.y(), r.right(), r.bottom(),
+                    here ? 0xFF3A6EA5 : enabled ? 0xFF35634B : 0xFF25313B);
             g.drawCenteredString(font, phaseName(i), r.x() + r.w() / 2, r.y() + 4,
-                    enabled ? 0xFFFFFF : 0x889099);
+                    here || enabled ? 0xFFFFFF : 0x889099);
+            if (here) {
+                // 当前格再加一条下划线：蓝底与「可点」的绿底在小窗口/低亮度下不好分。
+                g.fill(r.x(), r.bottom() - 1, r.right(), r.bottom(), 0xFFFFD060);
+            }
         }
+    }
+
+    /** 当前阶段在阶段条上的下标；{@code -1} 表示还没收到过阶段消息。 */
+    private int currentPhaseBar() {
+        return board == null ? -1 : DuelBoard.phaseBarIndex(board.phase());
+    }
+
+    /** 连锁已经有几环（内核 {@code chainCount}）；不在连锁中是 0。 */
+    private int chainCount() {
+        return board == null ? 0 : board.chainCount();
     }
 
     private boolean spatial() {
@@ -451,6 +542,18 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
      */
     private void rebuild() {
         clearWidgets();
+        // 收局画面是模态的：底下的询问按钮、列表、弹窗一个都不留，
+        // 只摆那一颗「确定」。不先拦在这里，收局后屏幕上会同时存在
+        // 「对局已经结束」和「还能作答」两套控件。
+        if (result != null) {
+            piles = List.of();
+            list = null;
+            confirm = null;
+            cancelBtn = null;
+            popup = null;
+            buildResultButton();
+            return;
+        }
         // 「查看牌堆内容」的窗口不属于询问：界面重建时它可能还开着，
         // 那颗「收起」键就得跟着重摆，否则窗口还在、键没了。
         if (browse != null) {
@@ -864,8 +967,9 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
      * 鼠标点击。
      *
      * <p>左键：点到的卡/格上若只有一个行动就立刻做；有多个就在光标处弹菜单让玩家挑。
-     * 落在空白处且已经选够数则确认——「点外面的空地」是最自然的确认手势。
-     * <p>右键：确认（够数时），否则取消。
+     * <p>左键：点到的卡/格上若只有一个行动就立刻做；有多个就在光标处弹菜单让玩家挑。
+     * 落在牌桌空白处<b>什么都不做</b>——交卷只走右下角的确认键（见方法末的注释）。
+     * <p>右键：只用来收起已经打开的窗口，不作答（咩咩 2026-10-05）。
      */
     @Override
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
@@ -1005,11 +1109,13 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
             // 无落点的询问（是/否、发动哪个效果、宣言种族属性）交给小窗按钮处理
             return super.mouseClicked(mouseX, mouseY, button);
         }
-        // 点在牌桌空白处：选够了就确认。「点外面的空地」是最自然的确认手势，
-        // 也是 ygo 客户端的做法；没选够则什么都不做——不弹窗、不催。
-        if (needsConfirm() && countsOk()) {
-            submit();
-        }
+        // 点在牌桌空白处：<b>什么都不做</b>。
+        //
+        // 这里以前是「选够了就确认」，自称「最自然的手势」，但它和右下角那颗
+        // 「够条件才出现」的确认键重复，而且会<b>误提交</b>：候选卡挨着的位置点偏一格，
+        // 答案当场交出去，玩家没有后悔的机会。ygopro 的选卡确认只有显式 OK 一条路
+        // （event_handler.cpp 的 btnCancelOrFinish / ClientField 的选卡确认键），
+        // 空白处点击不产生应答——照它改：空地不做任何事，交卷只走确认键。
         return true;
     }
 
@@ -1432,13 +1538,16 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
         drawLifeBadges(g, L);
         // 图层顺序（咩咩 2026-10-05 报的「图层问题」）：
         //   底色 → 场地 → 阶段条 → 场内高亮 → 卡名列表 → 查看窗 → 状态条 → LP 徽章
-        //   → 卡片菜单 → 右侧信息面板 → 弹窗 → 控件（按钮永远最上）。
+        //   → 卡片菜单 → 右侧信息面板 → 弹窗 → 收局画面 → 控件（按钮永远最上）。
         // 修掉的三处：弹窗原来画在信息面板【之前】（面板压掉弹窗右半边）；卡片菜单画得
         // 比状态条还早（贴着手牌行弹出的菜单被压住，看着像「点了没反应」）；
         // 必发提示条已按咩咩要求不再显示。
         drawMenu(g);
         drawInfoPanel(g, L, mouseX, mouseY);
         drawPopup(g);
+        // 收局画面排在弹窗之后、控件之前：它是最上面的一块板
+        // （按钮永远最上，所以那颗「确定」还是压在它上面）。
+        drawResult(g, L);
         super.render(g, mouseX, mouseY, partialTick);
     }
 
@@ -2012,6 +2121,19 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
      * 以前这里拿 {@code "是否发动效果？".equals(title)} 当中文判据，换语言就静默失效。
      */
     private String questionTitle() {
+        String hint = titleHintLine();
+        String body = titleBody();
+        return hint == null || hint.isEmpty() ? body : hint + "\n" + body;
+    }
+
+    /**
+     * 标题正文（<b>不含</b>内核时点行）。
+     *
+     * <p>拆出来是因为状态条要把时点行画成另一种样式（灰、小一号、限一行）：
+     * 两者来源不同——时点是内核文本（不翻），问句是我们的（要翻）——
+     * 拼成一个字符串之后就再也没法分别上色，只能整体一个样式。
+     */
+    private String titleBody() {
         if (question == null) {
             return DuelText.s(DuelText.STATUS_WAITING);
         }
@@ -2032,9 +2154,25 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
             }
             return DuelText.s(DuelText.TITLE_EFFECTYN_GENERIC);
         }
-        String body = args.length > 0 ? DuelText.s(key, (Object[]) args) : DuelText.s(key);
-        // 内核提示（时点/选择提示）不翻，挂在前面，两行读起来才是「什么时候，要不要发动」。
-        return t.rawHint() == null || t.rawHint().isEmpty() ? body : t.rawHint() + "\n" + body;
+        return args.length > 0 ? DuelText.s(key, (Object[]) args) : DuelText.s(key);
+    }
+
+    /**
+     * 内核时点行（{@code HINT_EVENT}，「伤害计算前」这类）；没有就是 {@code null}。
+     *
+     * <p>{@code RAW} 标题整体就是内核文本（自检样例、内核直接给的串），
+     * 里面没有「时点 + 问句」两段之分，所以不拆。已作答的标题也不带时点。
+     */
+    private String titleHintLine() {
+        if (question == null || submitted) {
+            return null;
+        }
+        DuelQuestion.Title t = question.titleText();
+        if (!t.fromLang()) {
+            return null;
+        }
+        String h = t.rawHint();
+        return h == null || h.isEmpty() ? null : h;
     }
 
     /**
@@ -2152,8 +2290,6 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
         drawLifeBadge(g, s.x() + 2, s.y() + 4, mineW, me() == null ? 0 : me().lp(),
                 DuelText.s(DuelText.LP_MINE), 0xFF7FD8A0, false);
 
-        // 正文右侧要让出来的宽度：对手 LP ＋ 必发提示条 ＋ 右下角那两颗键。
-        // 少让任何一项，提示尾巴都会被压在下面——这就是咩咩说的「提示显示不全」的一部分。
         // 正文右侧要让出来的宽度：对手 LP ＋ 右下角那两颗键（见 statusReserve）。
         // 少让任何一项，提示尾巴都会被压在下面——这就是咩咩说的「提示显示不全」的一部分。
         int reserve = statusReserve(L);
@@ -2163,9 +2299,37 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
             return;
         }
         int ty = s.y() + 3;
-        for (String line : CardTips.wrap(font, questionTitle(), w)) {
+        // 连锁小牌子挂在标题左边：链到第几环是随时要看得见的信息，
+        // 而长连锁时它只出现在内核的询问里（一答就没了），玩家只能凭记忆。
+        int chain = chainCount();
+        if (chain > 0) {
+            String chip = DuelText.s(DuelText.STATUS_CHAIN, chain);
+            int chipW = font.width(chip) + 6;
+            if (chipW + 4 <= w) {
+                g.fill(textX, ty - 1, textX + chipW, ty + 10, 0xFF7A4B12);
+                g.drawString(font, chip, textX + 3, ty, 0xFFFFC46B, true);
+                textX += chipW + 4;
+                w -= chipW + 4;
+            }
+        }
+        // 内核时点单独一行、灰、小一号、限一行：它只是「现在是什么时候」，
+        // 问句才是要回答的东西。ygopro 也是两行（duelclient.cpp:1585 的 %ls\n%ls）；
+        // 这里特意不让它折行——一折就会把问句挤出状态条。
+        String when = titleHintLine();
+        if (when != null) {
+            g.pose().pushPose();
+            g.pose().translate(textX, ty, 0);
+            g.pose().scale(HINT_SCALE, HINT_SCALE, 1f);
+            g.drawString(font, TextWrap.oneLine(when, (int) (w / HINT_SCALE), font::width),
+                    0, 0, 0xFF93A3B4, true);
+            g.pose().popPose();
+            ty += 8;
+        }
+        for (String line : CardTips.wrap(font, titleBody(), w)) {
             if (ty + 9 > s.bottom() - 1) {
-                return;
+                // 画不下就到此为止。这里以前是 return——LP 飘字排在它后面，
+                // 状态条一挤就再也飘不出来（而挤的时候恰恰最需要看到掉血）。
+                break;
             }
             g.drawString(font, line, textX, ty, 0xFFFFD060, true);
             ty += 9;
@@ -2184,6 +2348,124 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
                 ty += 9;
             }
         }
+        // LP 飘字最后画：它要压在标题上面（只活两秒，带深底），
+        // 排在前面的话会被随后画的标题糊掉。
+        drawLpDelta(g, s.x() + 2 + mineW + 2, s.y() + 4, mySeat, false);
+    }
+
+    // ── 收局画面 ──────────────────────────────────────────────────────────
+
+    /** 收局画面标题行占的高度（含与下面几行之间的间隔）。 */
+    private static final int RESULT_TITLE_H = 22;
+
+    /** 收局画面那颗「确定」的宽度。比答题键宽一点：它是这一屏唯一的选择。 */
+    private static final int RESULT_BTN_W = 80;
+
+    /**
+     * 收局画面：盖在最后一帧牌桌上的模态面板。
+     *
+     * <p>为什么留牌桌当背景：玩家要看的是「最后那一刻场上是怎样」。
+     * 把背景清空等于把他刚打完的那一局当场抹掉，所以只压一层暗色。
+     *
+     * <p>文案全部来自语言资源，数字（LP、回合数、原因码）都是服务端给的观测值；
+     * 原因那一行先查内核的 {@code !victory} 表，见 {@link #resultReason()}。
+     *
+     * <p>它是<b>模态</b>的：面板一出来，底下那些作答控件就都不在了（见 {@link #rebuild}），
+     * 唯一的键是「确定」。没有「再来一局」——那是对局外面的事，界面不替玩家决定。
+     */
+    private void drawResult(GuiGraphics g, FieldLayout L) {
+        if (result == null) {
+            return;
+        }
+        g.fill(0, 0, width, height, 0xB0000000);
+        FieldLayout.Rect r = resultRect();
+        // 先描一圈亮边：面板压在牌桌上，没有边就看不出「这是一块板」。
+        g.fill(r.x() - 1, r.y() - 1, r.right() + 1, r.bottom() + 1, 0xFF6E90B4);
+        g.fill(r.x(), r.y(), r.right(), r.bottom(), 0xF0101A24);
+        g.drawCenteredString(font, resultTitle(), r.x() + r.w() / 2, r.y() + 7, 0xFFFFD060);
+        int ty = r.y() + RESULT_TITLE_H;
+        for (String row : resultRows()) {
+            // 截断而不折行：这一屏是给玩家看一眼结果的，行数与位置固定；
+            // 一折行面板高度就随语言变，按钮也跟着跳。
+            g.drawCenteredString(font, clip(row, r.w() - 12), r.x() + r.w() / 2, ty, 0xFFE8F0F8);
+            ty += 11;
+        }
+    }
+
+    /** 收局面板的矩形。那颗键也照它摆——两处各算一遍，迟早算岔。 */
+    private FieldLayout.Rect resultRect() {
+        FieldLayout L = field();
+        int w = Math.min(260, Math.max(170, L.fieldW() * 2 / 3));
+        int h = RESULT_TITLE_H + resultRows().size() * 11 + ANSWER_BTN_H + 10;
+        return new FieldLayout.Rect((width - w) / 2, (height - h) / 2, w, h);
+    }
+
+    /**
+     * 面板上要写的那几行（标题之外）。
+     *
+     * <p>LP 按<b>视角</b>排：玩家先看到自己的那一半，和左下角徽章的位置一致。
+     * 取不到 LP 时整天不画那一行，而不是画一个「0:0」让玩家以为双方都被清零了。
+     */
+    private List<String> resultRows() {
+        List<String> rows = new ArrayList<>();
+        rows.add(DuelText.s(DuelText.RESULT_REASON, resultReason()));
+        if (result.lpKnown()) {
+            rows.add(DuelText.s(DuelText.RESULT_LP, result.lpAt(mySeat), result.lpAt(1 - mySeat)));
+        }
+        rows.add(DuelText.s(DuelText.RESULT_TURNS, result.turns()));
+        return rows;
+    }
+
+    /**
+     * 标题：按视角说「你赢了 / 你输了 / 平局」。
+     *
+     * <p>平局必须单独一句：两边都不是赢家，用「你赢了」或「你输了」都是在说假话。
+     */
+    private String resultTitle() {
+        if (result.isDraw()) {
+            return DuelText.s(DuelText.RESULT_DRAW);
+        }
+        return DuelText.s(result.wonBy(mySeat) ? DuelText.RESULT_WIN : DuelText.RESULT_LOSE);
+    }
+
+    /**
+     * 原因那一行的文本。
+     *
+     * <p>先查内核的 {@code !victory 0x…} 表：那个原因码是<b>卡片脚本给定</b>的
+     * （{@code Duel.Win(player, reason)}），对应原文也在内核的数据里，
+     * 属于「内核文本不翻」那一类——「被封印的艾克佐迪亚」特殊胜利这种说法只有那儿有。
+     * 查不到（编号不在表里）才用我们自己的兜底句。
+     */
+    private String resultReason() {
+        String kernel = DataPacks.victoryString(result.reason());
+        if (kernel != null && !kernel.isEmpty()) {
+            return kernel;
+        }
+        return DuelText.s(DuelText.RESULT_REASON_UNKNOWN, result.reason());
+    }
+
+    /** 收局画面唯一的键：确定。它只关界面，<b>不回任何应答</b>（对局已经结束了）。 */
+    private void buildResultButton() {
+        FieldLayout.Rect r = resultRect();
+        Button ok = Button.builder(DuelText.c(DuelText.BUTTON_CONFIRM), b -> {
+            DuelClient.forgetScreen(this);
+            onClose();
+        }).bounds(r.x() + (r.w() - RESULT_BTN_W) / 2, r.bottom() - ANSWER_BTN_H - 6,
+                RESULT_BTN_W, ANSWER_BTN_H).build();
+        addRenderableWidget(ok);
+    }
+
+    /**
+     * 收局画面一关，这一局就真的结束了：决斗盘不该再把这块屏叫回来
+     * （见 {@code DuelClient.reopenScreen}）。对局进行中则留着——那是玩家自己的界面，
+     * 他随时能用决斗盘把它叫回来。
+     */
+    @Override
+    public void onClose() {
+        if (result != null) {
+            DuelClient.forgetScreen(this);
+        }
+        super.onClose();
     }
 
     /**
@@ -2206,6 +2488,8 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
             int room = L.fieldW() - 6 - (L.phase(5).right() + 2);
             int bw = Math.min(w, room);
             drawLifeBadge(g, L.fieldW() - 4 - bw, 4, bw, lp, DuelText.s(DuelText.LP_OPPONENT), 0xFFE07A7A, true);
+            // 飘字往左让开徽章本身：右边界取徽章左侧再退 4 像素。
+            drawLpDelta(g, L.fieldW() - 4 - bw - 4, 4, 1 - mySeat, true);
             return;
         }
         // 窄屏上阶段条顶到右端，退到状态条右端。位置差一点，
@@ -2213,19 +2497,17 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
         FieldLayout.Rect s = L.status();
         drawLifeBadge(g, s.right() - 4 - inStatus, s.y() + 4, inStatus, lp,
                 DuelText.s(DuelText.LP_OPPONENT), 0xFFE07A7A, true);
+        drawLpDelta(g, s.right() - 4 - inStatus - 4, s.y() + 4, 1 - mySeat, true);
     }
 
     /**
-     * 右上角放不下时，对手 LP 退回状态条右端要占多宽；放得下就是 0。
-     *
-     * <p>状态条的正文与这个徽章必须照着同一个数排版，所以只在这里算一次——
-     * 两边各算一遍迟早算岔，表现就是文字和徽章叠在一起。
-     */
-    /**
-     * 状态条正文右侧被别的东西占掉的宽度（对手 LP ／ 必发提示条 ／ 右下角那两颗键）。
+     * 状态条正文右侧被别的东西占掉的宽度（对手 LP ／ 右下角那两颗键）。
      *
      * <p>只在这里算一次，排版与徽章共用同一个数：两边各算一遍迟早算岔，
      * 表现就是文字和徽章叠在一起。
+     *
+     * <p>必发提示条不占宽：它按咩咩 2026-10-05 的要求已经不再显示
+     * （见 {@link #drawNotice}），再留一份宽度只会让标题白窄一截。
      */
     private int statusReserve(FieldLayout L) {
         int reserve = 0;
@@ -2242,6 +2524,11 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
         return reserve;
     }
 
+    /**
+     * 右上角放不下时，对手 LP 退回状态条右端要占多宽；放得下就是 0。
+     *
+     * <p>判据是「阶段条右端到场地右缘还剩多少」：还够一个徽章就留在右上角。
+     */
     private int oppLpInStatusWidth(FieldLayout L) {
         if (board == null) {
             return 0;
@@ -2285,6 +2572,62 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
         g.fill(x, y - 1, x + w, y + 10, 0x90101820);
         int tx = rightAlign ? x + w - 3 - font.width(text) : x + 3;
         g.drawString(font, text, tx, y, color, true);
+    }
+
+    /** LP 变动飘字停留多久（毫秒）。 */
+    private static final long LP_DELTA_MS = 2000L;
+
+    /**
+     * 记下这一帧各座位 LP 的增减（见 {@link #lastLp} 的注释）。
+     *
+     * <p>按<b>席位</b>记而不是「我方/对手」：同一块屏中途可能换视角
+     * （观战、换边），按席位记才不会把对手的掉血飘到自己头上。
+     * 第一帧只记基线、不飘（那时「上一帧」还不存在，飘一个全场 LP 出来是噪音）。
+     */
+    private void trackLpDeltas(DuelBoard board) {
+        long now = System.currentTimeMillis();
+        for (int seat = 0; seat < 2; seat++) {
+            if (board == null) {
+                lastLp[seat] = Integer.MIN_VALUE;
+                continue;
+            }
+            int lp = board.playerAt(seat).lp();
+            int prev = lastLp[seat];
+            lastLp[seat] = lp;
+            if (prev == Integer.MIN_VALUE || lp == prev) {
+                continue;
+            }
+            lpDelta[seat] = lp - prev;
+            lpDeltaAt[seat] = now;
+        }
+    }
+
+    /**
+     * 在 LP 徽章旁边飘一下这次变动：{@code -2100} / {@code +1000}，两秒内淡出。
+     *
+     * <p>不用计时器也不用 tick：界面每次绘制自己按「发生时刻」算剩余时间，
+     * 十几个 tick 一帧的服务器卡顿也不会让它僵在屏幕上。
+     *
+     * @param rightAlign true 表示 {@code x} 是右边界（对手徽章在右边，往左飘）
+     */
+    private void drawLpDelta(GuiGraphics g, int x, int y, int seat, boolean rightAlign) {
+        int d = lpDelta[seat];
+        if (d == 0) {
+            return;
+        }
+        long age = System.currentTimeMillis() - lpDeltaAt[seat];
+        if (age < 0 || age >= LP_DELTA_MS) {
+            return;
+        }
+        String text = (d > 0 ? "+" : "") + d;
+        int alpha = (int) (0xFF * (1.0 - (double) age / LP_DELTA_MS));
+        alpha = Math.max(0x30, Math.min(0xFF, alpha));
+        int color = (alpha << 24) | (d > 0 ? 0x007FD8A0 : 0x00FF6B6B);
+        int w = font.width(text) + 4;
+        int bx = rightAlign ? x - w : x;
+        // 深底小牌：飘字是临时覆盖在标题/场地上的，没有底会被同一层的字糊住。
+        g.fill(bx, y - 1, bx + w, y + 10, (Math.min(alpha, 0xC0) << 24) | 0x00101820);
+        g.drawString(font, text, bx + 2, y, color, true);
     }
 
     /** 弹窗里每个选项舒服时占的高度。 */
@@ -2733,7 +3076,7 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
             g.fill(trackX, y, trackX + 3, y + h, 0xFF78C8A4);
         }
         if (needsConfirm() && countsOk()) {
-            g.drawString(font, clip(DuelText.s(DuelText.LIST_CONFIRM_OUTSIDE), p.w() - 8), p.x() + CardList.PAD,
+            g.drawString(font, clip(DuelText.s(DuelText.LIST_CONFIRM_HINT), p.w() - 8), p.x() + CardList.PAD,
                     p.bottom() - CardList.PAD - 9, 0xFF9FE0C0, true);
         }
     }

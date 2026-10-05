@@ -3,6 +3,7 @@ package cn.xm1221.ygomc.common.net;
 import cn.xm1221.ygomc.common.duel.ChainNotice;
 import cn.xm1221.ygomc.common.duel.DuelBoard;
 import cn.xm1221.ygomc.common.duel.DuelQuestion;
+import cn.xm1221.ygomc.common.duel.DuelResult;
 import cn.xm1221.ygomc.common.duel.DuelWire;
 import dev.architectury.networking.NetworkManager;
 import net.minecraft.network.RegistryFriendlyByteBuf;
@@ -76,10 +77,17 @@ public final class YgomcNet {
 
     /**
      * 一个 S→C 更新：牌桌 + 当前要问的问题（问题可能为 null，表示只是刷新牌桌）
-     * + 一条一次性的必发通知（没有也是常态，那时为 null）。
+     * + 一条一次性的必发通知（没有也是常态，那时为 null）
+     * + 一局的结果（只有收局那一帧有，别的时候是 null）。
      */
     public record BoardUpdate(DuelBoard board, DuelQuestion question, int viewerSeat,
-                              ChainNotice notice) {
+                              ChainNotice notice, DuelResult result) {
+
+        /** 没有结果的那一帧（绝大多数帧）。 */
+        public BoardUpdate(DuelBoard board, DuelQuestion question, int viewerSeat,
+                           ChainNotice notice) {
+            this(board, question, viewerSeat, notice, null);
+        }
     }
 
     // ── 注册 ──────────────────────────────────────────────────────────────
@@ -118,12 +126,17 @@ public final class YgomcNet {
             // 必发通知：一次性，绝大多数帧没有它（服务端取走就没了）。
             boolean hasNotice = buf.readBoolean();
             byte[] notice = hasNotice ? buf.readByteArray() : null;
+            // 收局结果：<b>尾巴上的尾巴</b>，只有收局那一帧有。老服务端根本不写它，
+            // 所以必须先问「还有没有字节」——直接读会抛（读越界），
+            // 而这一帧在其他方面完全正常。
+            byte[] result = buf.readableBytes() > 0 && buf.readBoolean() ? buf.readByteArray() : null;
             // 先解码再排队：解码是纯计算，放在网络线程上没问题，
             // 这样主线程拿到的已经是可用对象，也就把「解析失败」和「界面出错」
             // 这两类故障分到了不同的线程，排查时不会混在一起。
             BoardUpdate update = new BoardUpdate(DuelWire.decodeBoard(board),
                     hasQuestion ? DuelWire.decodeQuestion(question) : null, viewerSeat,
-                    hasNotice ? DuelWire.decodeNotice(notice) : null);
+                    hasNotice ? DuelWire.decodeNotice(notice) : null,
+                    result == null ? null : DuelWire.decodeResult(result));
             Consumer<BoardUpdate> h = boardHandler;
             if (h != null) {
                 ctx.queue(() -> h.accept(update));
@@ -144,6 +157,16 @@ public final class YgomcNet {
      */
     public static void sendBoard(ServerPlayer player, DuelBoard board, DuelQuestion question,
                                  ChainNotice notice, int viewerSeat) {
+        sendBoard(player, board, question, notice, viewerSeat, null);
+    }
+
+    /**
+     * 推一帧给某个玩家，末尾捎带一局的结果（收局那一帧）。
+     *
+     * @param result 收局结果；绝大多数帧是 null（那时帧里不带这一段）。
+     */
+    public static void sendBoard(ServerPlayer player, DuelBoard board, DuelQuestion question,
+                                 ChainNotice notice, int viewerSeat, DuelResult result) {
         RegistryFriendlyByteBuf buf = new RegistryFriendlyByteBuf(
                 io.netty.buffer.Unpooled.buffer(), player.registryAccess());
         buf.writeByteArray(DuelWire.encodeBoard(board));
@@ -157,6 +180,12 @@ public final class YgomcNet {
         buf.writeBoolean(notice != null);
         if (notice != null) {
             buf.writeByteArray(DuelWire.encodeNotice(notice));
+        }
+        // 结果排在通知<b>之后</b>，理由同上：老客户端读完通知就停手，
+        // 这段它既读不到也不会读错位。
+        buf.writeBoolean(result != null);
+        if (result != null) {
+            buf.writeByteArray(DuelWire.encodeResult(result));
         }
         NetworkManager.sendToPlayer(player, BOARD, buf);
     }

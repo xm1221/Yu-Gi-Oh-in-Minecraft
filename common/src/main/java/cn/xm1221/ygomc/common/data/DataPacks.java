@@ -229,4 +229,17 @@ public final class DataPacks {
         String v = s == null ? null : s.victory(reason);
         return (v == null || v.isEmpty()) ? "胜负原因 " + reason : v;
     }
+
+    /**
+     * 胜负原因的内核原文（{@code !victory 0x…} 表）；查不到给 {@code null}。
+     *
+     * <p>与 {@link #victoryName} 的区别只有「查不到时怎么办」：那个给一句兜底中文，
+     * 这个把「有没有查到」交回调用方。收局画面要用这一个——它的兜底文案归界面语言资源管
+     * （{@code DuelText.RESULT_REASON_UNKNOWN}），在数据层拼中文就把
+     * 「界面文本必须来自模组语言资源」这条硬约束破在代码里了。
+     */
+    public static String victoryString(int reason) {
+        StringsDb s = get().strings();
+        return s == null ? null : s.victory(reason);
+    }
 }

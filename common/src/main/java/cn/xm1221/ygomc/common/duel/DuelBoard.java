@@ -22,13 +22,81 @@ import java.util.List;
  * 7 个怪兽区、8 个魔陷区（{@code field.cpp:68-69}）。
  * 这里把它们作为<b>不变量断言</b>而不是默默截断——数量对不上就说明
  * 我对快照布局的理解错了，那时宁可炸掉也不要画出一张错的牌桌。
+ *
+ * <h2>阶段与回合不在快照里</h2>
+ * {@code MSG_RELOAD_FIELD} 不带阶段也不带回合数，这两样只能从
+ * {@code MSG_NEW_PHASE} / {@code MSG_NEW_TURN} 另记（见 {@code DuelRoom.onMessage}），
+ * 取快照时再盖上去（{@link #withPhaseTurn}）。所以 {@code phase} 为
+ * {@link #PHASE_UNKNOWN} 是<b>正常状态</b>——对手回合刚开始、
+ * 或这一局还没收到过任何阶段消息时就是这样，界面不该拿它当真值用。
  */
-public record DuelBoard(int duelRule, int chainCount, PlayerBoard player0, PlayerBoard player1) {
+public record DuelBoard(int duelRule, int chainCount, PlayerBoard player0, PlayerBoard player1,
+                        int phase, int turn) {
 
     /** 怪兽区数量，内核 {@code field.cpp:68} 写死。 */
     public static final int MONSTER_ZONES = 7;
     /** 魔陷区数量，内核 {@code field.cpp:69} 写死。 */
     public static final int SPELL_ZONES = 8;
+
+    /** 阶段未知。{@code 0} 不是任何 {@code PHASE_*} 取值，用来表示「还没收到过 NEW_PHASE」。 */
+    public static final int PHASE_UNKNOWN = 0;
+
+    /**
+     * 阶段位，逐条照抄内核 {@code common.h:407-416}。
+     *
+     * <p>性质和上面的 {@code POS_*} 一样：写在这里，让本类不依赖 JNI 层。
+     *
+     * <p>注意 {@code 0x08} 是<b>战斗阶段开始</b>、{@code 0x80} 才是战斗阶段本身，
+     * 中间还夹着战斗步骤（{@code 0x10}）、伤害步骤（{@code 0x20}）与伤害计算（{@code 0x40}）——
+     * 战斗阶段里内核会依次经过这一串值，它们在本类看来都算「战斗」。
+     */
+    public static final int PHASE_DRAW = 0x01;
+    public static final int PHASE_STANDBY = 0x02;
+    public static final int PHASE_MAIN1 = 0x04;
+    public static final int PHASE_BATTLE_START = 0x08;
+    public static final int PHASE_BATTLE_STEP = 0x10;
+    public static final int PHASE_DAMAGE = 0x20;
+    public static final int PHASE_DAMAGE_CAL = 0x40;
+    public static final int PHASE_BATTLE = 0x80;
+    public static final int PHASE_MAIN2 = 0x100;
+    public static final int PHASE_END = 0x200;
+
+    /**
+     * 不带阶段/回合的五参构造。
+     *
+     * <p>线格式 v2 没有这两个字段，{@link #of} 也只有形状；
+     * 两处都退化成「阶段未知、回合 0」，与旧行为完全一致。
+     */
+    public DuelBoard(int duelRule, int chainCount, PlayerBoard player0, PlayerBoard player1) {
+        this(duelRule, chainCount, player0, player1, PHASE_UNKNOWN, 0);
+    }
+
+    /**
+     * 六个阶段格的下标：抽卡 / 准备 / 主要1 / 战斗 / 主要2 / 结束。
+     *
+     * <p>战斗阶段内部的五个值全部映到同一格——玩家要看的是「现在在战斗阶段」，
+     * 不是「现在在伤害计算的哪一个子步」（子步由内核的时点提示单独说，见
+     * {@code DuelRoom} 的 {@code HINT_EVENT} 处理）。
+     *
+     * @return 下标；{@code phase} 不是阶段值（含 {@link #PHASE_UNKNOWN}）时返回 {@code -1}
+     */
+    public static int phaseBarIndex(int phase) {
+        return switch (phase) {
+            case PHASE_DRAW -> 0;
+            case PHASE_STANDBY -> 1;
+            case PHASE_MAIN1 -> 2;
+            case PHASE_BATTLE_START, PHASE_BATTLE_STEP, PHASE_DAMAGE, PHASE_DAMAGE_CAL,
+                 PHASE_BATTLE -> 3;
+            case PHASE_MAIN2 -> 4;
+            case PHASE_END -> 5;
+            default -> -1;
+        };
+    }
+
+    /** 盖上阶段与回合数（{@link #of} 造出来的板子这两项是空的）。 */
+    public DuelBoard withPhaseTurn(int phase, int turn) {
+        return new DuelBoard(duelRule, chainCount, player0, player1, phase, turn);
+    }
 
     /**
      * 表示形式位，取自内核 {@code common.h} 的 {@code POS_*}。
@@ -169,6 +237,12 @@ public record DuelBoard(int duelRule, int chainCount, PlayerBoard player0, Playe
     public String describe() {
         StringBuilder sb = new StringBuilder();
         sb.append("规则 ").append(duelRule);
+        if (turn > 0) {
+            sb.append("，第 ").append(turn).append(" 回合");
+        }
+        if (phase != PHASE_UNKNOWN) {
+            sb.append("，阶段 0x").append(Integer.toHexString(phase));
+        }
         if (chainCount > 0) {
             sb.append("，连锁 ").append(chainCount);
         }

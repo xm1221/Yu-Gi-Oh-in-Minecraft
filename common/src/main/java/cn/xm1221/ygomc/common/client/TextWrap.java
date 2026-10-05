@@ -93,4 +93,42 @@ public final class TextWrap {
         }
         return chunk;
     }
+
+    /** 截断时补的那个字。宽窄由 {@code Widths} 自己量。 */
+    public static final String ELLIPSIS = "…";
+
+    /**
+     * 截成<b>一行</b>：放不下就在末尾补一个省略号。
+     *
+     * <p>与 {@link #wrap} 的区别只有这一条，但用途完全不同：状态条上的
+     * <b>内核时点行</b>（「伤害计算前」这类）是修饰问句的，它一折行就会把问句
+     * 挤出状态条——那时玩家看不到「要回答什么」，比时点显示不全糟得多。
+     * 所以这里宁可截断也要保住一行。
+     *
+     * <p>纯逻辑，能离线断言（中文字符没有空格可断，正是要按<b>字符</b>截）。
+     *
+     * @param text     原文；{@code null}/空串返回空串
+     * @param maxWidth 行宽上限（像素），小于等于 0 按 1 处理
+     * @return 一行文本；原文放得下就原样返回
+     */
+    public static String oneLine(String text, int maxWidth, Widths widths) {
+        if (text == null || text.isEmpty()) {
+            return "";
+        }
+        int limit = Math.max(1, maxWidth);
+        if (widths.width(text) <= limit) {
+            return text;
+        }
+        int ellipsisWidth = widths.width(ELLIPSIS);
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < text.length(); i++) {
+            String next = sb.toString() + text.charAt(i);
+            if (widths.width(next) + ellipsisWidth > limit) {
+                break;
+            }
+            sb.append(text.charAt(i));
+        }
+        // 一个字符都放不下时也不能返回空串：调用方会把它当成「没有时点」而整行不画。
+        return sb.length() == 0 ? ELLIPSIS : sb + ELLIPSIS;
+    }
 }

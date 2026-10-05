@@ -209,6 +209,33 @@ public final class DuelText {
     public static final String STATUS_SUBMITTED = "ygomc.duel.status.submitted";
     public static final String STATUS_NO_BOARD = "ygomc.duel.status.no_board";
 
+    /**
+     * 连锁数小牌子：「连锁 %s」。
+     *
+     * <p>数值是内核 {@code chainCount}（连锁已经有几环）。它是<b>观测值</b>，
+     * 不是我们要翻译的句子，所以这里只给模板、数字当参数传。
+     */
+    public static final String STATUS_CHAIN = "ygomc.duel.status.chain";
+
+    // ── 收局画面 ──────────────────────────────────────────────────────────
+    /** 收局标题三态：按视角说输赢。平局必须单独一句——两边都不是赢家。 */
+    public static final String RESULT_WIN = "ygomc.duel.result.win";
+    public static final String RESULT_LOSE = "ygomc.duel.result.lose";
+    public static final String RESULT_DRAW = "ygomc.duel.result.draw";
+    /** 「原因：%s」。{@code %s} 是内核 {@code !victory} 表的原文（内核文本，不翻）。 */
+    public static final String RESULT_REASON = "ygomc.duel.result.reason";
+    /**
+     * 原因码不在内核 {@code !victory} 表里时的兜底：「胜负原因 %s」。
+     *
+     * <p>兜底句必须归语言资源管：{@code DataPacks.victoryName} 里那句写死的中文
+     * 在英文环境下就是「服务端送来的中文句子」，与硬约束冲突。
+     */
+    public static final String RESULT_REASON_UNKNOWN = "ygomc.duel.result.reason_unknown";
+    /** 「生命值　我方 %s ／ 对手 %s」——两个参数按<b>视角</b>排，不是座位号。 */
+    public static final String RESULT_LP = "ygomc.duel.result.lp";
+    /** 「回合数　%s」。 */
+    public static final String RESULT_TURNS = "ygomc.duel.result.turns";
+
     // ── 右侧信息面板 ──────────────────────────────────────────────────────
     public static final String PANEL_NO_ART = "ygomc.duel.panel.no_art";
     public static final String PANEL_HOVER_CARD = "ygomc.duel.panel.hover_card";
@@ -282,7 +309,14 @@ public final class DuelText {
     public static final String LIST_TITLE = "ygomc.duel.list.title";
     public static final String LIST_TITLE_NO_MAX = "ygomc.duel.list.title_no_max";
     public static final String LIST_CANCEL_ROW = "ygomc.duel.list.cancel_row";
-    public static final String LIST_CONFIRM_OUTSIDE = "ygomc.duel.list.confirm_outside";
+    /**
+     * 列表下方的交卷提示。
+     *
+     * <p>原名是 {@code confirm_outside}（「点空白处确认」）——那条手势已经去掉了
+     * （见 {@code DuelScreen.mouseClicked}：空白处点击不再产生应答，交卷只走确认键），
+     * 文案随之改成指「右下角的确认键」，key 也一并改，免得读代码的人以为还有那条路。
+     */
+    public static final String LIST_CONFIRM_HINT = "ygomc.duel.list.confirm_hint";
     public static final String LIST_PICKED = "ygomc.duel.list.picked";
 
     // ── 查看牌堆内容 ──────────────────────────────────────────────────────
