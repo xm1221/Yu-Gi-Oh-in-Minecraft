@@ -1601,16 +1601,38 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
         g.drawString(font, text, tx, y, color, true);
     }
 
+    /** 弹窗里每个选项舒服时占的高度。 */
+    private static final int POPUP_ROW_H = 20;
+
     /** 弹窗窗口：在场地那半边居中，高度按标题行数与选项数算出来。 */
     private FieldLayout.Rect popupRect(List<DuelQuestion.Option> options) {
         FieldLayout L = field();
         int w = Math.min(300, Math.max(170, L.fieldW() * 2 / 3));
         int rows = Math.max(1, CardTips.wrap(font, questionTitle(), w - 2 * POPUP_PAD).size());
-        int h = POPUP_PAD + rows * 10 + 4 + options.size() * 20 + POPUP_PAD;
-        h = Math.min(h, Math.max(40, L.height() - 16));
+        int n = Math.max(1, options.size());
+        int maxH = Math.max(40, L.height() - 16);
+        int h = POPUP_PAD + rows * 10 + 4 + n * POPUP_ROW_H + POPUP_PAD;
+        if (h > maxH) {
+            h = maxH;
+        }
         int x = Math.max(4, (L.fieldW() - w) / 2);
         int y = Math.max(4, (L.height() - h) / 2);
         return new FieldLayout.Rect(x, y, w, h);
+    }
+
+    /**
+     * 弹窗里每个选项实际占多高。
+     *
+     * <p>原来是写死的 20，而窗口高度会被屏幕裁——连锁长起来能到十几项，
+     * 结果<b>窗口裁了、按钮照旧往下摆</b>，最后几个按钮摆到框外面去了。
+     * 现在先算窗口里还剩多少地方，再决定每项占多高：算得下就 20，
+     * 算不下压到 12（字体 9 像素，再低就挤在一起了）。
+     */
+    private int popupRowH(List<DuelQuestion.Option> options, FieldLayout.Rect win) {
+        int rows = Math.max(1, CardTips.wrap(font, questionTitle(), win.w() - 2 * POPUP_PAD).size());
+        int n = Math.max(1, options.size());
+        int room = win.h() - POPUP_PAD - rows * 10 - 4 - POPUP_PAD;
+        return Math.max(12, Math.min(POPUP_ROW_H, room / n));
     }
 
     /** 弹窗按钮上的字。 */
@@ -1637,13 +1659,15 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
         popup = win;
         int rows = CardTips.wrap(font, questionTitle(), win.w() - 2 * POPUP_PAD).size();
         int bw = win.w() - 2 * POPUP_PAD;
+        int rowH = popupRowH(options, win);
+        int bh = Math.min(18, Math.max(10, rowH - 2));
         int y = win.y() + POPUP_PAD + rows * 10 + 4;
         for (int i = 0; i < options.size(); i++) {
             final int index = i;
             String text = popupLabel(i, options);
             addRenderableWidget(Button.builder(Component.literal(clip(text, bw - 8)),
-                    b -> onOption(index)).bounds(win.x() + POPUP_PAD, y, bw, 18).build());
-            y += 20;
+                    b -> onOption(index)).bounds(win.x() + POPUP_PAD, y, bw, bh).build());
+            y += rowH;
         }
     }
 

@@ -102,21 +102,10 @@ public final class CardTips {
      * {@code \r} 也要一起处理，否则它会被画成一个方块。
      */
     public static List<String> wrap(Font font, String text, int maxWidth) {
-        List<String> out = new ArrayList<>();
-        for (String paragraph : text.split("\\r\\n|\\r|\\n")) {
-            StringBuilder line = new StringBuilder();
-            for (String word : paragraph.split(" ")) {
-                String candidate = line.isEmpty() ? word : line + " " + word;
-                if (font.width(candidate) > maxWidth && !line.isEmpty()) {
-                    out.add(line.toString());
-                    line = new StringBuilder(word);
-                } else {
-                    line = new StringBuilder(candidate);
-                }
-            }
-            out.add(line.toString());
-        }
-        return out;
+        // 算法搬到 TextWrap（纯逻辑，能离线断言）；这里只把「怎么量宽度」递进去。
+        // 原来那份实现只按空格拆词，中文整段没有空格 → 整段挤成一行被裁掉，
+        // 那正是「文字总显示不全」的来源。详见 TextWrap 的类注释。
+        return TextWrap.wrap(text, maxWidth, font::width);
     }
 
     /**
