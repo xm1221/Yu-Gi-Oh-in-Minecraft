@@ -62,6 +62,13 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
     private static final int[] EMPTY_PARAMS = new int[0];
 
     /**
+     * 内核 {@code MSG_SELECT_CHAIN} 的 {@code speCount} 取这个值＝这是「诱发效果选择」阶段
+     * （{@code processor.cpp:1344}：{@code add_process(PROCESSOR_SELECT_CHAIN, ..., 0x7f)}）。
+     * ygopro 那边叫 {@code select_trigger}（{@code duelclient.cpp:1790}）。
+     */
+    private static final int TRIGGER_SELECT = 0x7f;
+
+    /**
      * 十参重载（求和类专用）：标题取「照原文显示」。
      *
      * <p>离线自检大量用这个形状造样例，它们只关心应答编码，不关心标题从哪来。
@@ -127,17 +134,18 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
         /**
          * 把内核提示挂到当前标题上。
          *
-         * <p>当前已经是 {@link Kind#RAW} 时不再留 key：内核文本 + 内核文本仍然是内核文本，
-         * 没有一半是我们写的，也就没什么可翻的。
+         * <p>{@link Kind#RAW} 保留 kind、只记下 hint：整句本来就是内核给的
+         * （「是否发动『X』的效果？」这类），时点也是内核文本，两行谁也不翻，
+         * 所以没有 key 可言，界面靠 {@code rawHint} 那一行显示。
+         * （以前这里对 RAW 直接原样返回，于是「抽卡阶段中，是否发动…」永远配不上时点。
+         * 咩咩 2026-10-05 要的正是这一种。）
          */
         public Title withHint(String hint) {
             if (hint == null || hint.isEmpty()) {
                 return this;
             }
-            if (kind == Kind.RAW) {
-                return this;
-            }
-            return new Title(Kind.MIXED, key, hint, args);
+            return kind == Kind.RAW ? new Title(Kind.RAW, key, hint, args)
+                    : new Title(Kind.MIXED, key, hint, args);
         }
 
         /** 界面该不该去查语言资源。false 时用 {@code DuelQuestion.title} 原文。 */
@@ -564,10 +572,15 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
         if (!forced) {
             opts.add(Option.cancel());
         }
+        // 诱发效果的选择阶段不是「空时点」：这一问摆的是自己触发的效果，
+        // 时点略过在三种模式下都不得替玩家跳过它（ygopro duelclient.cpp:1836 的第一个条件
+        // 就是 !select_trigger）。给一个独立的 key，客户端据此认出它。
+        boolean trigger = m.speCount() == TRIGGER_SELECT;
+        String kind = trigger ? "chain_trigger" : forced ? "chain_forced" : "chain";
         return new DuelQuestion(MsgType.SELECT_CHAIN, m.player(), Mode.SINGLE,
                 forced ? "必须发动一个效果" : "是否发动效果？", opts, 1, 1, !forced,
                 0, EMPTY_PARAMS,
-                Title.of(TITLE_KEY_PREFIX + (forced ? "chain_forced" : "chain")));
+                Title.of(TITLE_KEY_PREFIX + kind));
     }
 
     /**
@@ -635,6 +648,11 @@ public record DuelQuestion(int type, int player, Mode mode, String title,
     public DuelQuestion withHint(String hint) {
         if (hint == null || hint.isEmpty()) {
             return this;
+        }
+        if (titleText.kind() == Title.Kind.RAW) {
+            // RAW 标题整句就是内核问句，{@code titleBody()} 会把它整段当天题正文。
+            // 再按 MIXED 那样把时点前缀拼进 title，那一行就会被显示两遍。
+            return withTitleText(titleText.withHint(hint), title);
         }
         return withTitleText(titleText.withHint(hint), hint + "　" + title);
     }

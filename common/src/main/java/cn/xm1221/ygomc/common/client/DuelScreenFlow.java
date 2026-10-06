@@ -101,4 +101,117 @@ public final class DuelScreenFlow {
         // 都会把刚关掉界面的玩家从别的界面里拽回来。
         return !everShown;
     }
+
+    /** 左上角那颗键的三种时点模式，字面照 ygopro {@code strings.conf} 1292/1293/1294。 */
+    public enum SkipMode {
+        /** 1292 忽略时点：非必发一律不问。 */
+        IGNORE,
+        /** 1293 显示时点：每个时点都问。 */
+        ALWAYS,
+        /** 1294 可用时点：有牌能连锁才问（咩咩指定的默认值）。 */
+        AVAIL
+    }
+
+    /**
+     * 点一下换下一个模式。
+     *
+     * <p>顺序按 ygopro 摆那三颗键的次序（{@code game.cpp:945-947}：忽略／显示／可用），
+     * 循环一圈回到原处。默认从 {@link SkipMode#AVAIL} 起。
+     */
+    public static SkipMode next(SkipMode m) {
+        return switch (m) {
+            case IGNORE -> SkipMode.ALWAYS;
+            case ALWAYS -> SkipMode.AVAIL;
+            case AVAIL -> SkipMode.IGNORE;
+        };
+    }
+
+    /**
+     * 这一问要不要<b>不问玩家、直接回「不发动」</b>（{@code -1}）。
+     *
+     * <p>逐字照抄 ygopro {@code duelclient.cpp:1836}。它那里是：
+     * <pre>
+     * if(!select_trigger &amp;&amp; !chain_forced
+     *    &amp;&amp; (ignore_chain || ((count == 0 || specount == 0) &amp;&amp; !always_chain))
+     *    &amp;&amp; (count == 0 || !chain_when_avail))
+     * </pre>
+     * 化简（{@code specount} 那一项被 {@code count == 0} 吸收掉了，所以这里不必带它进来；
+     * {@code SkipModeCheck} 对着原始式子穷举验证过）就是下面这三行：
+     * <ul>
+     *   <li>必发连锁（{@code chain_forced}）与诱发选择（{@code select_trigger}）——三种模式都照问；</li>
+     *   <li>忽略时点：非必发就不问（有没有牌能连锁都一样）；</li>
+     *   <li>可用时点：一张能连锁的牌都没有才不问；</li>
+     *   <li>显示时点：全都问。</li>
+     * </ul>
+     *
+     * @param forced  必发连锁（我们这边就是 {@code !cancelable()}）
+     * @param trigger 诱发效果选择阶段（{@code titleText().key()} 是 {@code chain_trigger}）
+     * @param entries 这一问里有几项可以连锁（选项里除「取消」以外的个数）
+     */
+    public static boolean skipChain(SkipMode mode, boolean forced, boolean trigger, int entries) {
+        if (forced || trigger) {
+            return false;
+        }
+        return switch (mode) {
+            case ALWAYS -> false;
+            case AVAIL -> entries == 0;
+            case IGNORE -> true;
+        };
+    }
+
+    /** 「确认」键此刻该干什么。 */
+    public enum Confirm {
+        /** 连锁第一段：同意＝要发动（之后才点亮候选）。 */
+        AGREE_CHAIN,
+        /** 交出当前的选中——需要确认的询问都走这里。 */
+        SUBMIT,
+        /** 点那个「唯一合法答案」的选项。 */
+        PICK_SOLE,
+        /** 是/否类里的「是」。 */
+        PICK_YES
+    }
+
+    /**
+     * 「确认」键按下去的动作。
+     *
+     * <p>2026-10-06 咩咩报：「一次召唤多个怪兽时，最后一个的位置选定后点确认反而取消了选中，
+     * 无法操作」。根因就在这个次序上：那只怪兽只剩一个可用格子时 {@code soleOption() >= 0}
+     * （选项表恰好剩一项、且没有取消项），确认键于是去 {@code onOption(sole)}——而这只询问是
+     * <b>需要确认</b>的（选址/多选/指示物/排序/合计），点一下就是 <b>toggle</b>：刚点中的格子
+     * 被取消，再点又选回来，永远交不出去。
+     *
+     * <p>所以次序必须是：<b>需要确认的询问，确认键只做「交卷」这一件事</b>，绝不去点候选项；
+     * 「唯一合法答案」那条捷径只留给不用确认的询问（必发连锁那类：选项表里只有一个必发项，
+     * 按确认就是把它交出去）。
+     *
+     * @param chainAsk    连锁第一段（先问「是否发动效果」）
+     * @param needsConfirm 这一问要不要按确认才作答（多选/选址/指示物/排序/合计）
+     * @param sole        是否存在「唯一合法答案」那一项
+     * @param yes         是/否类里的「是」那一项是否存在
+     */
+    public static Confirm confirmAction(boolean chainAsk, boolean needsConfirm, boolean sole, boolean yes) {
+        if (chainAsk) {
+            return Confirm.AGREE_CHAIN;
+        }
+        if (needsConfirm) {
+            return Confirm.SUBMIT;
+        }
+        if (sole) {
+            return Confirm.PICK_SOLE;
+        }
+        if (yes) {
+            return Confirm.PICK_YES;
+        }
+        return Confirm.SUBMIT;
+    }
+
+    /**
+     * 确认键现在能不能按（ygo 的「够条件才出现」，{@code duelclient.cpp:1677-1678}）。
+     *
+     * <p>「唯一合法答案」<b>不能</b>给需要确认的询问当免条件：那种询问要先有选中
+     * （格子数/张数够）才能交卷，否则按下去只会得到一个「构造应答失败」。
+     */
+    public static boolean confirmReady(boolean needsConfirm, boolean countsOk, boolean sole) {
+        return countsOk || (sole && !needsConfirm);
+    }
 }

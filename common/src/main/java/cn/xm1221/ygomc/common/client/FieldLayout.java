@@ -219,9 +219,24 @@ public record FieldLayout(int width, int height,
      * 面板要显示正在被问的卡，被阶段条压住一块会很难看。
      */
     public Rect phase(int i) {
-        int w = Math.max(1, Math.min(64, (fieldW - 8) / 6));
+        // 左手要先给「时点略过」那颗键让位：窄窗下阶段条会被挤到最左缘，
+        // 和那颗键叠在同一块地方。宽窗里阶段条仍在剩下的空间居中，看不出差别。
+        int room = Math.max(1, fieldW - SKIP_BTN_W - 8);
+        int w = Math.max(1, Math.min(64, room / 6));
         int total = 6 * w;
-        return new Rect((fieldW - total) / 2 + i * w, 3, w - 2, HEADER_H - 8);
+        int left = Math.max(SKIP_BTN_W + 4, (fieldW - total) / 2);
+        return new Rect(left + i * w, 3, w - 2, HEADER_H - 8);
+    }
+
+    /** 左上角「时点略过」那颗键占的总宽度（含它与阶段条之间的间隔）。 */
+    public static final int SKIP_BTN_W = 52;
+
+    /**
+     * 左上角「时点略过」键的矩形：和阶段条同一行，宽度固定
+     * （三种模式的字都是四个汉字，宽一样，点一下换模式时键不会跳）。
+     */
+    public Rect skipButton() {
+        return new Rect(4, 3, SKIP_BTN_W - 8, HEADER_H - 8);
     }
 
     /**

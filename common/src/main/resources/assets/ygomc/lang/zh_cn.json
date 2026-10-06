@@ -10,6 +10,13 @@
 
   "ygomc.duel.screen.duel": "决斗",
   "ygomc.duel.screen.browse": "卡图浏览",
+  "ygomc.duel.stat.atk": "攻 %s",
+  "ygomc.duel.stat.def": "守 %s",
+  "ygomc.duel.stat.attribute": "%s属性",
+  "ygomc.duel.stat.race": "%s族",
+  "ygomc.duel.stat.level": "等级 %s",
+  "ygomc.duel.stat.rank": "阶级 %s",
+  "ygomc.duel.stat.link": "连接 %s",
 
   "ygomc.duel.phase.draw": "抽卡",
   "ygomc.duel.phase.standby": "准备",
@@ -63,6 +70,7 @@
   "ygomc.duel.title.battle": "战斗阶段：选择行动",
   "ygomc.duel.title.chain": "是否发动效果？",
   "ygomc.duel.title.chain_forced": "必须发动一个效果",
+  "ygomc.duel.title.chain_trigger": "是否要发动诱发类效果？",
   "ygomc.duel.title.select_card": "选择卡牌（%s～%s 张）",
   "ygomc.duel.title.tribute": "选择解放的怪兽（%s～%s 张）",
   "ygomc.duel.title.unselect": "选择要选中的卡（其余为取消选中）",
@@ -126,6 +134,9 @@
   "ygomc.duel.status.submitted": "已提交，等待对手…",
   "ygomc.duel.status.no_board": "还没有牌桌数据",
   "ygomc.duel.status.chain": "连锁 %s",
+  "ygomc.duel.skip.ignore": "忽略时点",
+  "ygomc.duel.skip.always": "显示时点",
+  "ygomc.duel.skip.avail": "可用时点",
 
   "ygomc.duel.result.win": "你赢了",
   "ygomc.duel.result.lose": "你输了",

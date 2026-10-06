@@ -257,8 +257,14 @@ public final class FieldCodes {
      */
     public static final int FLAG_HIDDEN = QUERY_POSITION;
 
-    /** 一段：一张卡。{@code code} 为 0 表示这次查询没要卡号。 */
-    public record Entry(int code, int position, int overlayCount) {
+    /**
+     * 一段：一张卡。{@code code} 为 0 表示这次查询没要卡号。
+     *
+     * <p>{@code stats} 是当前攻/守/属性/种族/等级/阶级/连接。掩码里本来就请求了这些字段
+     * （{@code FLAG_MZONE = 0x881fff}），以前解析时只做 {@code c += 4} 跳过、不落库，
+     * 所以界面上没法显示「变了的攻守」。里侧/隐藏的卡查不到它们（见 {@link #FLAG_HIDDEN}）。
+     */
+    public record Entry(int code, int position, int overlayCount, DuelBoard.Stats stats) {
     }
 
     private FieldCodes() {
@@ -294,6 +300,13 @@ public final class FieldCodes {
             int code = 0;
             int position = 0;
             int overlay = 0;
+            int level = 0;
+            int rank = 0;
+            int attribute = 0;
+            int race = 0;
+            int attack = 0;
+            int defense = 0;
+            int link = 0;
 
             // 严格按 card.cpp 的书写顺序前进，一个位都不能漏。
             if ((flag & QUERY_CODE) != 0) {
@@ -311,21 +324,27 @@ public final class FieldCodes {
                 c += 4;
             }
             if ((flag & QUERY_LEVEL) != 0) {
+                level = readInt(data, c);
                 c += 4;
             }
             if ((flag & QUERY_RANK) != 0) {
+                rank = readInt(data, c);
                 c += 4;
             }
             if ((flag & QUERY_ATTRIBUTE) != 0) {
+                attribute = readInt(data, c);
                 c += 4;
             }
             if ((flag & QUERY_RACE) != 0) {
+                race = readInt(data, c);
                 c += 4;
             }
             if ((flag & QUERY_ATTACK) != 0) {
+                attack = readInt(data, c);
                 c += 4;
             }
             if ((flag & QUERY_DEFENSE) != 0) {
+                defense = readInt(data, c);
                 c += 4;
             }
             if ((flag & QUERY_BASE_ATTACK) != 0) {
@@ -366,13 +385,15 @@ public final class FieldCodes {
                 c += 4;
             }
             if ((flag & QUERY_LINK) != 0) {
+                link = readInt(data, c);
                 c += 8;                       // link + link_marker，是两个 u32
             }
             if (c > p + len) {
                 throw new IllegalStateException("queryFieldCard 段内字段越界：flag=0x"
                         + Integer.toHexString(flag) + "，段长 " + len + "，字段读到 " + (c - p));
             }
-            out.add(new Entry(code, position, overlay));
+            out.add(new Entry(code, position, overlay, new DuelBoard.Stats(
+                    attack, defense, attribute, race, level, rank, link)));
             p += len;
         }
         return out;
@@ -465,7 +486,10 @@ public final class FieldCodes {
             //     QUERY_OVERLAY_CARD（0x881fff 的 0x10000 位是 0），
             //     照查询结果填会把界面已经在画的叠放数清零。
             out.add(new DuelBoard.Zone(true, z.position(), z.overlayCount(),
-                    visible(mine, location, e.position()) ? e.code() : 0));
+                    visible(mine, location, e.position()) ? e.code() : 0,
+                    // 数值同样按可见性给：里侧/隐藏的卡连攻守都不该泄出去
+                    // （内核那边这种查询压根没要这些字段，这里是第二道闸）。
+                    visible(mine, location, e.position()) ? e.stats() : null));
         }
         return List.copyOf(out);
     }
@@ -481,8 +505,9 @@ public final class FieldCodes {
         }
         List<DuelBoard.Zone> out = new ArrayList<>(entries.size());
         for (Entry e : entries) {
+            boolean vis = visible(mine, location, e.position());
             out.add(new DuelBoard.Zone(true, e.position(), e.overlayCount(),
-                    visible(mine, location, e.position()) ? e.code() : 0));
+                    vis ? e.code() : 0, vis ? e.stats() : null));
         }
         return List.copyOf(out);
     }

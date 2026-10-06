@@ -63,7 +63,7 @@ public final class DuelWire {
      * 另记后盖上去的（见 {@link DuelBoard#withPhaseTurn}）。解码端同时接受 2 与 3：
      * 收到 v2 帧时这两项就是「阶段未知、回合 0」。
      */
-    public static final int BOARD_VERSION = 3;
+    public static final int BOARD_VERSION = 4;
 
     private DuelWire() {
     }
@@ -301,6 +301,19 @@ public final class DuelWire {
             // 卡号：0 = 未知/不可见。用 int 而不是 varint——
             // 卡号最大 8 位十进制，int 是唯一不用想边界的宽度。
             out.writeInt(z.code());
+            // v4 新增：当前攻/守/属性/种族/等级/阶级/连接。原本值不过线——客户端拿卡库比对。
+            // 先写一个布尔「有没有」：里侧/隐藏的卡没有这些值，也就一个字节都不多写。
+            DuelBoard.Stats st = z.stats();
+            out.writeBoolean(st != null);
+            if (st != null) {
+                out.writeInt(st.attack());
+                out.writeInt(st.defense());
+                out.writeInt(st.attribute());
+                out.writeInt(st.race());
+                out.writeInt(st.level());
+                out.writeInt(st.rank());
+                out.writeInt(st.link());
+            }
         }
     }
 
@@ -325,9 +338,10 @@ public final class DuelWire {
         }
         try (DataInputStream in = new DataInputStream(new ByteArrayInputStream(data))) {
             int version = in.readInt();
-            if (version != 1 && version != 2 && version != BOARD_VERSION) {
+            if (version != 1 && version != 2 && version != 3 && version != BOARD_VERSION) {
                 throw new IllegalStateException("牌桌线格式版本不支持：收到 " + version
-                        + "，本端支持 1（旧，无卡号）、2（有卡号）与 " + BOARD_VERSION + "（当前）");
+                        + "，本端支持 1（旧，无卡号）、2（有卡号）、3（阶段与回合）与 "
+                        + BOARD_VERSION + "（当前，带攻守等当前值）");
             }
             int rule = in.readInt();
             int chain = in.readInt();
@@ -374,7 +388,12 @@ public final class DuelWire {
             int position = in.readByte();
             int overlay = in.readShort();
             int code = version >= 2 ? in.readInt() : 0;
-            zones.add(new DuelBoard.Zone(occupied, position, overlay, code));
+            DuelBoard.Stats stats = null;
+            if (version >= 4 && in.readBoolean()) {
+                stats = new DuelBoard.Stats(in.readInt(), in.readInt(), in.readInt(),
+                        in.readInt(), in.readInt(), in.readInt(), in.readInt());
+            }
+            zones.add(new DuelBoard.Zone(occupied, position, overlay, code, stats));
         }
         return zones;
     }

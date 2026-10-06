@@ -113,6 +113,13 @@ public final class DuelText {
     public static final String TITLE_BATTLE = "ygomc.duel.title.battle";
     public static final String TITLE_CHAIN = "ygomc.duel.title.chain";
     public static final String TITLE_CHAIN_FORCED = "ygomc.duel.title.chain_forced";
+    /**
+     * 诱发效果的选择阶段（内核 {@code speCount == 0x7f}，ygopro 的 {@code select_trigger}）。
+     *
+     * <p>它和「空时点」必须分开：这一问摆的是<b>自己</b>触发的效果，
+     * 时点略过在三种模式下都不许替玩家跳过它（见 {@code DuelScreenFlow.skipChain}）。
+     */
+    public static final String TITLE_CHAIN_TRIGGER = "ygomc.duel.title.chain_trigger";
     public static final String TITLE_SELECT_CARD = "ygomc.duel.title.select_card";
     public static final String TITLE_TRIBUTE = "ygomc.duel.title.tribute";
     public static final String TITLE_UNSELECT = "ygomc.duel.title.unselect";
@@ -216,6 +223,14 @@ public final class DuelText {
      * 不是我们要翻译的句子，所以这里只给模板、数字当参数传。
      */
     public static final String STATUS_CHAIN = "ygomc.duel.status.chain";
+
+    /**
+     * 左上角「时点略过」键的三种模式。字面照 ygopro {@code strings.conf}：
+     * 1292 忽略时点／1293 显示时点／1294 可用时点。
+     */
+    public static final String SKIP_IGNORE = "ygomc.duel.skip.ignore";
+    public static final String SKIP_ALWAYS = "ygomc.duel.skip.always";
+    public static final String SKIP_AVAIL = "ygomc.duel.skip.avail";
 
     // ── 收局画面 ──────────────────────────────────────────────────────────
     /** 收局标题三态：按视角说输赢。平局必须单独一句——两边都不是赢家。 */
@@ -355,4 +370,12 @@ public final class DuelText {
     public static final String CARD_STATS_MONSTER = "ygomc.card.stats.monster";
     /** 连接怪兽没有守备力，用不带 DEF 的那一条。 */
     public static final String CARD_STATS_LINK = "ygomc.card.stats.link";
+    // ── 怪兽上「变了才显示」的当前数值（{@code DuelScreen.statMarks}） ──────────
+    public static final String STAT_ATK = "ygomc.duel.stat.atk";
+    public static final String STAT_DEF = "ygomc.duel.stat.def";
+    public static final String STAT_ATTRIBUTE = "ygomc.duel.stat.attribute";
+    public static final String STAT_RACE = "ygomc.duel.stat.race";
+    public static final String STAT_LEVEL = "ygomc.duel.stat.level";
+    public static final String STAT_RANK = "ygomc.duel.stat.rank";
+    public static final String STAT_LINK = "ygomc.duel.stat.link";
 }

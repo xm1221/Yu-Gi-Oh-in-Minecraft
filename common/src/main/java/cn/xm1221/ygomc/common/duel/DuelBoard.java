@@ -110,17 +110,53 @@ public record DuelBoard(int duelRule, int chainCount, PlayerBoard player0, Playe
     public static final int POS_FACEDOWN_DEFENSE = 0x8;
 
     /**
+     * 一张卡当前的「会变的数值」。
+     *
+     * <p>只有<b>当前值</b>：原本值由客户端拿卡库比对（{@code DataPacks.statsOf}），
+     * 内核的 {@code BASE_ATTACK/BASE_DEFENSE} 就不必再过一遍线。
+     * 里侧与隐藏的卡不带它——那种查询（{@link FieldCodes#FLAG_HIDDEN}）根本没要这些字段。
+     *
+     * @param level 等级；超量怪兽这里是 0（阶级在 {@code rank}）
+     * @param rank  阶级；不是超量怪兽时为 0
+     * @param link  连接值；不是连接怪兽时为 0
+     */
+    public record Stats(int attack, int defense, int attribute, int race,
+                        int level, int rank, int link) {
+
+        /**
+         * 显示用的「等级类」数值与它到底是哪一种。
+         *
+         * <p>内核把等级/阶级/连接分成三个字段：超量写 {@code rank}、连接写 {@code link}、
+         * 其余写 {@code level}。界面上它们是同一处显示，所以先归一。
+         */
+        public int levelClass() {
+            if (link > 0) {
+                return link;
+            }
+            return rank > 0 ? rank : level;
+        }
+    }
+
+    /**
      * 一格（或一张手牌 / 一张墓地卡）。
      *
      * <p>{@code occupied} 为假时其余字段无意义。
      *
-     * @param code 卡号。{@code 0} 表示<b>未知或不可见</b>——对手的手牌、里侧盖牌、
-     *             对手的卡组与额外卡组都会是 0。界面据此画卡背；
-     *             取值来源与可见性判据见 {@link FieldCodes}。
+     * @param code  卡号。{@code 0} 表示<b>未知或不可见</b>——对手的手牌、里侧盖牌、
+     *              对手的卡组与额外卡组都会是 0。界面据此画卡背；
+     *              取值来源与可见性判据见 {@link FieldCodes}。
+     * @param stats 当前攻守等数值；不可见时为 {@code null}（见 {@link Stats}）
      */
-    public record Zone(boolean occupied, int position, int overlayCount, int code) {
+    public record Zone(boolean occupied, int position, int overlayCount, int code, Stats stats) {
 
-        public static final Zone EMPTY = new Zone(false, 0, 0, 0);
+        public static final Zone EMPTY = new Zone(false, 0, 0, 0, null);
+
+        /**
+         * 不带数值的四参构造（线格式 v1-v3、以及不关心数值的调用点）。
+         */
+        public Zone(boolean occupied, int position, int overlayCount, int code) {
+            this(occupied, position, overlayCount, code, null);
+        }
 
         /**
          * 不带卡号的三参构造。

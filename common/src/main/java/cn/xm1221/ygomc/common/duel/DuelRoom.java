@@ -75,8 +75,23 @@ public final class DuelRoom implements OcgDuel.Observer {
     /** 每个座位最近一条选择提示（{@code HINT_SELECTMSG}）；用完即清。 */
     private final String[] selectHints = new String[2];
 
-    /** 每个座位最近一条时点事件（{@code HINT_EVENT}）。 */
+    /** 每个座位最近一条时点事件（{@code HINT_EVENT}，外加我们自己拼的动作串）。 */
     private final String[] eventTexts = new String[2];
+
+    /**
+     * {@link #eventTexts} 里那句话是<b>哪个阶段</b>收到的。
+     *
+     * <p>为什么要戳：内核在每个阶段开头都会送一条阶段串（{@code strings.conf} 20-26/28/80/81），
+     * 但<b>主要阶段一的开头什么都不送</b>——实录（{@code .agent/m6/hint-order.txt}）里，
+     * 头部那条 {@code PHASE 0x004 主要1} 后面的第一条消息就是 {@code SELECT_IDLECMD}。
+     * 于是「准备阶段中」一直悬着，直到主要阶段一的第一个询问才被贴出去，
+     * 玩家看到的就是「上方写着 M1、右下角还写着准备阶段」（咩咩 2026-10-05）。
+     *
+     * <p>贴之前先比对这个戳：不属于当前阶段的时点一律丢掉。ygo 那边 {@code event_string}
+     * 是黏的（只在收到新串时改写，{@code duelclient.cpp:1143/3074…}），我们靠阶段边界作废，
+     * 差别只在「M1 开头」这一段空档——ygo 会继续显示上一条，而那正是咩咩说不对的地方。
+     */
+    private final int[] eventPhase = new int[2];
 
     /**
      * 当前阶段（内核 {@code PHASE_*}）与已开始的回合数。
@@ -272,6 +287,7 @@ public final class DuelRoom implements OcgDuel.Observer {
             int seat = h.player() == 1 ? 1 : 0;
             if (h.hintType() == HINT_EVENT) {
                 eventTexts[seat] = DescText.getDesc(h.description());
+                eventPhase[seat] = currentPhase;
             } else if (h.hintType() == HINT_SELECTMSG) {
                 selectHints[seat] = DescText.selectMessage(h.description());
             }
@@ -290,7 +306,41 @@ public final class DuelRoom implements OcgDuel.Observer {
         }
         if (m instanceof Msg.Chaining c) {
             onChaining(c);
+            // ygo 在 MSG_CHAINING 那里把 event_string 改成「[卡名]的效果发动」
+            // （duelclient.cpp:3074），紧接着的那个连锁询问就顶着这句话问。
+            // 内核不发这条串，所以只能我们自己拼——不拼的话，「连锁 1，是否发动效果？」
+            // 上面那一行永远只有阶段名，看不到是哪张卡在发动（咩咩 2026-10-05）。
+            setAction(DescText.ACTION_ACTIVATE, c.pureCode());
+        } else if (m instanceof Msg.Summoning s) {
+            // 召唤中／特殊召唤中／反转召唤中（duelclient.cpp:2939/2966/2993）。
+            // 同一处特判：内核只发消息，串是客户端按 GetSysString(1603/1605/1607) 拼的。
+            setAction(DescText.ACTION_SUMMONING, s.code());
+        } else if (m instanceof Msg.SpSummoning s) {
+            setAction(DescText.ACTION_SP_SUMMONING, s.code());
+        } else if (m instanceof Msg.FlipSummoning s) {
+            setAction(DescText.ACTION_FLIP_SUMMONING, s.code());
         }
+    }
+
+    /**
+     * 把「刚才发生了什么」写成时点，供随后的询问显示。
+     *
+     * <p>两位玩家共用同一句：ygo 的 {@code event_string} 也是全局的，
+     * 桌上谁都看得见「某某的效果发动」，不分视角。
+     *
+     * @param sysId    {@code strings.conf} 里的系统串编号
+     * @param cardCode 填 {@code %ls} 的卡号
+     */
+    private void setAction(int sysId, int cardCode) {
+        String text = DescText.action(sysId, cardCode);
+        if (text == null) {
+            // 串没装或卡名查不到：留着上一条，总比盖成空白强。
+            return;
+        }
+        eventTexts[0] = text;
+        eventTexts[1] = text;
+        eventPhase[0] = currentPhase;
+        eventPhase[1] = currentPhase;
     }
 
     /**
@@ -458,24 +508,47 @@ public final class DuelRoom implements OcgDuel.Observer {
      * <p>时点也贴给「选择行动」，这一条是我们自己加的：ygo 靠常驻阶段条显示现在是哪个阶段，
      * 我们的阶段条只说「能按哪个」、说不出「现在是抽卡阶段」。而抽卡阶段同样要问行动
      * （可以发动效果），不给阶段名，玩家看到的永远是「选择行动」，那就等于没告诉他在哪个阶段。
+     *
+     * <p>贴的条件有两条，都是照 ygo 的询问框（{@code duelclient.cpp:1585/1589/1875}
+     * 都是 {@code event_string + "\n" + 问句}）：
+     * <ul>
+     *   <li><b>只在同一个阶段里贴</b>：跨了阶段就作废（见 {@link #eventPhase}）。</li>
+     *   <li><b>不消耗</b>：{@code event_string} 是黏的，同阶段的后续询问照样带着它。
+     *       原来的「用完就清」既留不住正确的那条（同阶段第二个问句就没时点了），
+     *       又拦不住错误的那条（它非要等到某个特定类型的询问才被贴出去）。</li>
+     * </ul>
      */
     private DuelQuestion hintAware(int seat, DuelQuestion q) {
-        if (eventTexts[seat] != null && (q.type() == MsgType.SELECT_EFFECTYN
-                || q.type() == MsgType.SELECT_IDLECMD || q.type() == MsgType.SELECT_BATTLECMD)) {
-            // 用完就清：陈旧的时点配一个新问句，比不显示更糟。
-            String e = eventTexts[seat];
+        if (eventTexts[seat] != null && eventPhase[seat] != currentPhase) {
+            // 上个阶段的时点：宁可什么都不显示，也不能让「准备阶段中」出现在主要阶段一。
             eventTexts[seat] = null;
+        }
+        if (eventTexts[seat] != null && showsTiming(q.type())) {
             // 用 withHint 而不是 withTitle：这里拼的是【内核时点 + 我们自己的问句】，
             // 前者不翻、后者要翻，所以两者必须分开存（见 DuelQuestion.Title.MIXED）。
-            return q.withHint(e);
+            return q.withHint(eventTexts[seat]);
         }
         if (selectHints[seat] != null) {
-            // 同上，用完就清。
+            // 选择提示是【这一个问句】的标题（client_field.cpp:1056），照旧用完就清。
             String h = selectHints[seat];
             selectHints[seat] = null;
             return q.withHint(h);
         }
         return q;
+    }
+
+    /**
+     * 哪些询问在界面上会显示时点那一行。
+     *
+     * <p>前四类对应 ygo 的询问框：{@code SELECT_EFFECTYN}/{@code SELECT_YESNO} 走
+     * {@code duelclient.cpp:1585/1589}，{@code SELECT_CHAIN} 走 {@code :1875/1877}——
+     * 「[卡名]的效果发动 / 是否发动效果？」正是连锁询问顶着的那句话。
+     * 后两类（选择行动）是我们自己的动作菜单，理由见 {@link #hintAware}。
+     */
+    private static boolean showsTiming(int type) {
+        return type == MsgType.SELECT_EFFECTYN || type == MsgType.SELECT_YESNO
+                || type == MsgType.SELECT_CHAIN
+                || type == MsgType.SELECT_IDLECMD || type == MsgType.SELECT_BATTLECMD;
     }
 
     /**

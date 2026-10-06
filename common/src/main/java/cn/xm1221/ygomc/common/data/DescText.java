@@ -46,6 +46,38 @@ public final class DescText {
     /** 诱发类效果问完还要补一句「稍后将询问其他可以发动的效果。」。 */
     private static final int INDUCED_FOLLOWUP = 223;
 
+    /** 「[%ls]召唤中」（{@code duelclient.cpp:2939}，{@code MSG_SUMMONING}）。 */
+    public static final int ACTION_SUMMONING = 1603;
+
+    /** 「[%ls]特殊召唤中」（{@code :2966}，{@code MSG_SPSUMMONING}）。 */
+    public static final int ACTION_SP_SUMMONING = 1605;
+
+    /** 「[%ls]反转召唤中」（{@code :2993}，{@code MSG_FLIPSUMMONING}）。 */
+    public static final int ACTION_FLIP_SUMMONING = 1607;
+
+    /** 「[%ls]的效果发动」（{@code :3074}，{@code MSG_CHAINING}）。 */
+    public static final int ACTION_ACTIVATE = 1609;
+
+    /**
+     * 动作类系统串：内核不发、由客户端按消息自己拼的那些「刚才发生了什么」。
+     *
+     * <p>ygo 的 {@code event_string} 有两个来源。一个是内核送来的
+     * {@code MSG_HINT(HINT_EVENT)}，用 {@link #getDesc(int)} 解
+     * （{@code duelclient.cpp:1143}）——阶段名（{@code strings.conf} 20-26/28/80/81）
+     * 就走这条。另一个是客户端自己拼的：{@code MSG_SUMMONING} 拼 1603、
+     * {@code MSG_CHAINING} 拼 1609、{@code MSG_ATTACK} 拼 1619/1620……
+     * <b>内核一条都不发</b>，所以不在这里补，询问上面那一行就永远只有阶段名，
+     * 看不到「是哪张卡在发动」。
+     *
+     * @param sysId    {@code strings.conf} 的系统串编号（上面前四个常量）
+     * @param cardCode 填 {@code %ls} 的卡号
+     * @return 文本；串没装、或卡名查不到时返回 {@code null}（调用方应保留上一条）
+     */
+    public static String action(int sysId, int cardCode) {
+        String name = cardName(cardCode);
+        return name == null ? null : fill(sysString(sysId), name);
+    }
+
     /**
      * {@code SELECT_EFFECTYN} 的询问标题。
      *

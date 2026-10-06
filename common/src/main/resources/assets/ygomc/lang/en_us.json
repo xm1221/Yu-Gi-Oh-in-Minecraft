@@ -10,6 +10,13 @@
 
   "ygomc.duel.screen.duel": "Duel",
   "ygomc.duel.screen.browse": "Card Images",
+  "ygomc.duel.stat.atk": "ATK %s",
+  "ygomc.duel.stat.def": "DEF %s",
+  "ygomc.duel.stat.attribute": "%s Attribute",
+  "ygomc.duel.stat.race": "%s",
+  "ygomc.duel.stat.level": "Lv %s",
+  "ygomc.duel.stat.rank": "Rank %s",
+  "ygomc.duel.stat.link": "Link %s",
 
   "ygomc.duel.phase.draw": "Draw",
   "ygomc.duel.phase.standby": "Standby",
@@ -63,6 +70,7 @@
   "ygomc.duel.title.battle": "Battle Phase: choose an action",
   "ygomc.duel.title.chain": "Activate an effect?",
   "ygomc.duel.title.chain_forced": "You must activate an effect",
+  "ygomc.duel.title.chain_trigger": "Activate a triggered effect?",
   "ygomc.duel.title.select_card": "Select cards (%s-%s)",
   "ygomc.duel.title.tribute": "Select monsters to Tribute (%s-%s)",
   "ygomc.duel.title.unselect": "Pick the cards to select (the rest are deselected)",
@@ -126,6 +134,9 @@
   "ygomc.duel.status.submitted": "Sent, waiting for the opponent...",
   "ygomc.duel.status.no_board": "No field data yet",
   "ygomc.duel.status.chain": "Chain %s",
+  "ygomc.duel.skip.ignore": "Ignore",
+  "ygomc.duel.skip.always": "Show all",
+  "ygomc.duel.skip.avail": "When usable",
 
   "ygomc.duel.result.win": "You win",
   "ygomc.duel.result.lose": "You lose",
