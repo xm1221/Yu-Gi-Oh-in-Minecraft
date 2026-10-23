@@ -122,6 +122,113 @@ class AssetSyncFlowTest {
     }
 
     @Test
+    void databaseUsesNextUrlWhenFirstMirrorFails() throws Exception {
+        Path game = Files.createTempDirectory("ygomc-mirror");
+        byte[] cdb = Files.readAllBytes(Path.of("src/test/resources/sync/fixture.cdb"));
+        byte[] conf = Files.readAllBytes(Path.of("src/test/resources/sync/strings.conf"));
+        AtomicInteger denied = new AtomicInteger();
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/deny", exchange -> {
+            denied.incrementAndGet();
+            exchange.sendResponseHeaders(403, -1);
+            exchange.close();
+        });
+        server.createContext("/cards.cdb", exchange -> {
+            exchange.sendResponseHeaders(200, cdb.length);
+            exchange.getResponseBody().write(cdb);
+            exchange.close();
+        });
+        server.createContext("/strings.conf", exchange -> {
+            exchange.sendResponseHeaders(200, conf.length);
+            exchange.getResponseBody().write(conf);
+            exchange.close();
+        });
+        server.start();
+        try {
+            SyncPins pins = SyncPins.loadDefault();
+            String base = "http://127.0.0.1:" + server.getAddress().getPort();
+            pins.database.files.get(0).urls = java.util.List.of(base + "/deny", base + "/cards.cdb");
+            pins.database.files.get(0).sha256 = Digests.sha256(Path.of("src/test/resources/sync/fixture.cdb"));
+            pins.database.files.get(1).urls = java.util.List.of(base + "/deny", base + "/strings.conf");
+            pins.database.files.get(1).sha256 = Digests.sha256(Path.of("src/test/resources/sync/strings.conf"));
+            SyncSettings settings = SyncSettings.defaults();
+            settings.scripts = false;
+            settings.sets = false;
+            settings.timeoutSeconds = 2;
+            AssetSync.runOnce(game, settings, pins, false);
+            assertTrue(denied.get() >= 2, "first mirror must be attempted for each file");
+            assertTrue(Files.isRegularFile(CacheLayout.datapack(game).resolve("cards.bin")));
+            assertEquals(AssetSync.Phase.READY, AssetSync.status().phase());
+        } finally {
+            server.stop(0);
+            delete(game);
+        }
+    }
+
+    @Test
+    void failedDownloadWithLocalBinsStaysDegraded() throws Exception {
+        Path game = Files.createTempDirectory("ygomc-local");
+        CdbToBins.convert(Path.of("src/test/resources/sync/fixture.cdb"),
+                Path.of("src/test/resources/sync/strings.conf"), CacheLayout.datapack(game));
+        SyncPins pins = SyncPins.loadDefault();
+        SyncManifest manifest = new SyncManifest();
+        manifest.databaseSha = "0123456789abcdef0123456789abcdef01234567";
+        manifest.save(CacheLayout.manifest(game));
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/", exchange -> {
+            exchange.sendResponseHeaders(403, -1);
+            exchange.close();
+        });
+        server.start();
+        try {
+            String base = "http://127.0.0.1:" + server.getAddress().getPort();
+            pins.database.files.get(0).urls = java.util.List.of(base + "/cards.cdb");
+            pins.database.files.get(1).urls = java.util.List.of(base + "/strings.conf");
+            SyncSettings settings = SyncSettings.defaults();
+            settings.scripts = false;
+            settings.sets = false;
+            AssetSync.runOnce(game, settings, pins, false);
+            assertEquals(AssetSync.Phase.DEGRADED, AssetSync.status().phase());
+            assertEquals("ygomc.sync.msg.degraded", AssetSync.status().messageKey());
+            assertTrue(AssetSync.status().announce());
+            assertTrue(Files.isRegularFile(CacheLayout.datapack(game).resolve("cards.bin")));
+        } finally {
+            server.stop(0);
+            delete(game);
+        }
+    }
+
+    @Test
+    void missingDatabaseAndScriptsFailsWithEmptyDatapackWarning() throws Exception {
+        Path game = Files.createTempDirectory("ygomc-empty");
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/", exchange -> {
+            exchange.sendResponseHeaders(404, -1);
+            exchange.close();
+        });
+        server.start();
+        try {
+            SyncPins pins = SyncPins.loadDefault();
+            String base = "http://127.0.0.1:" + server.getAddress().getPort();
+            pins.database.files.get(0).urls = java.util.List.of(base + "/cards.cdb");
+            pins.database.files.get(0).sha256 = "";
+            pins.database.files.get(1).urls = java.util.List.of(base + "/strings.conf");
+            pins.database.files.get(1).sha256 = "";
+            pins.scripts.urls = java.util.List.of(base + "/scripts.zip");
+            SyncSettings settings = SyncSettings.defaults();
+            settings.sets = false;
+            AssetSync.runOnce(game, settings, pins, false);
+            assertEquals(AssetSync.Phase.FAILED, AssetSync.status().phase());
+            assertEquals("ygomc.sync.msg.no_datapack", AssetSync.status().messageKey());
+            assertTrue(AssetSync.status().args().get(0).contains("database:download"));
+            assertFalse(Files.exists(CacheLayout.datapack(game).resolve("cards.bin")));
+        } finally {
+            server.stop(0);
+            delete(game);
+        }
+    }
+
+    @Test
     void missingDatabaseDoesNotThrowWhenOffline() throws Exception {
         Path game = Files.createTempDirectory("ygomc-miss");
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
@@ -143,8 +250,10 @@ class AssetSyncFlowTest {
             settings.scripts = false;
             settings.sets = false;
             AssetSync.runOnce(game, settings, pins, false);
-            // 脚本这一步关着，所以不算「什么都没有」的失败，只是卡库没下到。
+            // 脚本这一步关着，阶段仍是降级，但文案必须指出本地没有数据包。
             assertEquals(AssetSync.Phase.DEGRADED, AssetSync.status().phase());
+            assertEquals("ygomc.sync.msg.no_datapack", AssetSync.status().messageKey());
+            assertTrue(AssetSync.status().announce());
             assertFalse(Files.exists(CacheLayout.datapack(game).resolve("cards.bin")));
         } finally {
             server.stop(0);

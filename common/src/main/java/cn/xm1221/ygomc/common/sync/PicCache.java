@@ -208,6 +208,7 @@ public final class PicCache {
         Path raw = dir.resolve(code + ".jpg");
         HttpFetch.Options options = new HttpFetch.Options();
         options.connectTimeout = java.time.Duration.ofSeconds(settings.timeoutSeconds());
+        options.readTimeout = java.time.Duration.ofSeconds(Math.max(180, settings.timeoutSeconds() * 2L));
         options.maxBytes = settings.maxPicBytes();
         options.etagStore = CacheLayout.etag(Platform.getGameFolder());
         java.util.List<String> urls = new java.util.ArrayList<>();

@@ -88,10 +88,41 @@ class ScriptAndSetsTest {
     void pinsInJarAreComplete() throws Exception {
         SyncPins pins = SyncPins.loadDefault();
         assertEquals(1, pins.schema);
-        assertEquals(40, pins.database.sha.length());
-        assertEquals(40, pins.scripts.sha.length());
-        assertEquals(64, pins.sets.sha256.length());
+        assertEquals("217ae165c1886af2fc36b823fc08f9fc3ec13185", pins.database.sha);
+        assertEquals("0be9a8ac948f6ac38f4ed3ba45d439290d04415a", pins.scripts.sha);
+        assertEquals("1c4cd9d5ff676225a39e587cb7d79cb57a75b1fbcb18d3f1a0d96dec4665e378", pins.sets.sha256);
         assertTrue(pins.pics.urls.get(0).contains("{code}"));
+
+        SyncPins.FilePin cdb = pins.requireFile("cards.cdb");
+        SyncPins.FilePin conf = pins.requireFile("strings.conf");
+        assertEquals("ff52f585de24a762a4e613ac37654b1a7fb15a58990c14f5eada85f28c3be152", cdb.sha256);
+        assertEquals("6992b30aa0cfe27cfbc499980ac92bee536f523738c679efa99be5eea57ef23b", conf.sha256);
+        assertChinaMirrorsBeforeUpstream(cdb.urls, "cards.cdb");
+        assertChinaMirrorsBeforeUpstream(conf.urls, "strings.conf");
+
+        assertTrue(pins.scripts.urls.get(0).startsWith("https://ghproxy.net/https://github.com/Fluorohydride/ygopro-scripts/archive/"));
+        assertTrue(pins.scripts.urls.get(1).startsWith("https://gh-proxy.com/https://github.com/Fluorohydride/ygopro-scripts/archive/"));
+        assertTrue(pins.scripts.urls.contains(
+                "https://github.com/Fluorohydride/ygopro-scripts/archive/0be9a8ac948f6ac38f4ed3ba45d439290d04415a.zip"));
+        assertTrue(pins.scripts.urls.contains(
+                "https://codeload.github.com/Fluorohydride/ygopro-scripts/zip/0be9a8ac948f6ac38f4ed3ba45d439290d04415a"));
+        assertTrue(pins.sets.urls.get(0).startsWith("https://ghproxy.net/https://github.com/iconmaster5326/YGOJSON/releases/download/v1/"));
+        assertTrue(pins.sets.urls.get(1).startsWith("https://gh-proxy.com/https://github.com/iconmaster5326/YGOJSON/releases/download/v1/"));
+        assertTrue(pins.sets.urls.contains("https://github.com/iconmaster5326/YGOJSON/releases/download/v1/individual.zip"));
+    }
+
+    private static void assertChinaMirrorsBeforeUpstream(java.util.List<String> urls, String file) {
+        String sha = "217ae165c1886af2fc36b823fc08f9fc3ec13185";
+        int fastly = urls.indexOf("https://fastly.jsdelivr.net/gh/mycard/ygopro-database@" + sha + "/locales/zh-CN/" + file);
+        int gcore = urls.indexOf("https://gcore.jsdelivr.net/gh/mycard/ygopro-database@" + sha + "/locales/zh-CN/" + file);
+        int testing = urls.indexOf("https://testingcf.jsdelivr.net/gh/mycard/ygopro-database@" + sha + "/locales/zh-CN/" + file);
+        int mirror = urls.indexOf("https://cdn.jsdmirror.com/gh/mycard/ygopro-database@" + sha + "/locales/zh-CN/" + file);
+        int ghproxy = urls.indexOf("https://ghproxy.net/https://raw.githubusercontent.com/mycard/ygopro-database/" + sha + "/locales/zh-CN/" + file);
+        int ghProxyCom = urls.indexOf("https://gh-proxy.com/https://raw.githubusercontent.com/mycard/ygopro-database/" + sha + "/locales/zh-CN/" + file);
+        int raw = urls.indexOf("https://raw.githubusercontent.com/mycard/ygopro-database/" + sha + "/locales/zh-CN/" + file);
+        int moe = urls.indexOf("https://code.moenext.com/mycard/ygopro-database/-/raw/" + sha + "/locales/zh-CN/" + file);
+        assertTrue(fastly >= 0 && fastly < gcore && gcore < testing && testing < mirror
+                && mirror < ghproxy && ghproxy < ghProxyCom && ghProxyCom < raw && raw < moe, urls.toString());
     }
 
     private static void writeFixtureZip(Path zip) throws Exception {

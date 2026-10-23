@@ -343,6 +343,7 @@
 
   "ygomc.sync.status": "Asset sync: %s / %s\n%s\nprogress %s / %s",
   "ygomc.sync.chat": "Asset sync: %s",
+  "ygomc.sync.chat.warn": "Asset sync failed: %s",
   "ygomc.sync.phase.idle": "idle",
   "ygomc.sync.phase.checking": "checking",
   "ygomc.sync.phase.downloading": "downloading",
@@ -362,7 +363,8 @@
   "ygomc.sync.msg.applying": "loading the new database and scripts",
   "ygomc.sync.msg.ready": "%s cards, %s script files",
   "ygomc.sync.msg.failed": "sync failed: %s",
-  "ygomc.sync.msg.degraded": "some steps failed, keeping files already on disk: %s",
+  "ygomc.sync.msg.degraded": "Some downloads failed; using local files: %s",
+  "ygomc.sync.msg.no_datapack": "Card database download failed and there is no local datapack (ygomc/datapack), so no cards are available (%s)",
   "ygomc.sync.msg.deferred": "a duel is in progress, so the new files wait",
   "ygomc.sync.msg.applied": "reloaded the card database and scripts",
   "ygomc.sync.msg.nothing_pending": "nothing is waiting to be applied",

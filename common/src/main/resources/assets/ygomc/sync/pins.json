@@ -6,6 +6,12 @@
       {
         "id": "cards.cdb",
         "urls": [
+          "https://fastly.jsdelivr.net/gh/mycard/ygopro-database@217ae165c1886af2fc36b823fc08f9fc3ec13185/locales/zh-CN/cards.cdb",
+          "https://gcore.jsdelivr.net/gh/mycard/ygopro-database@217ae165c1886af2fc36b823fc08f9fc3ec13185/locales/zh-CN/cards.cdb",
+          "https://testingcf.jsdelivr.net/gh/mycard/ygopro-database@217ae165c1886af2fc36b823fc08f9fc3ec13185/locales/zh-CN/cards.cdb",
+          "https://cdn.jsdmirror.com/gh/mycard/ygopro-database@217ae165c1886af2fc36b823fc08f9fc3ec13185/locales/zh-CN/cards.cdb",
+          "https://ghproxy.net/https://raw.githubusercontent.com/mycard/ygopro-database/217ae165c1886af2fc36b823fc08f9fc3ec13185/locales/zh-CN/cards.cdb",
+          "https://gh-proxy.com/https://raw.githubusercontent.com/mycard/ygopro-database/217ae165c1886af2fc36b823fc08f9fc3ec13185/locales/zh-CN/cards.cdb",
           "https://raw.githubusercontent.com/mycard/ygopro-database/217ae165c1886af2fc36b823fc08f9fc3ec13185/locales/zh-CN/cards.cdb",
           "https://code.moenext.com/mycard/ygopro-database/-/raw/217ae165c1886af2fc36b823fc08f9fc3ec13185/locales/zh-CN/cards.cdb"
         ],
@@ -14,6 +20,12 @@
       {
         "id": "strings.conf",
         "urls": [
+          "https://fastly.jsdelivr.net/gh/mycard/ygopro-database@217ae165c1886af2fc36b823fc08f9fc3ec13185/locales/zh-CN/strings.conf",
+          "https://gcore.jsdelivr.net/gh/mycard/ygopro-database@217ae165c1886af2fc36b823fc08f9fc3ec13185/locales/zh-CN/strings.conf",
+          "https://testingcf.jsdelivr.net/gh/mycard/ygopro-database@217ae165c1886af2fc36b823fc08f9fc3ec13185/locales/zh-CN/strings.conf",
+          "https://cdn.jsdmirror.com/gh/mycard/ygopro-database@217ae165c1886af2fc36b823fc08f9fc3ec13185/locales/zh-CN/strings.conf",
+          "https://ghproxy.net/https://raw.githubusercontent.com/mycard/ygopro-database/217ae165c1886af2fc36b823fc08f9fc3ec13185/locales/zh-CN/strings.conf",
+          "https://gh-proxy.com/https://raw.githubusercontent.com/mycard/ygopro-database/217ae165c1886af2fc36b823fc08f9fc3ec13185/locales/zh-CN/strings.conf",
           "https://raw.githubusercontent.com/mycard/ygopro-database/217ae165c1886af2fc36b823fc08f9fc3ec13185/locales/zh-CN/strings.conf",
           "https://code.moenext.com/mycard/ygopro-database/-/raw/217ae165c1886af2fc36b823fc08f9fc3ec13185/locales/zh-CN/strings.conf"
         ],
@@ -24,12 +36,18 @@
   "scripts": {
     "sha": "0be9a8ac948f6ac38f4ed3ba45d439290d04415a",
     "urls": [
+      "https://ghproxy.net/https://github.com/Fluorohydride/ygopro-scripts/archive/0be9a8ac948f6ac38f4ed3ba45d439290d04415a.zip",
+      "https://gh-proxy.com/https://github.com/Fluorohydride/ygopro-scripts/archive/0be9a8ac948f6ac38f4ed3ba45d439290d04415a.zip",
+      "https://ghproxy.net/https://codeload.github.com/Fluorohydride/ygopro-scripts/zip/0be9a8ac948f6ac38f4ed3ba45d439290d04415a",
+      "https://gh-proxy.com/https://codeload.github.com/Fluorohydride/ygopro-scripts/zip/0be9a8ac948f6ac38f4ed3ba45d439290d04415a",
       "https://github.com/Fluorohydride/ygopro-scripts/archive/0be9a8ac948f6ac38f4ed3ba45d439290d04415a.zip",
       "https://codeload.github.com/Fluorohydride/ygopro-scripts/zip/0be9a8ac948f6ac38f4ed3ba45d439290d04415a"
     ]
   },
   "sets": {
     "urls": [
+      "https://ghproxy.net/https://github.com/iconmaster5326/YGOJSON/releases/download/v1/individual.zip",
+      "https://gh-proxy.com/https://github.com/iconmaster5326/YGOJSON/releases/download/v1/individual.zip",
       "https://github.com/iconmaster5326/YGOJSON/releases/download/v1/individual.zip"
     ],
     "sha256": "1c4cd9d5ff676225a39e587cb7d79cb57a75b1fbcb18d3f1a0d96dec4665e378"

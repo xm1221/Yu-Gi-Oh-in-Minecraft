@@ -343,6 +343,7 @@
 
   "ygomc.sync.status": "资源同步：%s / %s\n%s\n进度 %s / %s",
   "ygomc.sync.chat": "资源同步：%s",
+  "ygomc.sync.chat.warn": "资源同步失败：%s",
   "ygomc.sync.phase.idle": "空闲",
   "ygomc.sync.phase.checking": "检查清单",
   "ygomc.sync.phase.downloading": "下载",
@@ -362,7 +363,8 @@
   "ygomc.sync.msg.applying": "正在装载新的卡库与脚本",
   "ygomc.sync.msg.ready": "卡库 %s 张，脚本 %s 个文件",
   "ygomc.sync.msg.failed": "同步失败：%s",
-  "ygomc.sync.msg.degraded": "部分失败，继续使用已有文件：%s",
+  "ygomc.sync.msg.degraded": "部分资源下载失败，继续使用本地文件：%s",
+  "ygomc.sync.msg.no_datapack": "卡库下载失败，本地没有数据包（ygomc/datapack），游戏里没有卡（%s）",
   "ygomc.sync.msg.deferred": "对局进行中，换上新文件推迟",
   "ygomc.sync.msg.applied": "已重新装载卡库与脚本",
   "ygomc.sync.msg.nothing_pending": "没有等待换上的文件",

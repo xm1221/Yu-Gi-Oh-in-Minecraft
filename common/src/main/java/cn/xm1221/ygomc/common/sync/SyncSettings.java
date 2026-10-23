@@ -12,6 +12,7 @@ public final class SyncSettings {
     public boolean sets = true;
     public boolean picsOnDemand = true;
     public boolean picsPrefetchAll = false;
+    /** TCP/TLS 连接超时（秒）。大文件正文见 {@link HttpFetch#LARGE_BODY_TIMEOUT}。 */
     public int timeoutSeconds = 30;
     public int maxPicBytes = 2_000_000;
     public boolean allowReplaceNewerLocal = false;

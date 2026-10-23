@@ -7,7 +7,10 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -189,6 +192,152 @@ class HttpFetchTest {
     }
 
     @Test
+    void slowHeadersBeyondConnectBudgetStillFinish() throws Exception {
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        ExecutorService pool = daemonPool();
+        server.setExecutor(pool);
+        server.createContext("/slow", exchange -> {
+            pause(1200);
+            byte[] body = "late".getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
+        server.start();
+        try {
+            Path dest = Files.createTempDirectory("ygomc-slow-hdr").resolve("file.bin");
+            HttpFetch.Options options = options();
+            options.connectTimeout = Duration.ofMillis(300);
+            options.readTimeout = Duration.ofSeconds(4);
+            HttpFetch.Result result = HttpFetch.get(List.of(url(server, "/slow")), dest, options);
+            assertTrue(result.ok, result.error);
+            assertEquals("late", Files.readString(dest));
+        } finally {
+            server.stop(0);
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
+    void slowBodyWithinReadTimeoutFinishes() throws Exception {
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        ExecutorService pool = daemonPool();
+        server.setExecutor(pool);
+        server.createContext("/drip", exchange -> {
+            byte[] body = "abcdef".getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, body.length);
+            var out = exchange.getResponseBody();
+            out.write(body, 0, 2);
+            out.flush();
+            pause(350);
+            out.write(body, 2, 2);
+            out.flush();
+            pause(350);
+            out.write(body, 4, 2);
+            out.close();
+            exchange.close();
+        });
+        server.start();
+        try {
+            Path dest = Files.createTempDirectory("ygomc-drip").resolve("file.bin");
+            HttpFetch.Options options = options();
+            options.connectTimeout = Duration.ofMillis(200);
+            options.readTimeout = Duration.ofSeconds(5);
+            HttpFetch.Result result = HttpFetch.get(List.of(url(server, "/drip")), dest, options);
+            assertTrue(result.ok, result.error);
+            assertEquals("abcdef", Files.readString(dest));
+        } finally {
+            server.stop(0);
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
+    void bodyPastReadTimeoutDeletesPartial() throws Exception {
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        ExecutorService pool = daemonPool();
+        server.setExecutor(pool);
+        server.createContext("/stall", exchange -> {
+            byte[] body = "abcdefghij".getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, body.length);
+            var out = exchange.getResponseBody();
+            out.write(body, 0, 2);
+            out.flush();
+            pause(3000);
+            out.write(body, 2, body.length - 2);
+            out.close();
+            exchange.close();
+        });
+        server.start();
+        try {
+            Path dest = Files.createTempDirectory("ygomc-stall").resolve("file.bin");
+            HttpFetch.Options options = options();
+            options.connectTimeout = Duration.ofSeconds(2);
+            options.readTimeout = Duration.ofMillis(600);
+            HttpFetch.Result result = HttpFetch.get(List.of(url(server, "/stall")), dest, options);
+            assertFalse(result.ok);
+            assertTrue(result.error.contains("读取超时"), result.error);
+            assertFalse(Files.exists(dest));
+            assertFalse(Files.exists(Path.of(dest + ".partial")));
+        } finally {
+            server.stop(0);
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
+    void firstTimeoutDoesNotSkipRemainingUrls() throws Exception {
+        AtomicInteger hangHits = new AtomicInteger();
+        AtomicInteger okHits = new AtomicInteger();
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        ExecutorService pool = daemonPool();
+        server.setExecutor(pool);
+        server.createContext("/hang", exchange -> {
+            hangHits.incrementAndGet();
+            pause(3000);
+            byte[] body = "too-late".getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
+        server.createContext("/ok", exchange -> {
+            okHits.incrementAndGet();
+            byte[] body = "spare".getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
+        server.start();
+        try {
+            Path dest = Files.createTempDirectory("ygomc-failopen").resolve("file.bin");
+            HttpFetch.Options options = options();
+            options.connectTimeout = Duration.ofSeconds(2);
+            options.readTimeout = Duration.ofMillis(700);
+            HttpFetch.Result result = HttpFetch.get(List.of(url(server, "/hang"), url(server, "/ok")), dest, options);
+            assertTrue(result.ok, result.error);
+            assertEquals("spare", Files.readString(dest));
+            assertTrue(result.url.endsWith("/ok"));
+            assertEquals(1, hangHits.get());
+            assertEquals(1, okHits.get());
+        } finally {
+            server.stop(0);
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
+    void largePinDownloadKeepsShortConnectAndLongBody() {
+        SyncSettings settings = SyncSettings.defaults();
+        HttpFetch.Options options = AssetSync.options(settings, 64L * 1024 * 1024, Path.of("game"));
+        assertEquals(30, options.connectTimeout.toSeconds());
+        assertTrue(options.readTimeout.toSeconds() >= 10 * 60, options.readTimeout.toString());
+        // 约 56MB 的卡包 zip，按 15KB/s 需要一小时以上。
+        long setsAtSlowProxy = (56L * 1024 * 1024) / (15 * 1024);
+        assertTrue(options.readTimeout.toSeconds() >= setsAtSlowProxy, options.readTimeout.toString());
+        assertTrue(options.readTimeout.compareTo(options.connectTimeout) > 0);
+    }
+
+    @Test
     void followsOneRedirectAndStopsAtThree() throws Exception {
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/one", exchange -> redirect(exchange, url(server, "/land")));
@@ -233,9 +382,26 @@ class HttpFetchTest {
         return "http://127.0.0.1:" + server.getAddress().getPort() + path;
     }
 
+    private static void pause(long millis) {
+        try {
+            Thread.sleep(millis);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private static ExecutorService daemonPool() {
+        return Executors.newCachedThreadPool(r -> {
+            Thread thread = new Thread(r, "ygomc-test-http");
+            thread.setDaemon(true);
+            return thread;
+        });
+    }
+
     private static HttpFetch.Options options() {
         HttpFetch.Options options = new HttpFetch.Options();
-        options.connectTimeout = java.time.Duration.ofSeconds(5);
+        options.connectTimeout = Duration.ofSeconds(5);
+        options.readTimeout = Duration.ofSeconds(5);
         return options;
     }
 }

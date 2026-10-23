@@ -18,6 +18,7 @@ public class SyncConfig implements ConfigData {
     public boolean sets = true;
     public boolean picsOnDemand = true;
     public boolean picsPrefetchAll = false;
+    /** TCP/TLS 连接超时（秒）。卡库、脚本、卡包的正文读取不看这个值。 */
     public int timeoutSeconds = 30;
     public int maxPicBytes = 2_000_000;
     public boolean allowReplaceNewerLocal = false;

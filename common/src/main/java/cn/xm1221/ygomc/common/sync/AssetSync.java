@@ -283,9 +283,14 @@ public final class AssetSync {
         boolean binsOk = binsValid(CacheLayout.datapack(game));
         boolean scriptsOk = Files.isRegularFile(CacheLayout.script(game).resolve("constant.lua"))
                 || !settings.scripts;
+        boolean databaseFailed = manifest.degraded.stream().anyMatch(line -> line.startsWith("database"));
         if (manifest.pendingReload) {
             LOGGER.info("对局进行中，新的卡库或脚本留在缓存里，下一局开始前或 /ygomc sync apply 才会换上");
             set(Phase.DEGRADED, "pending", "ygomc.sync.msg.deferred", true, true);
+        } else if (databaseFailed && !binsOk) {
+            LOGGER.warn("卡库下载失败，本地没有数据包：{}", manifest.degraded);
+            set(scriptsOk ? Phase.DEGRADED : Phase.FAILED, "done", "ygomc.sync.msg.no_datapack", true, true,
+                    String.join(" ", manifest.degraded));
         } else if (!manifest.degraded.isEmpty() && (binsOk || scriptsOk)) {
             LOGGER.info("部分资源没更新，继续使用已有文件：{}", manifest.degraded);
             set(Phase.DEGRADED, "done", "ygomc.sync.msg.degraded", true, true, String.join(" ", manifest.degraded));
@@ -531,12 +536,25 @@ public final class AssetSync {
         return true;
     }
 
-    private static HttpFetch.Options options(SyncSettings settings, long maxBytes, Path game) {
+    static HttpFetch.Options options(SyncSettings settings, long maxBytes, Path game) {
         HttpFetch.Options options = new HttpFetch.Options();
         options.connectTimeout = Duration.ofSeconds(settings.timeoutSeconds());
+        options.readTimeout = largeBodyTimeout(settings);
         options.maxBytes = maxBytes;
         options.etagStore = CacheLayout.etag(game);
         return options;
+    }
+
+    /**
+     * 大文件不跟 {@code timeoutSeconds} 走。配置里把连接超时调得比正文上限还长时，才跟着加长。
+     */
+    static Duration largeBodyTimeout(SyncSettings settings) {
+        Duration floor = HttpFetch.LARGE_BODY_TIMEOUT;
+        long configured = settings.timeoutSeconds();
+        if (configured > floor.toSeconds()) {
+            return Duration.ofSeconds(configured);
+        }
+        return floor;
     }
 
     private static boolean binsValid(Path dir) {

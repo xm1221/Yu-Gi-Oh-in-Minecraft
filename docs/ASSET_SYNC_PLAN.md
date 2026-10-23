@@ -399,11 +399,13 @@ ETag：对 pin 已固定的 URL，ETag 只是少下字节的优化。pin 未变�
 | `sets` | true | 拉 YGOJSON 并生成数据包 |
 | `picsOnDemand` | true | 缺图时按卡密拉。专用服忽略 |
 | `picsPrefetchAll` | false | 全库预取，只能由命令临时打开 |
-| `timeoutSeconds` | 30 | 单次连接 |
+| `timeoutSeconds` | 30 | 只限制 TCP/TLS 连接。卡库、脚本、卡包的正文另有读取上限 |
 | `maxPicBytes` | 2000000 | 单张图上限，防下到网页 |
 | `allowReplaceNewerLocal` | false | 见上，默认不盖玩家手摆的较新文件 |
 
 旧配置缺字段时用默认值，和 `DuelConfig` 一样。
+
+大陆网络上 `raw.githubusercontent.com` 经常在 TLS 握手被掐断，`code.moenext.com` 会回 403。`pins.json` 因此在原地址之前加了 jsDelivr（fastly、gcore、testingcf）、`cdn.jsdmirror.com`，以及 `ghproxy.net` / `gh-proxy.com` 对 GitHub raw、archive、release 的转发。某一条失败会继续试后面的地址。慢代理大约 15KB/s：8MB 的 `cards.cdb` 要十几分钟，约 56MB 的卡包 zip 要一小时左右。正文读取上限是 90 分钟，不要求玩家先改 `timeoutSeconds`。下载失败或退回本地文件时，客户端在聊天和动作条各提示一次；标题画面上还没有玩家就先挂着，进世界后再显示，本地没有 `ygomc/datapack` 时直接说明没有卡。
 
 ## 5. 客户端与服务端的分工
 
