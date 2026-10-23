@@ -14,12 +14,16 @@ import cn.xm1221.ygomc.common.ocg.Responder;
 import cn.xm1221.ygomc.common.ocg.SeatResponders;
 import cn.xm1221.ygomc.common.ocg.msg.Msg;
 import cn.xm1221.ygomc.common.ocg.msg.MsgType;
+import cn.xm1221.ygomc.common.spectacle.SpectacleEvent;
+import cn.xm1221.ygomc.common.spectacle.SpectacleFromMsg;
 
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -143,6 +147,14 @@ public final class DuelRoom implements OcgDuel.Observer {
      */
     private final ChainNotice.Slot[] pendingNotice =
             {new ChainNotice.Slot(), new ChainNotice.Slot()};
+
+    /**
+     * 每席待推的演出事件。onMessage 时两边各抄一份，push 时按席 take，
+     * 避免同一步先推 0 席把共享队列掏空导致 1 席丢演出。
+     */
+    @SuppressWarnings("unchecked")
+    private final List<SpectacleEvent>[] pendingSpectacles = new List[]{
+            new ArrayList<SpectacleEvent>(), new ArrayList<SpectacleEvent>()};
 
     /**
      * 这一局的会话句柄，用来中止它。
@@ -322,6 +334,12 @@ public final class DuelRoom implements OcgDuel.Observer {
             setAction(DescText.ACTION_SP_SUMMONING, s.code());
         } else if (m instanceof Msg.FlipSummoning s) {
             setAction(DescText.ACTION_FLIP_SUMMONING, s.code());
+        }
+    
+        SpectacleEvent spectacle = SpectacleFromMsg.of(m);
+        if (spectacle != null) {
+            pendingSpectacles[0].add(spectacle);
+            pendingSpectacles[1].add(spectacle);
         }
     }
 
@@ -784,6 +802,18 @@ public final class DuelRoom implements OcgDuel.Observer {
     }
 
     /** 把一帧推给这一席，附上「在等谁、还剩几秒、这一问的题号」。 */
+    
+    /** 取出并清空某一席排队的演出；空则返回不可变空表。 */
+    private List<SpectacleEvent> takeSpectacles(int seat) {
+        List<SpectacleEvent> q = pendingSpectacles[seat];
+        if (q.isEmpty()) {
+            return List.of();
+        }
+        List<SpectacleEvent> out = List.copyOf(q);
+        q.clear();
+        return out;
+    }
+
     private void push(int seat, DuelBoard board, DuelQuestion question, ChainNotice notice) {
         int waiting = -1;
         int seconds = -1;
@@ -797,7 +827,8 @@ public final class DuelRoom implements OcgDuel.Observer {
         }
         int qid = question != null && responders[seat] != null
                 ? responders[seat].pendingQuestionId() : 0;
-        YgomcNet.sendBoard(humans[seat], board, question, notice, seat, null, qid, seconds, waiting);
+        YgomcNet.sendBoard(humans[seat], board, question, notice, seat, null, qid, seconds, waiting,
+                takeSpectacles(seat));
     }
 
     // ── 开局前置检查 ──────────────────────────────────────────────────────

@@ -1744,10 +1744,12 @@ public class DuelScreen extends net.minecraft.client.gui.screens.Screen {
         FieldLayout L = field();
         if (board == null) {
             // 面板现在在右侧、panel().y() 恒为 0，沿用旧写法会画到屏幕外。
-            g.drawString(font, DuelText.s(DuelText.STATUS_NO_BOARD), L.x0(), L.oppHand().y() + 20, 0xFFFFFF);
-        } else {
+            g.drawString(font, DuelText.s(DuelText.STATUS_NO_BOARD), L.x0(), L.oppHand().y() + 20, 0xFFFFFF);        } else {
             drawField(g, L);
         }
+        // 演出叠在牌桌之上；总线在 Screen 外 tick，这里只取当前条画。
+        GuiSpectaclePainter.paint(g, L, board, mySeat,
+                DuelSpectacle.bus().current(), DuelSpectacle.progress());
         drawPhases(g, L);
         // 时点键画在阶段条那一层（场地/阶段条之后，列表/查看窗/菜单之前），
         // 所以它的命中判定也排在阶段条之前、列表/菜单之后。

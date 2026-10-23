@@ -5,11 +5,14 @@ import cn.xm1221.ygomc.common.duel.DuelBoard;
 import cn.xm1221.ygomc.common.duel.DuelQuestion;
 import cn.xm1221.ygomc.common.duel.DuelResult;
 import cn.xm1221.ygomc.common.duel.DuelWire;
+import cn.xm1221.ygomc.common.spectacle.SpectacleEvent;
+import cn.xm1221.ygomc.common.spectacle.SpectacleWire;
 import dev.architectury.networking.NetworkManager;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerPlayer;
 
+import java.util.List;
 import java.util.function.Consumer;
 
 /**
@@ -75,7 +78,7 @@ public final class YgomcNet {
      * <p>5 起：询问带题号、剩余秒数、「在等哪一席」；必发提示不再上线
      * （界面本来就不画它）。读到别的号直接抛，不往下猜字段。
      */
-    public static final int FRAME_VERSION = 5;
+    public static final int FRAME_VERSION = 6;
 
     /** 客户端交进来的 S2C 处理函数：参数是已经解码好的牌桌与问题。 */
     private static Consumer<BoardUpdate> boardHandler;
@@ -90,17 +93,23 @@ public final class YgomcNet {
      */
     public record BoardUpdate(DuelBoard board, DuelQuestion question, int viewerSeat,
                               ChainNotice notice, DuelResult result,
-                              int questionId, int secondsLeft, int waitingSeat) {
+                              int questionId, int secondsLeft, int waitingSeat,
+                              List<SpectacleEvent> spectacles) {
 
-        /** 没有结果、也没有倒计时的那一帧。 */
+        public BoardUpdate {
+            spectacles = spectacles == null || spectacles.isEmpty()
+                    ? List.of() : List.copyOf(spectacles);
+        }
+
+        /** 没有结果也没有倒计时的普通一帧。 */
         public BoardUpdate(DuelBoard board, DuelQuestion question, int viewerSeat,
                            ChainNotice notice) {
-            this(board, question, viewerSeat, notice, null, 0, -1, -1);
+            this(board, question, viewerSeat, notice, null, 0, -1, -1, List.of());
         }
 
         public BoardUpdate(DuelBoard board, DuelQuestion question, int viewerSeat,
                            ChainNotice notice, DuelResult result) {
-            this(board, question, viewerSeat, notice, result, 0, -1, -1);
+            this(board, question, viewerSeat, notice, result, 0, -1, -1, List.of());
         }
     }
 
@@ -148,6 +157,8 @@ public final class YgomcNet {
             int waitingSeat = buf.readByte();
             // 必发提示不再上线（界面不画）。旧帧里的那一截已经不读。
             byte[] result = buf.readBoolean() ? buf.readByteArray() : null;
+            // v6：帧尾演出列表；空字节 = 无演出。未知版本已在上面拒收。
+            List<SpectacleEvent> spectacles = SpectacleWire.decode(buf.readByteArray());
             // 先解码再排队：解码是纯计算，放在网络线程上没问题，
             // 这样主线程拿到的已经是可用对象，也就把「解析失败」和「界面出错」
             // 这两类故障分到了不同的线程，排查时不会混在一起。
@@ -155,7 +166,7 @@ public final class YgomcNet {
                     hasQuestion ? DuelWire.decodeQuestion(question) : null, viewerSeat,
                     null,
                     result == null ? null : DuelWire.decodeResult(result),
-                    questionId, secondsLeft, waitingSeat);
+                    questionId, secondsLeft, waitingSeat, spectacles);
             Consumer<BoardUpdate> h = boardHandler;
             if (h != null) {
                 ctx.queue(() -> h.accept(update));
@@ -186,7 +197,7 @@ public final class YgomcNet {
      */
     public static void sendBoard(ServerPlayer player, DuelBoard board, DuelQuestion question,
                                  ChainNotice notice, int viewerSeat, DuelResult result) {
-        sendBoard(player, board, question, notice, viewerSeat, result, 0, -1, -1);
+        sendBoard(player, board, question, notice, viewerSeat, result, 0, -1, -1, List.of());
     }
 
     /**
@@ -197,6 +208,14 @@ public final class YgomcNet {
     public static void sendBoard(ServerPlayer player, DuelBoard board, DuelQuestion question,
                                  ChainNotice notice, int viewerSeat, DuelResult result,
                                  int questionId, int secondsLeft, int waitingSeat) {
+        sendBoard(player, board, question, notice, viewerSeat, result,
+                questionId, secondsLeft, waitingSeat, List.of());
+    }
+
+    public static void sendBoard(ServerPlayer player, DuelBoard board, DuelQuestion question,
+                                 ChainNotice notice, int viewerSeat, DuelResult result,
+                                 int questionId, int secondsLeft, int waitingSeat,
+                                 List<SpectacleEvent> spectacles) {
         // notice 不再写入这一帧。参数留着是为了不改房间里所有调用点的形状；
         // 界面不画必发提示，线上再带它只是占字节。
         var server = player.getServer();
@@ -219,6 +238,8 @@ public final class YgomcNet {
         if (result != null) {
             buf.writeByteArray(DuelWire.encodeResult(result));
         }
+        buf.writeByteArray(SpectacleWire.encode(
+                spectacles == null || spectacles.isEmpty() ? List.of() : spectacles));
         Runnable send = () -> {
             if (!server.isSameThread()) {
                 throw new IllegalStateException("对局帧不在主线程上发");

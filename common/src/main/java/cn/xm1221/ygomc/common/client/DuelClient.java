@@ -3,6 +3,7 @@ package cn.xm1221.ygomc.common.client;
 import cn.xm1221.ygomc.common.duel.DuelDiskHooks;
 import cn.xm1221.ygomc.common.net.YgomcNet;
 import dev.architectury.event.events.client.ClientPlayerEvent;
+import dev.architectury.event.events.client.ClientTickEvent;
 import net.minecraft.client.Minecraft;
 
 /**
@@ -45,11 +46,9 @@ public final class DuelClient {
 
     public static void init() {
         YgomcNet.registerClient(DuelClient::onUpdate);
-        // 决斗盘右键空气 = 回到对局界面。钩子挂在这里而不是物品类里：
-        // 物品是两端共用的类，直接引用本类会让专用服务器加载到 Minecraft。
+        // 演出总线在 Screen 外：关 GUI 也要继续 tick，世界层以后共用。
+        ClientTickEvent.CLIENT_POST.register(mc -> DuelSpectacle.tickNow());
         DuelDiskHooks.installReopen(DuelClient::reopenScreen);
-        // 离开世界：界面对象还指着上一局的话，决斗盘右键会把它拽回来；
-        // 卡图纹理挂在上一份纹理管理器上，不放的话重进世界用的是已经释放的纹理。
         ClientPlayerEvent.CLIENT_PLAYER_QUIT.register(player -> leaveWorld());
     }
 
@@ -62,6 +61,7 @@ public final class DuelClient {
         screen = null;
         everShown = false;
         CardTextures.clear();
+        DuelSpectacle.clear();
     }
 
     /**
@@ -99,6 +99,10 @@ public final class DuelClient {
     }
 
     private static void onUpdate(YgomcNet.BoardUpdate update) {
+        if (update.spectacles() != null && !update.spectacles().isEmpty()) {
+            DuelSpectacle.accept(update.spectacles());
+        }
+
         Minecraft mc = Minecraft.getInstance();
         if (update.result() != null) {
             // 收局帧。牌桌一般是 null（服务端只带结果），界面会自己留着上一帧当背景
@@ -124,6 +128,7 @@ public final class DuelClient {
             }
             screen = null;
             everShown = false;
+            DuelSpectacle.clear();
             return;
         }
         if (screen == null) {
