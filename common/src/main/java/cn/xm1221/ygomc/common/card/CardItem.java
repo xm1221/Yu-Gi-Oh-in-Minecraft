@@ -3,12 +3,18 @@ package cn.xm1221.ygomc.common.card;
 import cn.xm1221.ygomc.common.data.CardDataDb;
 import cn.xm1221.ygomc.common.data.DataPacks;
 import cn.xm1221.ygomc.common.registry.YgomcItems;
+import dev.architectury.utils.Env;
+import dev.architectury.utils.EnvExecutor;
 import net.minecraft.ChatFormatting;
 import net.minecraft.core.component.DataComponentType;
 import net.minecraft.network.chat.Component;
+import net.minecraft.world.InteractionHand;
+import net.minecraft.world.InteractionResultHolder;
+import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.TooltipFlag;
+import net.minecraft.world.level.Level;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -266,6 +272,22 @@ public class CardItem extends Item {
         return wide ? 2 : 1;
     }
 
-    // 卡牌本身没有右键行为：对局交互走决斗盘/决斗台，开包走卡包物品。
-    // 刻意不覆写 use()，避免以后有人以为「右键卡片能做什么」。
+    /**
+     * Right-click held card: open CardBrowserScreen (large art + name/stats/desc).
+     * Same CardTips/CardArt path as binder single-card detail; no new screen type.
+     */
+    @Override
+    public InteractionResultHolder<ItemStack> use(Level level, Player player, InteractionHand hand) {
+        ItemStack stack = player.getItemInHand(hand);
+        CardRef held = ref(stack);
+        if (held == null) {
+            return InteractionResultHolder.pass(stack);
+        }
+        if (level.isClientSide()) {
+            int code = held.cardCode();
+            EnvExecutor.runInEnv(Env.CLIENT, () -> () ->
+                    cn.xm1221.ygomc.common.client.CardBrowserScreen.open(code));
+        }
+        return InteractionResultHolder.sidedSuccess(stack, level.isClientSide());
+    }
 }

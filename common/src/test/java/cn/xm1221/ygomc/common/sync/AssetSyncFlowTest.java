@@ -85,6 +85,7 @@ class AssetSyncFlowTest {
         manifest.databaseSha = pins.database.sha;
         manifest.scriptsSha = pins.scripts.sha;
         manifest.setsSha256 = pins.sets.sha256;
+        manifest.setsFormat = AssetSync.SETS_FORMAT;
         for (String name : java.util.List.of("cards.cdb", "strings.conf")) {
             manifest.databaseSha256.put(name, Digests.sha256(CacheLayout.datapack(game).resolve(name)));
         }

@@ -37,7 +37,14 @@ public final class SyncToaster {
             return;
         }
         hooked = true;
-        SyncListeners.onApplied(() -> Minecraft.getInstance().execute(CardTextures::invalidate));
+        SyncListeners.onApplied(() -> Minecraft.getInstance().execute(() -> {
+            CardTextures.invalidate();
+            // sets regen / cards reload: allow another prefetch pass; do not interrupt a running one
+            packFacePrefetchArmed = false;
+            if (!PicCache.prefetchRunning()) {
+                picPrefetchArmed = false;
+            }
+        }));
         SyncListeners.onPicReady(code -> Minecraft.getInstance().execute(() -> CardTextures.invalidate(code)));
     }
 
@@ -162,10 +169,10 @@ public final class SyncToaster {
         AssetSync.Status sync = AssetSync.status();
         if (sync != null) {
             AssetSync.Phase phase = sync.phase();
-            if (phase == AssetSync.Phase.DOWNLOADING
-                    || phase == AssetSync.Phase.CHECKING
-                    || phase == AssetSync.Phase.CONVERTING
-                    || phase == AssetSync.Phase.APPLYING) {
+            if (phase != AssetSync.Phase.READY
+                    && phase != AssetSync.Phase.DEGRADED
+                    && phase != AssetSync.Phase.FAILED) {
+                // IDLE: main sync often not started yet; early pack-face run arms empty before format regen
                 return;
             }
         }

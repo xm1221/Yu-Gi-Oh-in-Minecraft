@@ -483,8 +483,9 @@ public final class AssetSync {
             return false;
         }
         if (present && (manifest.setsSha256 == null || manifest.setsSha256.isBlank())
-                && !settings.allowReplaceNewerLocal) {
-            LOGGER.info("已有玩家自备卡包目录，不覆盖");
+                && !settings.allowReplaceNewerLocal
+                && manifest.setsFormat >= SETS_FORMAT) {
+            LOGGER.info("保留管理员本地目录，跳过（setsFormat 已是 {}）", SETS_FORMAT);
             return false;
         }
         LOGGER.info("开始下载卡包 zip，期望 sha256 {}", pins.sets.sha256);
