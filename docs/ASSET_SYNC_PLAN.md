@@ -413,6 +413,8 @@ ETag：对 pin 已固定的 URL，ETag 只是少下字节的优化。pin 未变�
 
 同步不再把 `cards.cdb` 收成 `cards.bin` / `texts.bin` / `strings.bin`。正式目录是 `ygomc/datapack/cards.cdb` 与 `strings.conf`。`DataPack.open` 看到这两份原文就在内存里做成引擎要的字节；目录里没有原文时才读旧的 bin（离线 `mkdatapack.py` 仍可写出 bin）。读 cdb 需要 `sqlite-jdbc`：发行 jar 里 shadow 进去，NeoForge `runClient` 还要放进 `forgeRuntimeLibrary`（`runtimeOnly` 到不了那条 classpath）。
 
+卡库（脚本若已经在 `ygomc/script`）一写进正式目录就 `DataPacks.reload()`，脚本哨兵在的话同时 `OcgEngine.reprepare()`。不等卡包 zip。卡包自己在生成结束后再重载服务器数据包。启动时目录还空着只打一条「还没有卡库」，不把缺 `cards.bin` 记成警告；同步装上之后必须丢掉启动时那个空实例。
+
 ## 5. 客户端与服务端的分工
 
 | 步骤 | 专用服 | 整合服（单人） | 连到远程服的客户端 |

@@ -65,18 +65,33 @@ public final class DataPacks {
      */
     public static void init() {
         DataPack pack = get();
-        if (pack.problems().isEmpty()) {
+        if (pack.cardData() != null && pack.problems().isEmpty()) {
             LOGGER.info("数据包就绪: {}（{} 张卡，卡图 {}）",
                     pack.dir().toAbsolutePath(),
-                    pack.cardData() == null ? "?" : pack.cardData().size(),
+                    pack.cardData().size(),
                     pack.cardImages() == null ? "不可用" : "已索引");
-        } else {
-            // 逐条打印：problems() 里第一条在「一个候选都没找到」时是多行文本，
-            // 里面本来就带了每个查找过的位置，直接原样输出最有用。
-            for (String problem : pack.problems()) {
+            return;
+        }
+        if (pack.cardData() != null) {
+            LOGGER.info("数据包已打开: {}（{} 张卡，卡图 {}）",
+                    pack.dir().toAbsolutePath(),
+                    pack.cardData().size(),
+                    pack.cardImages() == null ? "不可用" : "已索引");
+        }
+        for (String problem : pack.problems()) {
+            if (expectedAbsence(problem)) {
+                LOGGER.info("数据包：{}", problem);
+            } else {
                 LOGGER.warn("数据包不完整: {}", problem);
             }
         }
+    }
+
+    /** 启动时还没有原文是同步会补上的正常状态，不要报成 cards.bin 坏了。 */
+    private static boolean expectedAbsence(String problem) {
+        return problem.startsWith("还没有")
+                || problem.startsWith("数据包目录不存在")
+                || problem.startsWith("找不到数据包目录");
     }
 
     /**

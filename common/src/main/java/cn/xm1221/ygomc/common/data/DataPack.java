@@ -106,7 +106,7 @@ public final class DataPack implements Closeable {
 
         if (!Files.isDirectory(dir)) {
             problems.add("数据包目录不存在: " + dir.toAbsolutePath()
-                    + "。请先运行 tools/mkdatapack.py 与 tools/mkpics.py");
+                    + "。同步会写入 cards.cdb 与 strings.conf；离线可运行 tools/mkdatapack.py 与 tools/mkpics.py");
         } else {
             Path cdb = dir.resolve("cards.cdb");
             Path conf = dir.resolve("strings.conf");
@@ -120,6 +120,11 @@ public final class DataPack implements Closeable {
                     problems.add("cards.cdb 加载失败（需要 sqlite-jdbc，原文仍在 "
                             + dir.toAbsolutePath() + "）: " + e.getMessage());
                 }
+            } else if (!Files.isRegularFile(dir.resolve("cards.bin"))
+                    && !Files.isRegularFile(dir.resolve("texts.bin"))
+                    && !Files.isRegularFile(dir.resolve("strings.bin"))) {
+                problems.add("还没有卡库：需要 cards.cdb 与 strings.conf（同步会下载）。"
+                        + "旧版 cards.bin / texts.bin / strings.bin 也可。");
             } else {
                 data = tryOpen(problems, "cards.bin", "tools/mkdatapack.py",
                         () -> CardDataDb.load(dir.resolve("cards.bin")));
@@ -128,8 +133,13 @@ public final class DataPack implements Closeable {
                 str = tryOpen(problems, "strings.bin", "tools/mkdatapack.py",
                         () -> StringsDb.load(dir.resolve("strings.bin")));
             }
-            images = tryOpen(problems, "pics.bin", "tools/mkpics.py",
-                    () -> CardImageDb.open(dir.resolve("pics.bin")));
+            Path pics = dir.resolve("pics.bin");
+            if (!Files.isRegularFile(pics)) {
+                problems.add("还没有 pics.bin（不影响卡表）");
+            } else {
+                images = tryOpen(problems, "pics.bin", "tools/mkpics.py",
+                        () -> CardImageDb.open(pics));
+            }
         }
         return new DataPack(dir, data, text, str, images, problems);
     }

@@ -242,16 +242,28 @@ public final class AssetSync {
             }
         }
 
-        boolean offline = false;
         boolean engineChanged = false;
         boolean setsChanged = false;
+        // 卡库（以及当时已经在的脚本）落地后立刻装进内存。卡包 zip 很大，不能等它下完
+        // 才让 DataPacks 丢掉启动时的空实例。
+        boolean engineFresh = true;
         if (settings.database) {
-            engineChanged |= database(game, settings, pins, manifest, applyEngine);
-            offline |= manifest.degraded.stream().anyMatch(line -> line.startsWith("database"));
+            if (database(game, settings, pins, manifest, applyEngine)) {
+                engineChanged = true;
+                engineFresh = false;
+            }
+        }
+        if (!engineFresh) {
+            engineFresh = activateEngine(game, settings, manifest, applyEngine);
         }
         if (settings.scripts) {
-            engineChanged |= scripts(game, settings, pins, manifest, applyEngine);
-            offline |= manifest.degraded.stream().anyMatch(line -> line.startsWith("scripts"));
+            if (scripts(game, settings, pins, manifest, applyEngine)) {
+                engineChanged = true;
+                engineFresh = false;
+            }
+        }
+        if (!engineFresh) {
+            engineFresh = activateEngine(game, settings, manifest, applyEngine);
         }
         if (settings.sets) {
             setsChanged = sets(game, settings, pins, manifest);
@@ -262,21 +274,8 @@ public final class AssetSync {
         manifest.pinsSchema = pins.schema;
         manifest.save(CacheLayout.manifest(game));
 
-        if (applyEngine && engineChanged && !manifest.pendingReload) {
-            if (OcgEngine.duelBlocksReload()) {
-                // 下载可能花了很久。开写的时候还没人打，写完已经有人打了：文件可以先落在
-                // 正式目录，但这一局不能把内存里的卡库和引擎换掉。
-                manifest.pendingReload = true;
-                manifest.save(CacheLayout.manifest(game));
-                LOGGER.info("对局在同步收尾时开始，这一局不重新装载卡库与脚本");
-            } else {
-                set(Phase.APPLYING, "engine", "ygomc.sync.msg.applying", true, offline);
-                DataPacks.reload();
-                OcgEngine.reprepare();
-                SyncListeners.fireApplied();
-                manifest.pendingReload = OcgEngine.isApplyPending();
-                manifest.save(CacheLayout.manifest(game));
-            }
+        if (!engineFresh) {
+            activateEngine(game, settings, manifest, applyEngine);
         }
         if (setsChanged && !OcgEngine.duelBlocksReload()) {
             reloadServerPacks();
@@ -308,6 +307,40 @@ public final class AssetSync {
             LOGGER.info("清单一致，pin 未变，本次没有下载大文件");
             set(Phase.READY, "done", "ygomc.sync.msg.skip", false, false);
         }
+    }
+
+    /**
+     * 把已经写进正式目录的卡库（脚本就绪时连引擎）装进内存。
+     *
+     * @return 没有还欠着的装配。单测 {@code applyEngine=false} 直接算完成，不去碰 {@code Platform}。
+     */
+    private static boolean activateEngine(Path game, SyncSettings settings, SyncManifest manifest, boolean applyEngine) {
+        if (!applyEngine) {
+            return true;
+        }
+        if (manifest.pendingReload || OcgEngine.duelBlocksReload()) {
+            manifest.pendingReload = true;
+            LOGGER.info("对局进行中，卡库与脚本先留在磁盘上，这一局不重新装载");
+            return false;
+        }
+        set(Phase.APPLYING, "engine", "ygomc.sync.msg.applying", true, false);
+        DataPacks.reload();
+        var pack = DataPacks.get();
+        if (pack.cardData() == null) {
+            LOGGER.warn("重新打开数据包后仍然没有卡表：{}", pack.problems());
+        } else {
+            LOGGER.info("卡库已装载：{} 张，目录 {}", pack.cardData().size(), pack.dir());
+        }
+        boolean scriptsReady = !settings.scripts
+                || Files.isRegularFile(CacheLayout.script(game).resolve("constant.lua"));
+        if (!scriptsReady) {
+            LOGGER.info("卡库已重新打开，脚本还没落地，引擎等脚本装上后再装配");
+            return false;
+        }
+        OcgEngine.reprepare();
+        SyncListeners.fireApplied();
+        manifest.pendingReload = OcgEngine.isApplyPending();
+        return !manifest.pendingReload;
     }
 
     private static boolean database(Path game, SyncSettings settings, SyncPins pins, SyncManifest manifest,

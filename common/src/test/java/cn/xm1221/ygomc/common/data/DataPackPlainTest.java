@@ -23,4 +23,15 @@ class DataPackPlainTest {
         assertTrue(pack.problems().stream().noneMatch(line -> line.startsWith("cards.cdb")));
         pack.close();
     }
+
+    @Test
+    void missingPlaintextDoesNotBlameCardsBin() throws Exception {
+        Path dir = Files.createTempDirectory("ygomc-empty-pack");
+        DataPack pack = DataPack.open(dir);
+        String joined = String.join("\n", pack.problems());
+        assertTrue(pack.cardData() == null);
+        assertTrue(joined.contains("cards.cdb"));
+        assertTrue(!joined.contains("cards.bin 加载失败"));
+        pack.close();
+    }
 }
