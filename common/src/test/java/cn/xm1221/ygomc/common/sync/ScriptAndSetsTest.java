@@ -1,6 +1,7 @@
 package cn.xm1221.ygomc.common.sync;
 
 import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import org.junit.jupiter.api.Test;
 
@@ -46,6 +47,19 @@ class ScriptAndSetsTest {
         SetsGenerator.Result result = SetsGenerator.generate(zip, javaOut);
         assertTrue(result.cardSets() >= 3, result.toString());
         assertFalse(Files.exists(javaOut.resolve("data/ygomc/ygomc/card_set/demo.json")));
+        JsonObject plain = readJson(javaOut.resolve("data/ygomc/ygomc/booster/pln_jp.json"));
+        JsonObject tcg = readJson(javaOut.resolve("data/ygomc/ygomc/booster/tcg_jp.json"));
+        JsonObject pre = readJson(javaOut.resolve("data/ygomc/ygomc/booster/pre_jp.json"));
+        JsonObject box = readJson(javaOut.resolve("data/ygomc/ygomc/booster_box/pln_jp.json"));
+        assertEquals("print_weight", plain.get("odds_origin").getAsString());
+        assertEquals("sheet_adapted", tcg.get("odds_origin").getAsString());
+        assertEquals("preconstructed", pre.get("odds_origin").getAsString());
+        assertEquals(PackColors.of("PLN-JP"), plain.getAsJsonObject("display").get("color").getAsString());
+        assertEquals(PackColors.of("TCG-JP"), tcg.getAsJsonObject("display").get("color").getAsString());
+        assertEquals(plain.getAsJsonObject("display").get("color").getAsString(),
+                box.getAsJsonObject("display").get("color").getAsString());
+        assertFalse(plain.getAsJsonObject("display").get("color").getAsString().equalsIgnoreCase("#FFFFFF"));
+        assertEquals(PackColors.of("PLN-JP"), PackColors.of("PLN-JP"));
         Process process = new ProcessBuilder("python3", repoRoot().resolve("tools/mksets.py").toString(),
                 "--from", "ygojson", "--zip", zip.toString(), "--out", pyOut.toString())
                 .redirectErrorStream(true)
@@ -138,6 +152,10 @@ class ScriptAndSetsTest {
                      "contents":[{"locales":["jp"],"packs":[{"set":"plain","qty":15}]}]}
                     """);
         }
+    }
+
+    private static JsonObject readJson(Path file) throws Exception {
+        return JsonParser.parseString(Files.readString(file)).getAsJsonObject();
     }
 
     private static void put(ZipOutputStream out, String name, String body) throws Exception {

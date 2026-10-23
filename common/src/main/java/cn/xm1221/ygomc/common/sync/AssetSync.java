@@ -26,8 +26,8 @@ import java.util.List;
  * 启动之后在守护线程里把卡库、脚本和卡包补到 {@code ygomc/}。
  * 缺网或失败都不阻断模组加载。见计划第 5、6 节。
  *
- * <p>TODO 计划第 9 节 P3：{@code odds_origin}、稳定包色、慢速全库预取。
- * {@code picsPrefetchAll} 仍默认关，打开也不会遍历 {@code cards.bin}。单张排队见 {@code /ygomc sync pic}。
+ * <p>{@code picsPrefetchAll} 即使打开也不在启动时遍历 {@code cards.bin}。
+ * 全库预取只由 {@code /ygomc sync prefetch} 开始。
  */
 public final class AssetSync {
 
@@ -252,7 +252,7 @@ public final class AssetSync {
             setsChanged = sets(game, settings, pins, manifest);
         }
         if (settings.picsPrefetchAll) {
-            LOGGER.info("picsPrefetchAll 已打开，但全库预取仍是计划第 9 节 P3，这次不会遍历 cards.bin");
+            LOGGER.info("picsPrefetchAll 已打开，启动时仍然不预取。要下全库请用 /ygomc sync prefetch，每秒最多一张，可 stop");
         }
         manifest.pinsSchema = pins.schema;
         manifest.save(CacheLayout.manifest(game));
@@ -287,7 +287,7 @@ public final class AssetSync {
             set(Phase.READY, "done", "ygomc.sync.msg.ready", true, false,
                     Integer.toString(manifest.cardCount), Integer.toString(manifest.scriptFiles));
         } else {
-            LOGGER.info("清单一致，跳过下载");
+            LOGGER.info("清单一致，pin 未变，本次没有下载大文件");
             set(Phase.READY, "done", "ygomc.sync.msg.skip", false, false);
         }
     }

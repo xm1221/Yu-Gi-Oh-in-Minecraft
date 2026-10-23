@@ -10,6 +10,7 @@
   python mksets.py --from ygojson --zip path/to/individual.zip
 """
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -17,6 +18,14 @@ import re
 import sys
 import urllib.request
 import zipfile
+
+# 与 Java PackColors.PALETTE 逐项相同。按卡号前缀的 SHA-256 前 4 字节取模。
+PACK_COLORS = (
+    "#1B3A4B", "#3D2B1F", "#1F3D2B", "#3B1F3D",
+    "#2C3E50", "#4A2C2A", "#1E3A2F", "#2A2E4A",
+    "#3E2A1E", "#243B2F", "#3A2430", "#1F2A44",
+    "#3F2D1A", "#1A3330", "#33241A", "#2A1F3A",
+)
 
 ZIP_URL = "https://github.com/iconmaster5326/YGOJSON/releases/download/v1/individual.zip"
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -174,6 +183,12 @@ def write(path, obj):
         handle.write("\n")
 
 
+def pack_color(prefix):
+    key = prefix if prefix else "ygomc"
+    digest = hashlib.sha256(key.encode("utf-8")).digest()
+    return PACK_COLORS[int.from_bytes(digest[:4], "big") % len(PACK_COLORS)]
+
+
 def main():
     parser = argparse.ArgumentParser(description="从 YGOJSON 生成 ygomc 卡包数据包")
     parser.add_argument("--from", dest="source", required=True, choices=["ygojson"])
@@ -204,6 +219,7 @@ def main():
     defaulted = 0
     no_password = 0
     booster_ids = {}
+    booster_colors = {}
 
     with zipfile.ZipFile(zip_path) as zf:
         codes = passwords(zf)
@@ -264,10 +280,12 @@ def main():
                 if block.get("distrobution"):
                     dist_id = block["distrobution"]
             pulls = None
+            odds_origin = None
             if dist_id == "preconstructed":
                 pulls = whole_set_pulls(cards)
                 if pulls:
                     decks += 1
+                    odds_origin = "preconstructed"
             elif dist_id and dist_root is not None:
                 dist_path = dist_root + "distributions/" + dist_id + ".json"
                 if dist_path in zf.namelist():
@@ -284,20 +302,28 @@ def main():
                         from_sheet += 1
                         if sum(slot["count"] for slot in slots) != before:
                             adapted += 1
+                            odds_origin = "sheet_adapted"
+                        else:
+                            odds_origin = "sheet"
             if pulls is None:
                 pulls = default_ocg_pulls(cards)
                 if pulls:
                     defaulted += 1
+                    odds_origin = "print_weight"
             if not pulls:
                 continue
+            prefix = locale.get("prefix") or file_id.upper()
+            color = pack_color(prefix)
             write(os.path.join(data_root, "booster", file_id + ".json"), {
                 "set": "ygomc:" + file_id,
-                "display": {"name": {"text": name}, "color": "#3C5AA0", "rarity": "common"},
+                "display": {"name": {"text": name}, "color": color, "rarity": "common"},
                 "pulls": pulls,
+                "odds_origin": odds_origin,
                 "duplicates": "avoid_in_pack",
                 "fallback": FALLBACK,
             })
             booster_ids[set_id] = file_id
+            booster_colors[file_id] = color
             boosters_written += 1
 
         product_list = find(zf, "/sealedProducts.json") or find(zf, "sealedProducts.json")
@@ -326,7 +352,7 @@ def main():
                     "booster": "ygomc:" + booster_id,
                     "packs": qty,
                     "mode": "independent",
-                    "display": {"name": {"text": name}, "color": "#3C5AA0", "rarity": "uncommon"},
+                    "display": {"name": {"text": name}, "color": booster_colors.get(booster_id) or pack_color(booster_id), "rarity": "uncommon"},
                 })
                 boxes_written += 1
 

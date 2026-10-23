@@ -5,6 +5,7 @@ import cn.xm1221.ygomc.common.card.CardRarity;
 import cn.xm1221.ygomc.common.pack.PackOpening;
 import cn.xm1221.ygomc.common.pack.data.BoosterBoxDef;
 import cn.xm1221.ygomc.common.pack.data.BoosterDef;
+import cn.xm1221.ygomc.common.pack.data.BoosterDef.OddsOrigin;
 import cn.xm1221.ygomc.common.pack.data.PackRegistries;
 import cn.xm1221.ygomc.common.pack.model.Booster;
 import cn.xm1221.ygomc.common.pack.model.CardSetData;
@@ -139,6 +140,12 @@ public final class PackCommands {
         }
         Booster mechanics = booster.value().mechanics();
         source.sendSuccess(() -> Component.translatable("ygomc.pack.odds_head", id.toString()), false);
+        OddsOrigin origin = booster.value().oddsOrigin();
+        if (origin == OddsOrigin.PRINT_WEIGHT || origin == OddsOrigin.SHEET_ADAPTED) {
+            source.sendSuccess(() -> Component.translatable(
+                    "ygomc.pack.odds_not_real",
+                    Component.translatable("ygomc.pack.odds_origin." + origin.getSerializedName())), false);
+        }
         for (Component line : PackOpening.oddsLines(mechanics)) {
             source.sendSuccess(() -> line, false);
         }

@@ -24,6 +24,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * 按卡密补一张图。不在启动时遍历全库。主源 YGOPRODeck，失败再试 233。
@@ -33,7 +34,8 @@ import java.util.concurrent.Executors;
  * JDK 没有 Lanczos，用双三次。不生成 HOVER。
  * 同时最多 2 个连接，全局每秒最多开始 1 次请求。界面未命中最多排队 32 张，下一帧再试。
  *
- * <p>TODO 计划第 9 节 P3：慢速全库预取。{@code /ygomc sync pic <卡密>} 只排一张。
+ * <p>{@code /ygomc sync pic} 只排一张。{@code /ygomc sync prefetch} 按 cards.bin 慢速预取，
+ * 默认不在启动时跑，{@code prefetch stop} 可以中止。
  */
 public final class PicCache {
 
@@ -58,6 +60,8 @@ public final class PicCache {
 
     private static final Map<Integer, Long> MISSES = new ConcurrentHashMap<>();
     private static final Map<Integer, Boolean> QUEUED = new ConcurrentHashMap<>();
+    private static final AtomicBoolean PREFETCH_RUNNING = new AtomicBoolean();
+    private static final AtomicBoolean PREFETCH_STOP = new AtomicBoolean();
     private static volatile boolean missesLoaded;
 
     private PicCache() {
@@ -65,9 +69,7 @@ public final class PicCache {
 
     /**
      * 排队一张。专用服（物理端不是客户端）直接拒绝，避免连到图床。
-     * 不受界面那 32 张上限约束，仍走同一套每秒 1 张的限速。
-     */
-    /**
+     *
      * @return 1 已排队或正在下；0 负缓存里，24 小时内不再请求；-1 不是客户端或卡号非法
      */
     public static int request(int code) {
@@ -75,6 +77,67 @@ public final class PicCache {
             return -1;
         }
         return enqueue(code, true) ? 1 : 0;
+    }
+
+    /**
+     * 按卡密慢速预取。不在启动时调用。专用服返回 -1。已经在跑返回 0。开始返回 1。
+     * 已有 FULL 和 ICON 的跳过。每秒最多开始一次请求，和按需下载共用限速。
+     */
+    public static int startPrefetch(int[] codes) {
+        if (!client()) {
+            return -1;
+        }
+        if (codes == null || codes.length == 0) {
+            return 0;
+        }
+        if (!PREFETCH_RUNNING.compareAndSet(false, true)) {
+            return 0;
+        }
+        PREFETCH_STOP.set(false);
+        int[] copy = codes.clone();
+        Thread thread = new Thread(() -> {
+            int touched = 0;
+            try {
+                LOGGER.info("全库预取开始，{} 张，每秒最多 1 张。/ygomc sync prefetch stop 可中止", copy.length);
+                for (int code : copy) {
+                    if (PREFETCH_STOP.get()) {
+                        LOGGER.info("全库预取已中止，已处理 {} 张", touched);
+                        return;
+                    }
+                    if (code <= 0 || hasScaled(code)) {
+                        continue;
+                    }
+                    try {
+                        download(code);
+                        touched++;
+                    } catch (Exception e) {
+                        LOGGER.warn("预取卡图 {} 失败：{}", code, e.toString());
+                        noteMiss(code, e.getMessage());
+                        touched++;
+                    }
+                }
+                LOGGER.info("全库预取结束，处理 {} 张", touched);
+            } finally {
+                PREFETCH_RUNNING.set(false);
+            }
+        }, "ygomc-pic-prefetch");
+        thread.setDaemon(true);
+        thread.start();
+        return 1;
+    }
+
+    /** @return 当时确实有预取在跑 */
+    public static boolean stopPrefetch() {
+        if (!PREFETCH_RUNNING.get()) {
+            return false;
+        }
+        PREFETCH_STOP.set(true);
+        return true;
+    }
+
+    private static boolean hasScaled(int code) {
+        return Files.isRegularFile(file(code, CardImageDb.TIER_FULL))
+                && Files.isRegularFile(file(code, CardImageDb.TIER_ICON));
     }
 
     public static byte[] peek(int code, int tier) {

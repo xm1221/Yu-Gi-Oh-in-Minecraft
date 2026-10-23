@@ -33,6 +33,9 @@
   "ygomc.pack.close": "关闭",
   "ygomc.pack.odds": "%s %s%%",
   "ygomc.pack.odds_head": "%s 的单包概率",
+  "ygomc.pack.odds_not_real": "这不是实卡封入率（%s），只反映数据包里写的抽法",
+  "ygomc.pack.odds_origin.print_weight": "按印刷张数",
+  "ygomc.pack.odds_origin.sheet_adapted": "TCG 九张收成五张",
   "ygomc.pack.given": "已给予 %s 包 %s",
   "ygomc.pack.unknown": "没有这个卡包：%s",
   "ygomc.pack.need_player": "这个命令要由玩家执行",
@@ -353,5 +356,10 @@
   "ygomc.sync.msg.run": "已开始检查资源",
   "ygomc.sync.msg.pic": "已排队下载卡图 %s（每秒最多一张，不会拉全库）",
   "ygomc.sync.msg.pic_server": "专用服不下载卡图。看卡时由客户端自己拉",
-  "ygomc.sync.msg.pic_miss": "这张卡最近没有图，24 小时内不再请求"
+  "ygomc.sync.msg.pic_miss": "这张卡最近没有图，24 小时内不再请求",
+  "ygomc.sync.msg.prefetch": "开始慢速预取卡图，每秒最多一张。/ygomc sync prefetch stop 可中止",
+  "ygomc.sync.msg.prefetch_stop": "已要求停止预取",
+  "ygomc.sync.msg.prefetch_idle": "没有正在进行的预取",
+  "ygomc.sync.msg.prefetch_busy": "预取已经在跑",
+  "ygomc.sync.msg.prefetch_nodb": "没有 cards.bin，不能预取"
 }

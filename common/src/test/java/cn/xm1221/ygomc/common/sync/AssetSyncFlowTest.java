@@ -73,6 +73,55 @@ class AssetSyncFlowTest {
     }
 
     @Test
+    void unchangedPinDoesNotDownload() throws Exception {
+        Path game = Files.createTempDirectory("ygomc-skip");
+        CdbToBins.convert(Path.of("src/test/resources/sync/fixture.cdb"),
+                Path.of("src/test/resources/sync/strings.conf"), CacheLayout.datapack(game));
+        Files.createDirectories(CacheLayout.script(game));
+        Files.writeString(CacheLayout.script(game).resolve("constant.lua"), "return 1\n");
+        Files.createDirectories(CacheLayout.sets(game));
+        Files.writeString(CacheLayout.sets(game).resolve("pack.mcmeta"),
+                "{\"pack\":{\"pack_format\":48,\"description\":\"x\"}}\n");
+        SyncPins pins = SyncPins.loadDefault();
+        SyncManifest manifest = new SyncManifest();
+        manifest.databaseSha = pins.database.sha;
+        manifest.scriptsSha = pins.scripts.sha;
+        manifest.setsSha256 = pins.sets.sha256;
+        for (String name : java.util.List.of("cards.bin", "texts.bin", "strings.bin")) {
+            manifest.bins.put(name, Digests.sha256(CacheLayout.datapack(game).resolve(name)));
+        }
+        manifest.save(CacheLayout.manifest(game));
+        AtomicInteger hits = new AtomicInteger();
+        AtomicInteger bodyBytes = new AtomicInteger();
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/", exchange -> {
+            hits.incrementAndGet();
+            byte[] body = "should-not-download".getBytes(StandardCharsets.UTF_8);
+            bodyBytes.addAndGet(body.length);
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
+        server.start();
+        try {
+            String base = "http://127.0.0.1:" + server.getAddress().getPort();
+            pins.database.files.get(0).urls = java.util.List.of(base + "/cards.cdb");
+            pins.database.files.get(1).urls = java.util.List.of(base + "/strings.conf");
+            pins.scripts.urls = java.util.List.of(base + "/scripts.zip");
+            pins.sets.urls = java.util.List.of(base + "/sets.zip");
+            SyncSettings settings = SyncSettings.defaults();
+            settings.timeoutSeconds = 2;
+            AssetSync.runOnce(game, settings, pins, false);
+            assertEquals(0, hits.get());
+            assertEquals(0, bodyBytes.get());
+            assertEquals("ygomc.sync.msg.skip", AssetSync.status().messageKey());
+        } finally {
+            server.stop(0);
+            delete(game);
+        }
+    }
+
+    @Test
     void missingDatabaseDoesNotThrowWhenOffline() throws Exception {
         Path game = Files.createTempDirectory("ygomc-miss");
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);

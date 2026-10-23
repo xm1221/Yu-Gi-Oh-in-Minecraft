@@ -100,12 +100,13 @@ public final class HttpFetch {
                 .build();
         Map<String, String> etags = loadEtags(options.etagStore);
         int redirects = 0;
+        boolean ignoreEtag = false;
         URI current = uri;
         while (true) {
             if (!allowed(current)) {
                 return Result.failure(0, current.toString(), "只允许 https");
             }
-            String etag = etags.get(uri.toString());
+            String etag = ignoreEtag ? null : etags.get(uri.toString());
             HttpRequest.Builder builder = HttpRequest.newBuilder(current)
                     .timeout(options.connectTimeout.plus(options.connectTimeout))
                     .header("User-Agent", USER_AGENT)
@@ -143,7 +144,20 @@ public final class HttpFetch {
                         return Result.failure(304, current.toString(), "服务器说没变，但本地没有文件");
                     }
                     try {
-                        return Result.success(304, uri.toString(), Digests.sha256(destination), true);
+                        String hash = Digests.sha256(destination);
+                        if (options.expectedSha256 != null && !options.expectedSha256.isBlank()
+                                && !Digests.hexEquals(options.expectedSha256, hash)) {
+                            if (!ignoreEtag) {
+                                etags.remove(uri.toString());
+                                if (options.etagStore != null) {
+                                    saveEtags(options.etagStore, etags);
+                                }
+                                ignoreEtag = true;
+                                continue;
+                            }
+                            return Result.failure(304, current.toString(), "sha256 不符");
+                        }
+                        return Result.success(304, uri.toString(), hash, true);
                     } catch (IOException e) {
                         return Result.failure(304, current.toString(), e.getMessage());
                     }

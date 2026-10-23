@@ -1,6 +1,7 @@
 package cn.xm1221.ygomc.common.command;
 
 import cn.xm1221.ygomc.common.card.DeckData;
+import cn.xm1221.ygomc.common.data.CardDataDb;
 import cn.xm1221.ygomc.common.data.DataPack;
 import cn.xm1221.ygomc.common.data.DataPacks;
 import cn.xm1221.ygomc.common.deck.BuiltinDecks;
@@ -127,7 +128,37 @@ public final class YgomcCommand {
                                     ctx.getSource().sendSuccess(
                                             () -> Component.translatable("ygomc.sync.msg.pic", code), false);
                                     return 1;
-                                })));
+                                })))
+                .then(Commands.literal("prefetch").requires(source -> source.hasPermission(2))
+                        .executes(ctx -> prefetch(ctx.getSource()))
+                        .then(Commands.literal("stop").executes(ctx -> {
+                            if (!PicCache.stopPrefetch()) {
+                                ctx.getSource().sendFailure(Component.translatable("ygomc.sync.msg.prefetch_idle"));
+                                return 0;
+                            }
+                            ctx.getSource().sendSuccess(
+                                    () -> Component.translatable("ygomc.sync.msg.prefetch_stop"), false);
+                            return 1;
+                        })));
+    }
+
+    private static int prefetch(CommandSourceStack source) {
+        CardDataDb db = DataPacks.get().cardData();
+        if (db == null || db.codes().length == 0) {
+            source.sendFailure(Component.translatable("ygomc.sync.msg.prefetch_nodb"));
+            return 0;
+        }
+        int started = PicCache.startPrefetch(db.codes());
+        if (started < 0) {
+            source.sendFailure(Component.translatable("ygomc.sync.msg.pic_server"));
+            return 0;
+        }
+        if (started == 0) {
+            source.sendFailure(Component.translatable("ygomc.sync.msg.prefetch_busy"));
+            return 0;
+        }
+        source.sendSuccess(() -> Component.translatable("ygomc.sync.msg.prefetch"), false);
+        return 1;
     }
 
     private static void register(CommandDispatcher<CommandSourceStack> dispatcher) {

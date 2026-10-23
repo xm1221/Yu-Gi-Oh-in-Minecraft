@@ -122,6 +122,7 @@ class HttpFetchTest {
     void etag304DoesNotRewrite() throws Exception {
         AtomicInteger hits = new AtomicInteger();
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        AtomicInteger bodyBytes = new AtomicInteger();
         server.createContext("/etag", exchange -> {
             hits.incrementAndGet();
             String match = exchange.getRequestHeaders().getFirst("If-None-Match");
@@ -131,6 +132,7 @@ class HttpFetchTest {
                 return;
             }
             byte[] body = "body".getBytes(StandardCharsets.UTF_8);
+            bodyBytes.addAndGet(body.length);
             exchange.getResponseHeaders().set("ETag", "\"v1\"");
             exchange.sendResponseHeaders(200, body.length);
             exchange.getResponseBody().write(body);
@@ -149,8 +151,38 @@ class HttpFetchTest {
             HttpFetch.Result second = HttpFetch.get(List.of(url(server, "/etag")), dest, options);
             assertTrue(second.ok, second.error);
             assertTrue(second.notModified);
+            assertEquals("body", Files.readString(dest));
             assertEquals(modified, Files.getLastModifiedTime(dest).toMillis());
             assertEquals(2, hits.get());
+            assertEquals(4, bodyBytes.get());
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void primary500FallsThrough() throws Exception {
+        AtomicInteger bodies = new AtomicInteger();
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/down", exchange -> {
+            exchange.sendResponseHeaders(500, -1);
+            exchange.close();
+        });
+        server.createContext("/up", exchange -> {
+            byte[] body = "spare".getBytes(StandardCharsets.UTF_8);
+            bodies.addAndGet(body.length);
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
+        server.start();
+        try {
+            Path dest = Files.createTempDirectory("ygomc-500").resolve("file.bin");
+            HttpFetch.Result result = HttpFetch.get(List.of(url(server, "/down"), url(server, "/up")), dest, options());
+            assertTrue(result.ok, result.error);
+            assertEquals("spare", Files.readString(dest));
+            assertTrue(result.url.endsWith("/up"));
+            assertEquals(5, bodies.get());
         } finally {
             server.stop(0);
         }

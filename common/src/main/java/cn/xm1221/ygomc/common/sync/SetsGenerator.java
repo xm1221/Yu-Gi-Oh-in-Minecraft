@@ -27,8 +27,8 @@ import java.util.zip.ZipFile;
 /**
  * 从 YGOJSON 生成卡包数据包。语义对齐 {@code tools/mksets.py}，专用服不依赖本机 Python。
  *
- * <p>TODO 计划第 7 节（P3）：{@code odds_origin}、按卡号前缀稳定染色。这一版颜色仍是
- * {@code #3C5AA0}，和离线脚本一致，方便同一份夹具对拍。未知卡密由开包路径过滤，不写进 JSON。
+ * <p>颜色按卡号前缀哈希，见 {@link PackColors}。{@code odds_origin} 标明抽法来源。
+ * 未知卡密由开包路径过滤，不写进 JSON。内置 demo 包不由这里生成。
  */
 public final class SetsGenerator {
 
@@ -54,6 +54,7 @@ public final class SetsGenerator {
         int defaulted = 0;
         int noPassword = 0;
         Map<String, String> boosterIds = new LinkedHashMap<>();
+        Map<String, String> boosterColors = new LinkedHashMap<>();
         Path dataRoot = outDir.resolve("data").resolve("ygomc").resolve("ygomc");
         try (ZipFile archive = new ZipFile(zip.toFile())) {
             Map<String, Integer> codes = passwords(archive);
@@ -172,10 +173,12 @@ public final class SetsGenerator {
                     }
                 }
                 JsonArray pulls = null;
+                String oddsOrigin = null;
                 if ("preconstructed".equals(distId)) {
                     pulls = wholeSetPulls(cards);
                     if (pulls != null) {
                         decks++;
+                        oddsOrigin = "preconstructed";
                     }
                 } else if (distId != null && distRoot != null) {
                     String distPath = distRoot + "distributions/" + distId + ".json";
@@ -211,6 +214,9 @@ public final class SetsGenerator {
                             fromSheet++;
                             if (after != before) {
                                 adapted++;
+                                oddsOrigin = "sheet_adapted";
+                            } else {
+                                oddsOrigin = "sheet";
                             }
                         }
                     }
@@ -219,6 +225,7 @@ public final class SetsGenerator {
                     pulls = defaultPulls(cards);
                     if (pulls != null) {
                         defaulted++;
+                        oddsOrigin = "print_weight";
                     }
                 }
                 if (pulls == null) {
@@ -227,11 +234,14 @@ public final class SetsGenerator {
                 JsonObject booster = new JsonObject();
                 booster.addProperty("set", "ygomc:" + fileId);
                 JsonObject display = new JsonObject();
+                String prefix = text(locale, "prefix").isBlank() ? fileId.toUpperCase(Locale.ROOT) : text(locale, "prefix");
+                String color = PackColors.of(prefix);
                 display.add("name", nameText);
-                display.addProperty("color", "#3C5AA0");
+                display.addProperty("color", color);
                 display.addProperty("rarity", "common");
                 booster.add("display", display);
                 booster.add("pulls", pulls);
+                booster.addProperty("odds_origin", oddsOrigin);
                 booster.addProperty("duplicates", "avoid_in_pack");
                 JsonArray fallback = new JsonArray();
                 for (String rarity : FALLBACK) {
@@ -240,6 +250,7 @@ public final class SetsGenerator {
                 booster.add("fallback", fallback);
                 write(dataRoot.resolve("booster").resolve(fileId + ".json"), booster);
                 boosterIds.put(setId, fileId);
+                boosterColors.put(fileId, color);
                 boostersWritten++;
             }
 
@@ -290,7 +301,7 @@ public final class SetsGenerator {
                     JsonObject nameText = new JsonObject();
                     nameText.addProperty("text", name);
                     display.add("name", nameText);
-                    display.addProperty("color", "#3C5AA0");
+                    display.addProperty("color", boosterColors.getOrDefault(boosterId, PackColors.of(boosterId)));
                     display.addProperty("rarity", "uncommon");
                     box.add("display", display);
                     write(dataRoot.resolve("booster_box").resolve(boosterId + ".json"), box);
