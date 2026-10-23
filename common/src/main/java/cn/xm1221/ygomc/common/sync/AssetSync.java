@@ -227,7 +227,10 @@ public final class AssetSync {
         if (manifest.pendingReload && !duel) {
             set(Phase.APPLYING, "pending", "ygomc.sync.msg.applying", true, false);
             promotePending(game, manifest);
-            if (applyEngine) {
+            if (applyEngine && OcgEngine.duelBlocksReload()) {
+                manifest.pendingReload = true;
+                LOGGER.info("对局在换上暂存文件时开始，这一局不重新装载");
+            } else if (applyEngine) {
                 DataPacks.reload();
                 OcgEngine.reprepare();
                 SyncListeners.fireApplied();
@@ -241,11 +244,11 @@ public final class AssetSync {
         boolean engineChanged = false;
         boolean setsChanged = false;
         if (settings.database) {
-            engineChanged |= database(game, settings, pins, manifest, duel);
+            engineChanged |= database(game, settings, pins, manifest, applyEngine);
             offline |= manifest.degraded.stream().anyMatch(line -> line.startsWith("database"));
         }
         if (settings.scripts) {
-            engineChanged |= scripts(game, settings, pins, manifest, duel);
+            engineChanged |= scripts(game, settings, pins, manifest, applyEngine);
             offline |= manifest.degraded.stream().anyMatch(line -> line.startsWith("scripts"));
         }
         if (settings.sets) {
@@ -258,12 +261,20 @@ public final class AssetSync {
         manifest.save(CacheLayout.manifest(game));
 
         if (applyEngine && engineChanged && !manifest.pendingReload) {
-            set(Phase.APPLYING, "engine", "ygomc.sync.msg.applying", true, offline);
-            DataPacks.reload();
-            OcgEngine.reprepare();
-            SyncListeners.fireApplied();
-            manifest.pendingReload = OcgEngine.isApplyPending();
-            manifest.save(CacheLayout.manifest(game));
+            if (OcgEngine.duelBlocksReload()) {
+                // 下载可能花了很久。开写的时候还没人打，写完已经有人打了：文件可以先落在
+                // 正式目录，但这一局不能把内存里的卡库和引擎换掉。
+                manifest.pendingReload = true;
+                manifest.save(CacheLayout.manifest(game));
+                LOGGER.info("对局在同步收尾时开始，这一局不重新装载卡库与脚本");
+            } else {
+                set(Phase.APPLYING, "engine", "ygomc.sync.msg.applying", true, offline);
+                DataPacks.reload();
+                OcgEngine.reprepare();
+                SyncListeners.fireApplied();
+                manifest.pendingReload = OcgEngine.isApplyPending();
+                manifest.save(CacheLayout.manifest(game));
+            }
         }
         if (setsChanged && !OcgEngine.duelBlocksReload()) {
             reloadServerPacks();
@@ -293,7 +304,8 @@ public final class AssetSync {
     }
 
     private static boolean database(Path game, SyncSettings settings, SyncPins pins, SyncManifest manifest,
-                                    boolean duel) throws IOException {
+                                    boolean applyEngine) throws IOException {
+        boolean duel = applyEngine && OcgEngine.duelBlocksReload();
         Path live = CacheLayout.datapack(game);
         boolean valid = binsValid(live);
         boolean hashesMatch = valid && hashesMatch(live, manifest);
@@ -329,12 +341,16 @@ public final class AssetSync {
             return false;
         }
         set(Phase.CONVERTING, "bins", "ygomc.sync.msg.converting", true, false);
-        Path target = duel ? pending : live;
-        if (duel) {
-            ScriptInstaller.deleteTree(target);
-        }
+        // 先写到空白目录。转换中途失败不能把正式目录换成「新的 cards.bin + 旧的 texts.bin」，
+        // 那种混装过了魔数检查，pin 又没变时会被当成玩家手改的文件，之后不再重下。
+        Path scratch = CacheLayout.staging(game).resolve("bins-out");
+        ScriptInstaller.deleteTree(scratch);
         try {
-            CdbToBins.Result result = CdbToBins.convert(cache.resolve("cards.cdb"), cache.resolve("strings.conf"), target);
+            CdbToBins.Result result = CdbToBins.convert(cache.resolve("cards.cdb"), cache.resolve("strings.conf"), scratch);
+            duel = applyEngine && OcgEngine.duelBlocksReload();
+            Path target = duel ? pending : live;
+            publishBins(scratch, target);
+            ScriptInstaller.deleteTree(scratch);
             manifest.cardCount = result.cards();
             LOGGER.info("卡库已写入，{} 张（commit {}）", result.cards(), shortSha(pins.database.sha));
             if (duel) {
@@ -350,17 +366,16 @@ public final class AssetSync {
             manifest.stagedDatabaseSha = "";
             return true;
         } catch (IOException e) {
+            ScriptInstaller.deleteTree(scratch);
             LOGGER.warn("卡库转换失败，保留上一份 bin：{}", e.getMessage());
             manifest.degraded.add("database:convert");
-            if (duel) {
-                ScriptInstaller.deleteTree(target);
-            }
             return false;
         }
     }
 
     private static boolean scripts(Path game, SyncSettings settings, SyncPins pins, SyncManifest manifest,
-                                   boolean duel) throws IOException {
+                                   boolean applyEngine) throws IOException {
+        boolean duel = applyEngine && OcgEngine.duelBlocksReload();
         boolean sentinel = Files.isRegularFile(CacheLayout.script(game).resolve("constant.lua"));
         SyncPolicy.Scripts decision = SyncPolicy.scripts(sentinel, manifest.scriptsSha, pins.scripts.sha);
         Path pending = CacheLayout.pendingScript(game);
@@ -390,11 +405,9 @@ public final class AssetSync {
                 return false;
             }
         }
+        duel = applyEngine && OcgEngine.duelBlocksReload();
         Path target = duel ? pending : CacheLayout.script(game);
         try {
-            if (duel) {
-                ScriptInstaller.deleteTree(target);
-            }
             int files = ScriptInstaller.install(zip, target);
             LOGGER.info("脚本已落盘，{} 个文件，commit {}，GPL-2.0，不随模组分发", files, shortSha(pins.scripts.sha));
             if (duel) {
@@ -407,6 +420,11 @@ public final class AssetSync {
             manifest.stagedScriptsSha = "";
             return true;
         } catch (IOException e) {
+            try {
+                Files.deleteIfExists(zip);
+            } catch (IOException ignored) {
+                // 坏 zip 留着会让下一轮跳过下载。删不掉就只能下次再试。
+            }
             LOGGER.warn("脚本解压失败，保留上一份：{}", e.getMessage());
             manifest.degraded.add("scripts:install");
             return false;
@@ -465,10 +483,7 @@ public final class AssetSync {
     private static void promotePending(Path game, SyncManifest manifest) throws IOException {
         Path pendingBins = CacheLayout.pendingDatapack(game);
         if (binsValid(pendingBins)) {
-            Files.createDirectories(CacheLayout.datapack(game));
-            for (String name : BIN_NAMES) {
-                moveReplace(pendingBins.resolve(name), CacheLayout.datapack(game).resolve(name));
-            }
+            publishBins(pendingBins, CacheLayout.datapack(game));
             rememberBins(CacheLayout.datapack(game), manifest);
             if (manifest.stagedDatabaseSha != null && !manifest.stagedDatabaseSha.isBlank()) {
                 manifest.databaseSha = manifest.stagedDatabaseSha;
@@ -581,6 +596,56 @@ public final class AssetSync {
                     Files.deleteIfExists(path);
                 }
             }
+        }
+    }
+
+    /**
+     * 三个 bin 一起换上。源不齐就不动目标。中途失败把已经换上的那几个还原回去。
+     */
+    static void publishBins(Path from, Path to) throws IOException {
+        for (String name : BIN_NAMES) {
+            if (!Files.isRegularFile(from.resolve(name))) {
+                throw new IOException("缺少 " + name);
+            }
+        }
+        Files.createDirectories(to);
+        boolean[] started = new boolean[BIN_NAMES.size()];
+        boolean[] had = new boolean[BIN_NAMES.size()];
+        try {
+            for (int i = 0; i < BIN_NAMES.size(); i++) {
+                String name = BIN_NAMES.get(i);
+                Path dest = to.resolve(name);
+                Path bak = dest.resolveSibling(name + ".bak");
+                Files.deleteIfExists(bak);
+                started[i] = true;
+                if (Files.exists(dest)) {
+                    had[i] = true;
+                    Files.move(dest, bak, StandardCopyOption.REPLACE_EXISTING);
+                }
+                Files.copy(from.resolve(name), dest, StandardCopyOption.REPLACE_EXISTING);
+            }
+            for (String name : BIN_NAMES) {
+                Files.deleteIfExists(to.resolve(name + ".bak"));
+            }
+        } catch (IOException e) {
+            for (int i = 0; i < BIN_NAMES.size(); i++) {
+                if (!started[i]) {
+                    continue;
+                }
+                Path dest = to.resolve(BIN_NAMES.get(i));
+                Path bak = dest.resolveSibling(BIN_NAMES.get(i) + ".bak");
+                try {
+                    if (had[i] && Files.exists(bak)) {
+                        Files.deleteIfExists(dest);
+                        Files.move(bak, dest, StandardCopyOption.REPLACE_EXISTING);
+                    } else if (!had[i]) {
+                        Files.deleteIfExists(dest);
+                    }
+                } catch (IOException restore) {
+                    LOGGER.warn("还原 {} 失败：{}", dest.getFileName(), restore.toString());
+                }
+            }
+            throw e;
         }
     }
 
