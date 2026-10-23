@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "database": {
+    "sha": "217ae165c1886af2fc36b823fc08f9fc3ec13185",
+    "files": [
+      {
+        "id": "cards.cdb",
+        "urls": [
+          "https://raw.githubusercontent.com/mycard/ygopro-database/217ae165c1886af2fc36b823fc08f9fc3ec13185/locales/zh-CN/cards.cdb",
+          "https://code.moenext.com/mycard/ygopro-database/-/raw/217ae165c1886af2fc36b823fc08f9fc3ec13185/locales/zh-CN/cards.cdb"
+        ],
+        "sha256": "ff52f585de24a762a4e613ac37654b1a7fb15a58990c14f5eada85f28c3be152"
+      },
+      {
+        "id": "strings.conf",
+        "urls": [
+          "https://raw.githubusercontent.com/mycard/ygopro-database/217ae165c1886af2fc36b823fc08f9fc3ec13185/locales/zh-CN/strings.conf",
+          "https://code.moenext.com/mycard/ygopro-database/-/raw/217ae165c1886af2fc36b823fc08f9fc3ec13185/locales/zh-CN/strings.conf"
+        ],
+        "sha256": "6992b30aa0cfe27cfbc499980ac92bee536f523738c679efa99be5eea57ef23b"
+      }
+    ]
+  },
+  "scripts": {
+    "sha": "0be9a8ac948f6ac38f4ed3ba45d439290d04415a",
+    "urls": [
+      "https://github.com/Fluorohydride/ygopro-scripts/archive/0be9a8ac948f6ac38f4ed3ba45d439290d04415a.zip",
+      "https://codeload.github.com/Fluorohydride/ygopro-scripts/zip/0be9a8ac948f6ac38f4ed3ba45d439290d04415a"
+    ]
+  },
+  "sets": {
+    "urls": [
+      "https://github.com/iconmaster5326/YGOJSON/releases/download/v1/individual.zip"
+    ],
+    "sha256": "1c4cd9d5ff676225a39e587cb7d79cb57a75b1fbcb18d3f1a0d96dec4665e378"
+  },
+  "pics": {
+    "urls": [
+      "https://images.ygoprodeck.com/images/cards/{code}.jpg",
+      "https://cdn.233.momobako.com/ygopro/pics/{code}.jpg"
+    ]
+  }
+}

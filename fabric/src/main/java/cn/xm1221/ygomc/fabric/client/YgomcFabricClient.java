@@ -4,8 +4,10 @@ import cn.xm1221.ygomc.common.client.CollectionClient;
 import cn.xm1221.ygomc.common.client.DuelClient;
 import cn.xm1221.ygomc.common.client.PackClient;
 import cn.xm1221.ygomc.common.client.PackItemTint;
+import cn.xm1221.ygomc.common.client.SyncToaster;
 import cn.xm1221.ygomc.common.registry.YgomcItems;
 import net.fabricmc.api.ClientModInitializer;
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.rendering.v1.ColorProviderRegistry;
 
 /**
@@ -35,6 +37,8 @@ public final class YgomcFabricClient implements ClientModInitializer {
         DuelClient.init();
         CollectionClient.init();
         PackClient.init();
+        SyncToaster.init();
+        ClientTickEvents.END_CLIENT_TICK.register(client -> SyncToaster.tick());
         ColorProviderRegistry.ITEM.register(PackItemTint.COLOR,
                 YgomcItems.CARD_PACK.get(), YgomcItems.BOOSTER_BOX.get());
     }

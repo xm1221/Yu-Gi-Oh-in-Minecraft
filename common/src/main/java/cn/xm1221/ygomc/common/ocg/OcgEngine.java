@@ -43,6 +43,15 @@ public final class OcgEngine {
     private static boolean ready;
     private static String problem;
     private static Path scriptRoot;
+    /** 最近一次真正装配成功。重试失败时用它把标志位放回去。 */
+    private static boolean committed;
+    private static Path committedRoot;
+    /** {@link #prepareOrThrow} 已经调用过 {@code Ocg.init}，失败时要尽量把内核拉回旧脚本根。 */
+    private static boolean nativeMutated;
+    /** 对局还在跑，新的卡表先不要灌进去。 */
+    private static boolean pendingApply;
+    /** 单测把「有没有对局」钉死，避免去开一局。{@code null} 表示看 {@link cn.xm1221.ygomc.common.ocg.DuelSessions}。 */
+    static Boolean testingDuelActive;
 
     private OcgEngine() {
     }
@@ -60,12 +69,88 @@ public final class OcgEngine {
         try {
             prepareOrThrow();
             ready = true;
+            problem = null;
+            committed = true;
+            committedRoot = scriptRoot;
             LOGGER.info("引擎就绪：{} 张卡，脚本根 {}", Ocg.cardCount(), scriptRoot);
         } catch (Exception | UnsatisfiedLinkError e) {
             problem = e.getMessage() == null ? e.toString() : e.getMessage();
+            ready = false;
             LOGGER.warn("引擎不可用，对局功能无法使用：{}", problem);
         }
         return ready;
+    }
+
+    /**
+     * 卡库或脚本换过之后再装配一次。有对局就推迟。
+     * 失败时保留上一份已经能打的引擎，而不是把 {@code ready} 清掉。
+     * 见计划第 6 节。只给同步线程和 {@code /ygomc sync apply} 用，不是无限重试。
+     */
+    public static synchronized boolean reprepare() {
+        if (duelBlocksReload()) {
+            pendingApply = true;
+            LOGGER.info("对局进行中，引擎重新装配推迟");
+            return ready;
+        }
+        boolean had = committed && ready;
+        Path oldRoot = committedRoot;
+        boolean touchedBefore = nativeMutated;
+        attempted = false;
+        nativeMutated = false;
+        String failure = null;
+        boolean ok = prepare();
+        if (!ok) {
+            failure = problem;
+        }
+        if (ok) {
+            pendingApply = false;
+            return true;
+        }
+        if (!had) {
+            return false;
+        }
+        if (nativeMutated || touchedBefore) {
+            try {
+                restoreCommitted(oldRoot);
+                ready = true;
+                problem = null;
+                scriptRoot = oldRoot;
+                committed = true;
+                committedRoot = oldRoot;
+                attempted = true;
+                nativeMutated = false;
+                LOGGER.warn("重新装配失败，已回到上一份脚本根 {}：{}", oldRoot, failure);
+                return true;
+            } catch (Exception | UnsatisfiedLinkError e) {
+                ready = false;
+                committed = false;
+                problem = e.getMessage() == null ? e.toString() : e.getMessage();
+                attempted = true;
+                LOGGER.warn("重新装配失败，且无法回到上一份引擎：{}", problem);
+                return false;
+            }
+        }
+        ready = true;
+        problem = null;
+        scriptRoot = oldRoot;
+        committed = true;
+        committedRoot = oldRoot;
+        attempted = true;
+        LOGGER.warn("重新装配失败，保留上一份引擎：{}", failure);
+        return true;
+    }
+
+    /** 有正在进行的对局，或单测强制说有。不调用 {@code Platform}。 */
+    public static boolean duelBlocksReload() {
+        Boolean forced = testingDuelActive;
+        if (forced != null) {
+            return forced;
+        }
+        return !DuelSessions.active().isEmpty();
+    }
+
+    public static synchronized boolean isApplyPending() {
+        return pendingApply;
     }
 
     /** 引擎是否已装配好。不会触发装配。 */
@@ -109,11 +194,13 @@ public final class OcgEngine {
     // ── 内部 ──────────────────────────────────────────────────────────────
 
     private static void prepareOrThrow() {
+        nativeMutated = false;
         Natives.ensureLoaded();
 
         Path root = findScriptRoot();
         // 内核按原样把它拼进脚本路径，反斜杠在 Lua 的 require 里是转义字符，
         // 所以这里统一成正斜杠，避免 "C:\...\script\c123.lua" 被解析成乱码。
+        nativeMutated = true;
         if (!Ocg.init(root.toString().replace('\\', '/'))) {
             throw new IllegalStateException("Ocg.init 返回 false（脚本根 " + root + "）");
         }
@@ -158,6 +245,58 @@ public final class OcgEngine {
      * 真因就在这一步——名单里排在前面的 {@code ygomc/scripts} 是个空目录，
      * 只按名字挑就会选中它，引擎于是永远装配不起来。
      */
+    private static void restoreCommitted(Path root) {
+        if (root == null || !Files.isRegularFile(root.resolve(SENTINEL_SCRIPT))) {
+            throw new IllegalStateException("上一份脚本根已经不在：" + root);
+        }
+        Natives.ensureLoaded();
+        if (!Ocg.init(root.toString().replace('\\', '/'))) {
+            throw new IllegalStateException("回到脚本根失败 " + root);
+        }
+        scriptRoot = root;
+        DataPack pack = DataPacks.get();
+        CardDataDb data = pack.cardData();
+        if (data == null) {
+            throw new IllegalStateException("卡表不可用：" + pack.problems());
+        }
+        int written = Ocg.putCards(data.codes(), data.blob());
+        if (written != data.size()) {
+            throw new IllegalStateException("卡表灌入不完整：期望 " + data.size() + " 张，实际 " + written + " 张");
+        }
+    }
+
+    /** 单测清掉一次性标志。不要在游戏里调用。 */
+    static synchronized void testingReset() {
+        attempted = false;
+        ready = false;
+        problem = null;
+        scriptRoot = null;
+        committed = false;
+        committedRoot = null;
+        nativeMutated = false;
+        pendingApply = false;
+        testingDuelActive = null;
+    }
+
+    static synchronized void testingMarkFailed(String why) {
+        attempted = true;
+        ready = false;
+        committed = false;
+        problem = why;
+        nativeMutated = false;
+    }
+
+    static synchronized void testingMarkReady(Path root) {
+        attempted = true;
+        ready = true;
+        committed = true;
+        committedRoot = root;
+        scriptRoot = root;
+        problem = null;
+        nativeMutated = false;
+        pendingApply = false;
+    }
+
     public static Path firstRoot(List<Path> candidates) {
         for (Path c : candidates) {
             if (Files.isRegularFile(c.resolve(SENTINEL_SCRIPT))) {

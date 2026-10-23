@@ -42,6 +42,10 @@ dependencies {
 
     common(project(path: ':common', configuration: 'namedElements')) { transitive = false }
     shadowBundle project(path: ':common', configuration: 'transformProductionNeoForge')
+
+    def sqlite = "org.xerial:sqlite-jdbc:$rootProject.sqlite_jdbc_version"
+    runtimeOnly sqlite
+    shadowBundle sqlite
 }
 
 processResources {
@@ -54,6 +58,7 @@ processResources {
 
 shadowJar {
     configurations = [project.configurations.shadowBundle]
+    exclude 'module-info.class'
     archiveClassifier = 'dev-shadow'
 }
 

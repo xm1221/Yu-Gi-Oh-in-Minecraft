@@ -5,12 +5,14 @@ import cn.xm1221.ygomc.common.client.CollectionClient;
 import cn.xm1221.ygomc.common.client.DuelClient;
 import cn.xm1221.ygomc.common.client.PackClient;
 import cn.xm1221.ygomc.common.client.PackItemTint;
+import cn.xm1221.ygomc.common.client.SyncToaster;
 import cn.xm1221.ygomc.common.registry.YgomcItems;
 import net.minecraft.client.renderer.BlockEntityWithoutLevelRenderer;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.fml.event.lifecycle.FMLClientSetupEvent;
+import net.neoforged.neoforge.client.event.ClientTickEvent;
 import net.neoforged.neoforge.client.event.RegisterColorHandlersEvent;
 import net.neoforged.neoforge.client.extensions.common.IClientItemExtensions;
 import net.neoforged.neoforge.client.extensions.common.RegisterClientExtensionsEvent;
@@ -41,6 +43,9 @@ public final class YgomcNeoForgeClientSetup {
         DuelClient.init();
         CollectionClient.init();
         PackClient.init();
+        SyncToaster.init();
+        net.neoforged.neoforge.common.NeoForge.EVENT_BUS.addListener(
+                (ClientTickEvent.Post tick) -> SyncToaster.tick());
     }
 
     @SubscribeEvent

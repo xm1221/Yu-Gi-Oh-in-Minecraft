@@ -13,6 +13,16 @@ dependencies {
 
     // Cloth Config（Architectury common 坐标）：配置读写与 @Config 类都走它。
     modApi "me.shedaniel.cloth:cloth-config:$rootProject.cloth_config_version"
+
+    // cards.cdb → bin 只在同步线程里打开一次。sqlite-jdbc 打进平台 jar（见 fabric/neoforge 的 shadowBundle）。
+    implementation "org.xerial:sqlite-jdbc:$rootProject.sqlite_jdbc_version"
+
+    testImplementation "org.junit.jupiter:junit-jupiter:5.11.4"
+    testRuntimeOnly "org.junit.platform:junit-platform-launcher"
+}
+
+tasks.named("test") {
+    useJUnitPlatform()
 }
 
 // ── 原生库打包 ────────────────────────────────────────────────────────────

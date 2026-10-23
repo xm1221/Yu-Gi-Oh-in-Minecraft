@@ -88,5 +88,9 @@ public final class Ygomc {
         // 引擎装配是「原生库 → 脚本根 → 卡表」三步，成功会把卡张数与脚本根写进日志，
         // 失败只记日志不抛——缺 Lua 脚本是预期情况（脚本是 GPLv2，不能随模组分发）。
         OcgEngine.prepare();
+
+        // 下载在守护线程。这里先用磁盘上已有的文件打完日志，缺网也不卡住加载。
+        // 见 docs/ASSET_SYNC_PLAN.md 第 6 节。
+        cn.xm1221.ygomc.common.sync.AssetSync.schedule();
     }
 }

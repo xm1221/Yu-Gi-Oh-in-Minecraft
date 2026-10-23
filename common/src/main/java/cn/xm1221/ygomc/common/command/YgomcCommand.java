@@ -23,6 +23,7 @@ import cn.xm1221.ygomc.common.ocg.FirstChoiceResponder;
 import cn.xm1221.ygomc.common.ocg.Natives;
 import cn.xm1221.ygomc.common.ocg.OcgDuel;
 import cn.xm1221.ygomc.common.ocg.OcgEngine;
+import cn.xm1221.ygomc.common.sync.AssetSync;
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import dev.architectury.event.events.common.CommandRegistrationEvent;
@@ -92,6 +93,24 @@ public final class YgomcCommand {
         LifecycleEvent.SERVER_STOPPING.register(server -> DuelSessions.abortAll());
     }
 
+    private static com.mojang.brigadier.builder.LiteralArgumentBuilder<CommandSourceStack> syncBranch() {
+        return Commands.literal("sync")
+                .then(Commands.literal("status").executes(ctx -> {
+                    ctx.getSource().sendSuccess(AssetSync::statusComponent, false);
+                    return 1;
+                }))
+                .then(Commands.literal("run").requires(source -> source.hasPermission(2)).executes(ctx -> {
+                    AssetSync.requestRun();
+                    ctx.getSource().sendSuccess(() -> Component.translatable("ygomc.sync.msg.run"), true);
+                    return 1;
+                }))
+                .then(Commands.literal("apply").requires(source -> source.hasPermission(2)).executes(ctx -> {
+                    AssetSync.applyPending();
+                    ctx.getSource().sendSuccess(AssetSync::statusComponent, true);
+                    return 1;
+                }));
+    }
+
     private static void register(CommandDispatcher<CommandSourceStack> dispatcher) {
         PackCommands.register(dispatcher);
         dispatcher.register(Commands.literal("ygomc")
@@ -99,6 +118,7 @@ public final class YgomcCommand {
                     ctx.getSource().sendSuccess(() -> Component.literal(statusText()), false);
                     return 1;
                 }))
+                .then(syncBranch())
                 .then(Commands.literal("deck")
                         .then(Commands.literal("list").executes(ctx -> {
                             ctx.getSource().sendSuccess(() -> Component.literal(deckListText()), false);
@@ -629,6 +649,7 @@ public final class YgomcCommand {
             sb.append("\n  - ").append(Natives.problem());
         }
 
+        sb.append("\n").append(AssetSync.statusComponent().getString());
         sb.append("\n引擎：").append(OcgEngine.isReady() ? "就绪" : "不可用");
         if (OcgEngine.problem() != null) {
             sb.append("\n  - ").append(OcgEngine.problem());

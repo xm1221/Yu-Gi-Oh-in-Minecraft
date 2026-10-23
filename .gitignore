@@ -59,3 +59,5 @@ Desktop.ini
 # ── 本地数据（cdb / 脚本 / 卡图缓存的拷贝，禁止入库） ──
 local-data/
 *.cdb
+# 单元测试夹具是虚构卡文的小库，要入库。真实 cards.cdb 仍被上面的规则挡住。
+!common/src/test/resources/sync/fixture.cdb

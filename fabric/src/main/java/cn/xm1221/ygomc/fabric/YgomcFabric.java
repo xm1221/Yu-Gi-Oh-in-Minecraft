@@ -35,6 +35,8 @@ public final class YgomcFabric implements ModInitializer {
                 PackCatalog.validate(server.registryAccess());
             }
         });
+        // TODO 计划第 6 节：Fabric 1.21.1 的公开 API 没有和 NeoForge AddPackFindersEvent
+        // 同名的入口。卡包先写到 <游戏目录>/ygomc/sets。NeoForge 侧已经挂查找器。
         // Fabric 的这个回调触发时，注册表已经可以安全写入了。
         Ygomc.init();
     }

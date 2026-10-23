@@ -3,6 +3,7 @@ package cn.xm1221.ygomc.common.client;
 import cn.xm1221.ygomc.common.data.CardImageDb;
 import cn.xm1221.ygomc.common.data.DataPack;
 import cn.xm1221.ygomc.common.data.DataPacks;
+import cn.xm1221.ygomc.common.sync.PicCache;
 import com.mojang.blaze3d.platform.NativeImage;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.texture.DynamicTexture;
@@ -126,6 +127,10 @@ public final class CardTextures {
         DataPack pack = DataPacks.get();
         byte[] jpeg = pack.imageOf(code, tier);
         if (jpeg == null || jpeg.length == 0) {
+            // pics.bin 没有这张时，才向按卡密的缓存要。下载在另一根线程，这一帧仍回卡背。
+            jpeg = PicCache.peek(code, tier);
+        }
+        if (jpeg == null || jpeg.length == 0) {
             return null;
         }
         NativeImage image = decode(jpeg, code, tier);
@@ -204,6 +209,22 @@ public final class CardTextures {
         return "卡图纹理缓存 " + CACHE.size() + "/" + MAX_TEXTURES
                 + "，命中 " + hits + "，解码 " + misses
                 + "，卡背 " + (backLocation != null ? "有" : "无");
+    }
+
+    /** 数据包换过之后清掉全部卡图纹理。必须在渲染线程调用。 */
+    public static void invalidate() {
+        clear();
+    }
+
+    /** 只丢掉这一张的各档纹理。下载完成时用，避免把还在看的别的卡也卸掉。 */
+    public static void invalidate(int code) {
+        for (int tier = 0; tier <= 2; tier++) {
+            Key key = new Key(code, tier);
+            Cached cached = CACHE.remove(key);
+            if (cached != null) {
+                Minecraft.getInstance().getTextureManager().release(cached.location());
+            }
+        }
     }
 
     /** 全部释放。切换世界/重载资源时调用。 */

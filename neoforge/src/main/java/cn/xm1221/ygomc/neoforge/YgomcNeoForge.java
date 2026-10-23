@@ -6,11 +6,24 @@ import cn.xm1221.ygomc.common.pack.data.BoosterDef;
 import cn.xm1221.ygomc.common.pack.data.CardSetDef;
 import cn.xm1221.ygomc.common.pack.data.PackCatalog;
 import cn.xm1221.ygomc.common.pack.data.PackRegistries;
+import cn.xm1221.ygomc.common.sync.CacheLayout;
+import dev.architectury.platform.Platform;
+import net.minecraft.network.chat.Component;
+import net.minecraft.server.packs.PackLocationInfo;
+import net.minecraft.server.packs.PackSelectionConfig;
+import net.minecraft.server.packs.PackType;
+import net.minecraft.server.packs.PathPackResources;
+import net.minecraft.server.packs.repository.Pack;
+import net.minecraft.server.packs.repository.PackSource;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.common.Mod;
 import net.neoforged.neoforge.common.NeoForge;
+import net.neoforged.neoforge.event.AddPackFindersEvent;
 import net.neoforged.neoforge.event.AddReloadListenerEvent;
 import net.neoforged.neoforge.registries.DataPackRegistryEvent;
+
+import java.nio.file.Files;
+import java.util.Optional;
 
 /**
  * NeoForge 入口。
@@ -43,6 +56,7 @@ public final class YgomcNeoForge {
 
     public YgomcNeoForge(IEventBus modBus) {
         modBus.addListener(YgomcNeoForge::registerPackRegistries);
+        modBus.addListener(YgomcNeoForge::addPackFinders);
         NeoForge.EVENT_BUS.addListener(YgomcNeoForge::validatePacks);
         // NeoForge 在 mod 构造阶段就已经允许通过 DeferredRegister 登记内容
         // （真正的实例化发生在 RegisterEvent 中）。
@@ -53,6 +67,31 @@ public final class YgomcNeoForge {
         event.dataPackRegistry(PackRegistries.CARD_SET, CardSetDef.CODEC, CardSetDef.CODEC);
         event.dataPackRegistry(PackRegistries.BOOSTER, BoosterDef.DIRECT_CODEC, BoosterDef.DIRECT_CODEC);
         event.dataPackRegistry(PackRegistries.BOOSTER_BOX, BoosterBoxDef.DIRECT_CODEC, BoosterBoxDef.DIRECT_CODEC);
+    }
+
+    /**
+     * 把 {@code <游戏目录>/ygomc/sets} 挂成服务端数据包。
+     * 位置用 BOTTOM：存档 {@code datapacks/} 里的同 id 后加载，玩家手改的那份盖过自动生成的。
+     * 计划第 6 节。目录这时候可以还不存在，同步线程稍后写好，下次重载再看见。
+     */
+    private static void addPackFinders(AddPackFindersEvent event) {
+        if (event.getPackType() != PackType.SERVER_DATA) {
+            return;
+        }
+        event.addRepositorySource(consumer -> {
+            var path = CacheLayout.sets(Platform.getGameFolder());
+            if (!Files.isRegularFile(path.resolve("pack.mcmeta"))) {
+                return;
+            }
+            Pack pack = Pack.readMetaAndCreate(
+                    new PackLocationInfo("ygomc_sets", Component.literal("ygomc sets"), PackSource.WORLD, Optional.empty()),
+                    new PathPackResources.PathResourcesSupplier(path),
+                    PackType.SERVER_DATA,
+                    new PackSelectionConfig(true, Pack.Position.BOTTOM, false));
+            if (pack != null) {
+                consumer.accept(pack);
+            }
+        });
     }
 
     private static void validatePacks(AddReloadListenerEvent event) {
