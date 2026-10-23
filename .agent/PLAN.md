@@ -16,6 +16,10 @@ Minecraft 1.21.1，Architectury（Fabric 与 NeoForge 共用 `common`）。规�
 
 卡包是三张数据包注册表：`card_set`、`booster`、`booster_box`。`tools/mksets.py` 只收日文系列。有抽法表的用表；表是 TCG 九张的，收成五张。预组开出全套。没有表的，一包五张，按各罕贵的印刷张数抽。没有卡密的印刷不进池。
 
+启动时会在后台对齐脚本、卡库和卡包。缺了或校验变了，下到 `ygomc/script` 和 `ygomc/datapack`。失败就用已经有的。卡图不全量下。缺一张时，按卡密向图床补一张。
+
+演示卡包会出现在箱子和村民交易里。只投放 jar 里自带的 `demo`，以及它的盒。启动后同步下来的系列不进箱子，也不进交易。地牢、废弃矿井、埋藏的宝藏、村庄制图师的箱子会掉包；埋藏的宝藏有时掉盒。制图师学徒用绿宝石换一包，专家换一盒。流浪商人有时也卖一包。
+
 物品、决斗台、场地格子、组卡界面、开包界面和闪面层由 `tools/mkplaceholdertextures.py` 生成。手里的立体卡还没有闪面。
 
 卡密、卡文、卡图、脚本怎么生成，见 `tools/README.md`。卡包见 `tools/sets.md`。
@@ -28,15 +32,11 @@ Minecraft 1.21.1，Architectury（Fabric 与 NeoForge 共用 `common`）。规�
 
 决斗台能放，右键还不能开局。
 
-卡包不会出现在箱子、村民交易或赢 NPC 的奖励里。
-
-启动时不会自己下载脚本、卡库或卡图。
+赢 NPC 的奖励还没有。没有 NPC。
 
 ## 接下来
 
-1. 脚本用 Fluorohydride/ygopro-scripts，卡密和卡文用 mycard/ygopro-database。缺了或校验变了，再下到 `ygomc/script` 和 `ygomc/datapack`。失败就用已经有的。卡图不全量下。缺一张时，按卡密向 `https://cdn.233.momobako.com/ygopro/pics/{卡密}.jpg` 补一张。
-2. 战利品表和村民交易投放卡包。赢 NPC 的奖励等 NPC 做了再接。
-3. 异画先不做。`variant` 留着。
+1. 异画先不做。`variant` 留着。
 
 ## 不做
 
