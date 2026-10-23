@@ -18,8 +18,6 @@ Minecraft 1.21.1，Architectury（Fabric 与 NeoForge 共用 `common`）。规�
 
 启动时会在后台对齐脚本、卡库和卡包。缺了或校验变了，下到 `ygomc/script` 和 `ygomc/datapack`。失败就用已经有的。卡图不全量下。缺一张时，按卡密向图床补一张。
 
-演示卡包会出现在箱子和村民交易里。只投放 jar 里自带的 `demo`，以及它的盒。启动后同步下来的系列不进箱子，也不进交易。地牢、废弃矿井、埋藏的宝藏、村庄制图师的箱子会掉包；埋藏的宝藏有时掉盒。制图师学徒用绿宝石换一包，专家换一盒。流浪商人有时也卖一包。
-
 物品、决斗台、场地格子、组卡界面、开包界面和闪面层由 `tools/mkplaceholdertextures.py` 生成。手里的立体卡还没有闪面。
 
 卡密、卡文、卡图、脚本怎么生成，见 `tools/README.md`。卡包见 `tools/sets.md`。
@@ -30,11 +28,14 @@ Minecraft 1.21.1，Architectury（Fabric 与 NeoForge 共用 `common`）。规�
 
 百鸽和 YGOPRODeck 都是一个卡密一张图，填不上异画序号。
 
+卡包不会出现在箱子、村民交易或赢 NPC 的奖励里。
+
 赢 NPC 的奖励还没有。没有 NPC。
 
 ## 接下来
 
-1. 异画先不做。`variant` 留着。
+1. 战利品表和村民交易投放卡包。赢 NPC 的奖励等 NPC 做了再接。
+2. 异画先不做。`variant` 留着。
 
 ## 不做
 

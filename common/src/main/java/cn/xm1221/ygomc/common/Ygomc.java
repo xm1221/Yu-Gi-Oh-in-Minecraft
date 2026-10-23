@@ -10,7 +10,6 @@ import cn.xm1221.ygomc.common.net.YgomcNet;
 import cn.xm1221.ygomc.common.data.DataPacks;
 import cn.xm1221.ygomc.common.ocg.Natives;
 import cn.xm1221.ygomc.common.ocg.OcgEngine;
-import cn.xm1221.ygomc.common.pack.supply.PackSupplyHooks;
 import cn.xm1221.ygomc.common.registry.YgomcBlocks;
 import cn.xm1221.ygomc.common.registry.YgomcItems;
 import cn.xm1221.ygomc.common.registry.YgomcTabs;
@@ -32,7 +31,6 @@ import org.slf4j.LoggerFactory;
  *   <li>{@link YgomcBlocks}：{@code duel_table} 的物品形态需要方块实例，方块必须先登记；</li>
  *   <li>{@link YgomcItems}：引用上面的方块；</li>
  *   <li>{@link YgomcTabs}：标签页的图标引用物品。</li>
- *   <li>{@link PackSupplyHooks}：箱子和交易引用卡包物品。</li>
  * </ol>
  * 这些都是「登记」而非「实例化」——真正创建对象发生在注册事件触发时。
  * 但登记顺序仍然重要：某个工厂在注册事件里 {@code get()} 一个还没被登记的
@@ -64,8 +62,6 @@ public final class Ygomc {
         YgomcBlocks.init();
         YgomcItems.init();
         YgomcTabs.init();
-        // 箱子和村民交易引用卡包物品，放在物品登记之后。真正生成物品要等注册表加载完。
-        PackSupplyHooks.init();
         LOGGER.info("ygomc：内容登记完成");
 
         // 命令要在注册表之后登记：它本身不动注册表，但玩家可能立刻就敲 /ygomc。
