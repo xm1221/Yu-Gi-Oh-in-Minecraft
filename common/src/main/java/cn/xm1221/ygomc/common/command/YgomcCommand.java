@@ -117,6 +117,10 @@ public final class YgomcCommand {
                                 .executes(ctx -> {
                                     int code = IntegerArgumentType.getInteger(ctx, "code");
                                     int queued = PicCache.request(code);
+                                    if (queued == -2) {
+                                        ctx.getSource().sendFailure(Component.translatable("ygomc.sync.msg.pics_off"));
+                                        return 0;
+                                    }
                                     if (queued < 0) {
                                         ctx.getSource().sendFailure(Component.translatable("ygomc.sync.msg.pic_server"));
                                         return 0;
@@ -149,6 +153,10 @@ public final class YgomcCommand {
             return 0;
         }
         int started = PicCache.startPrefetch(db.codes());
+        if (started == -2) {
+            source.sendFailure(Component.translatable("ygomc.sync.msg.pics_off"));
+            return 0;
+        }
         if (started < 0) {
             source.sendFailure(Component.translatable("ygomc.sync.msg.pic_server"));
             return 0;

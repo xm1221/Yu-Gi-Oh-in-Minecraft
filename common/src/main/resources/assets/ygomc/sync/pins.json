@@ -56,6 +56,10 @@
     "urls": [
       "https://images.ygoprodeck.com/images/cards/{code}.jpg",
       "https://cdn.233.momobako.com/ygopro/pics/{code}.jpg"
+    ],
+    "bulkUrls": [
+      "https://cdn.233.momobako.com/ygopro/pics/{code}.jpg",
+      "https://images.ygoprodeck.com/images/cards/{code}.jpg"
     ]
   }
 }

@@ -31,5 +31,8 @@ class PicCacheTierTest {
         assertTrue(pins.pics.urls.get(0).startsWith("https://images.ygoprodeck.com/images/cards/"));
         assertTrue(pins.pics.urls.get(1).startsWith("https://cdn.233.momobako.com/ygopro/pics/"));
         assertTrue(pins.pics.urls.get(0).contains("{code}"));
+        assertTrue(pins.pics.bulkUrls.get(0).startsWith("https://cdn.233.momobako.com/ygopro/pics/"));
+        assertTrue(pins.pics.bulkUrls.get(1).startsWith("https://images.ygoprodeck.com/images/cards/"));
+        assertTrue(pins.pics.bulkUrls.get(0).contains("{code}"));
     }
 }

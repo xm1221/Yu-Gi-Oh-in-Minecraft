@@ -244,13 +244,13 @@ https://cdn.233.momobako.com/ygopro/pics/<卡密>.jpg
 
 这是 `.agent/PLAN.md` 里写过的地址。它没有公开的速率和保留承诺，只能当备用，不能当唯一来源。两个都失败：该卡密记入负缓存（24 小时内不要重试），渲染继续走 `back.jpg`。
 
-速率：卡图接口和 cardinfo 的 20 次/秒不是同一条，但指南写明拉图过快会封 IP。实现限额：同时最多 2 个连接，启动后的空闲速度不超过每秒 1 张，并且只拉「缓存里没有的卡密」。触发范围按优先级：
+速率：按需补图仍然同时最多 2 个连接、每秒最多开始 1 张，只拉缓存里没有的卡密。触发范围按优先级：
 
 1. 玩家正在看的那张（卡册、物品栏、对局悬停）。
 2. 当前界面上可见的卡，最多一小批。
-3. 不在启动时遍历 `cards.bin` 全表。
+3. 不在启动时遍历 `cards.bin` 全表，除非 `picsPrefetchAll` 打开。
 
-全库预取做成显式命令，默认关闭，每秒 1 张、可断点续传，并在命令回显里写明可能被图床封 IP。不要绑到世界加载。
+全库没有可直接下的压缩包。`https://cdn.233.momobako.com/ygopro/pics.zip` 和 `https://images.ygoprodeck.com/images/cards.zip` 都是 404。Project Ignis FAQ 的整包是不完整的 Mega 链接，不能当 `HttpFetch` 的地址。因此全库仍走上面的 `{code}` 模板，写在 `pins.pics.bulkUrls`：233 放前面（大陆能连），YGOPRODeck 兜底。`/ygomc sync prefetch` 大约 8 路并行，进度按「已处理 / 整份列表」显示；已经有 FULL 和 ICON 的跳过。`picsPrefetchAll` 为真时客户端在 `cards.bin` 就绪后自动开跑。每秒 1 张只留给按需补图。
 
 卡背：不从网上下 KONAMI 卡背。继续用模组已有的占位，或沿用玩家自己放的 `back.jpg`。`mkpics.py` 的 `cover.jpg` 路径只留给离线工具。
 
@@ -313,6 +313,10 @@ https://github.com/iconmaster5326/YGOJSON/releases/download/v1/individual.zip
     "urls": [
       "https://images.ygoprodeck.com/images/cards/{code}.jpg",
       "https://cdn.233.momobako.com/ygopro/pics/{code}.jpg"
+    ],
+    "bulkUrls": [
+      "https://cdn.233.momobako.com/ygopro/pics/{code}.jpg",
+      "https://images.ygoprodeck.com/images/cards/{code}.jpg"
     ]
   }
 }
@@ -398,7 +402,7 @@ ETag：对 pin 已固定的 URL，ETag 只是少下字节的优化。pin 未变�
 | `scripts` | true | 拉脚本 |
 | `sets` | true | 拉 YGOJSON 并生成数据包 |
 | `picsOnDemand` | true | 缺图时按卡密拉。专用服忽略 |
-| `picsPrefetchAll` | false | 全库预取，只能由命令临时打开 |
+| `picsPrefetchAll` | false | 为真时客户端并行下载 `cards.bin` 里缺的卡图。命令 `/ygomc sync prefetch` 同样会开跑 |
 | `timeoutSeconds` | 30 | 只限制 TCP/TLS 连接。卡库、脚本、卡包的正文另有读取上限 |
 | `maxPicBytes` | 2000000 | 单张图上限，防下到网页 |
 | `allowReplaceNewerLocal` | false | 见上，默认不盖玩家手摆的较新文件 |

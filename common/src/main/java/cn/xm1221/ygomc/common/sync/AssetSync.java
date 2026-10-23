@@ -26,8 +26,8 @@ import java.util.List;
  * 启动之后在守护线程里把卡库、脚本和卡包补到 {@code ygomc/}。
  * 缺网或失败都不阻断模组加载。见计划第 5、6 节。
  *
- * <p>{@code picsPrefetchAll} 即使打开也不在启动时遍历 {@code cards.bin}。
- * 全库预取只由 {@code /ygomc sync prefetch} 开始。
+ * <p>{@code picsPrefetchAll} 打开时，由客户端在卡库就绪后并行下载卡图，
+ * 不在这条同步线程里逐张请求。手动入口仍是 {@code /ygomc sync prefetch}。
  */
 public final class AssetSync {
 
@@ -269,7 +269,7 @@ public final class AssetSync {
             setsChanged = sets(game, settings, pins, manifest);
         }
         if (settings.picsPrefetchAll) {
-            LOGGER.info("picsPrefetchAll 已打开，启动时仍然不预取。要下全库请用 /ygomc sync prefetch，每秒最多一张，可 stop");
+            LOGGER.info("picsPrefetchAll 已打开。客户端会并行下载 cards.bin 里还没有的卡图");
         }
         manifest.pinsSchema = pins.schema;
         manifest.save(CacheLayout.manifest(game));

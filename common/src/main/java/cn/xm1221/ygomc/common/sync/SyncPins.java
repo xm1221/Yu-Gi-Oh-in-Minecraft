@@ -48,7 +48,13 @@ public final class SyncPins {
     }
 
     public static final class Pics {
+        /** 按需顺序：YGOPRODeck 优先，233 兜底。 */
         public List<String> urls;
+        /**
+         * 全库并行用的地址。没有整包可下时仍是 {@code {code}} 模板，
+         * 大陆镜像放前面。空则回退到 {@link #urls}。
+         */
+        public List<String> bulkUrls;
     }
 
     public static SyncPins loadDefault() throws IOException {
@@ -99,6 +105,16 @@ public final class SyncPins {
         }
         if (pics == null || pics.urls == null || pics.urls.isEmpty()) {
             throw new IOException("pics.urls 为空");
+        }
+        if (pics.bulkUrls != null) {
+            if (pics.bulkUrls.isEmpty()) {
+                throw new IOException("pics.bulkUrls 为空");
+            }
+            for (String url : pics.bulkUrls) {
+                if (url == null || !url.contains("{code}")) {
+                    throw new IOException("pics.bulkUrls 必须带 {code}");
+                }
+            }
         }
     }
 
