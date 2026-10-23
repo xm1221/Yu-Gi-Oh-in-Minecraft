@@ -350,6 +350,8 @@
   "ygomc.sync.msg.applied": "reloaded the card database and scripts",
   "ygomc.sync.msg.nothing_pending": "nothing is waiting to be applied",
   "ygomc.sync.msg.locked": "another process is writing this game directory",
-  "ygomc.sync.msg.run": "asset check started"
-}
+  "ygomc.sync.msg.run": "asset check started",
+  "ygomc.sync.msg.pic": "Queued card art %s (at most one image per second, not the whole set)",
+  "ygomc.sync.msg.pic_server": "A dedicated server does not download card art. The client fetches it when a card is shown",
+  "ygomc.sync.msg.pic_miss": "This card had no art recently and will not be requested again for 24 hours"
 }

@@ -350,6 +350,8 @@
   "ygomc.sync.msg.applied": "已重新装载卡库与脚本",
   "ygomc.sync.msg.nothing_pending": "没有等待换上的文件",
   "ygomc.sync.msg.locked": "另一个进程正在写这个游戏目录",
-  "ygomc.sync.msg.run": "已开始检查资源"
-}
+  "ygomc.sync.msg.run": "已开始检查资源",
+  "ygomc.sync.msg.pic": "已排队下载卡图 %s（每秒最多一张，不会拉全库）",
+  "ygomc.sync.msg.pic_server": "专用服不下载卡图。看卡时由客户端自己拉",
+  "ygomc.sync.msg.pic_miss": "这张卡最近没有图，24 小时内不再请求"
 }

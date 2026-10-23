@@ -1,5 +1,6 @@
 package cn.xm1221.ygomc.common.sync;
 
+import cn.xm1221.ygomc.common.data.CardImageDb;
 import dev.architectury.platform.Platform;
 import dev.architectury.utils.Env;
 import org.slf4j.Logger;
@@ -26,15 +27,30 @@ import java.util.concurrent.Executors;
 
 /**
  * 按卡密补一张图。不在启动时遍历全库。主源 YGOPRODeck，失败再试 233。
- * 见计划第 3.4 节。缩放在这根线程上做，不在渲染线程。
+ * 见计划第 3.4 节。缩放在工作线程上做，不在渲染线程。
  *
- * <p>TODO 计划第 9 节 P3：负缓存之外的界面抛光、全库预取命令。这里先做「缺一张拉一张」。
+ * <p>尺寸对齐 {@link CardImageDb}：FULL {@code 200×290} q0.85，ICON {@code 64×93} q0.78。
+ * JDK 没有 Lanczos，用双三次。不生成 HOVER。
+ * 同时最多 2 个连接，全局每秒最多开始 1 次请求。界面未命中最多排队 32 张，下一帧再试。
+ *
+ * <p>TODO 计划第 9 节 P3：慢速全库预取。{@code /ygomc sync pic <卡密>} 只排一张。
  */
 public final class PicCache {
 
+    /** 与 {@link CardImageDb#TIER_FULL} 对应的本地 JPEG。 */
+    static final int FULL_WIDTH = 200;
+    static final int FULL_HEIGHT = 290;
+    /** 与 {@link CardImageDb#TIER_ICON} 对应的本地 JPEG。 */
+    static final int ICON_WIDTH = 64;
+    static final int ICON_HEIGHT = 93;
+
     private static final Logger LOGGER = LoggerFactory.getLogger("ygomc/pics");
     private static final long MISS_TTL_MS = 24L * 60 * 60 * 1000;
-    private static final ExecutorService EXECUTOR = Executors.newSingleThreadExecutor(task -> {
+    private static final int MAX_QUEUED = 32;
+    private static final long MIN_INTERVAL_MS = 1000;
+    private static final Object PACE = new Object();
+    private static long nextStartAt;
+    private static final ExecutorService EXECUTOR = Executors.newFixedThreadPool(2, task -> {
         Thread thread = new Thread(task, "ygomc-pic");
         thread.setDaemon(true);
         return thread;
@@ -47,8 +63,22 @@ public final class PicCache {
     private PicCache() {
     }
 
+    /**
+     * 排队一张。专用服（物理端不是客户端）直接拒绝，避免连到图床。
+     * 不受界面那 32 张上限约束，仍走同一套每秒 1 张的限速。
+     */
+    /**
+     * @return 1 已排队或正在下；0 负缓存里，24 小时内不再请求；-1 不是客户端或卡号非法
+     */
+    public static int request(int code) {
+        if (code <= 0 || !client()) {
+            return -1;
+        }
+        return enqueue(code, true) ? 1 : 0;
+    }
+
     public static byte[] peek(int code, int tier) {
-        if (code <= 0 || !enabled()) {
+        if (code <= 0 || suffix(tier) == null || !enabled()) {
             return null;
         }
         try {
@@ -56,7 +86,7 @@ public final class PicCache {
             if (Files.isRegularFile(file)) {
                 return Files.readAllBytes(file);
             }
-            enqueue(code);
+            enqueue(code, false);
         } catch (IOException | RuntimeException e) {
             LOGGER.warn("读卡图缓存失败 code={}：{}", code, e.toString());
         }
@@ -64,11 +94,7 @@ public final class PicCache {
     }
 
     private static boolean enabled() {
-        try {
-            if (Platform.getEnvironment() != Env.CLIENT) {
-                return false;
-            }
-        } catch (Throwable e) {
+        if (!client()) {
             return false;
         }
         try {
@@ -79,13 +105,24 @@ public final class PicCache {
         }
     }
 
-    private static void enqueue(int code) {
+    private static boolean client() {
+        try {
+            return Platform.getEnvironment() == Env.CLIENT;
+        } catch (Throwable e) {
+            return false;
+        }
+    }
+
+    private static boolean enqueue(int code, boolean forced) {
         long missedAt = misses().getOrDefault(code, 0L);
         if (missedAt != 0 && System.currentTimeMillis() - missedAt < MISS_TTL_MS) {
-            return;
+            return false;
+        }
+        if (!forced && QUEUED.size() >= MAX_QUEUED) {
+            return false;
         }
         if (QUEUED.putIfAbsent(code, Boolean.TRUE) != null) {
-            return;
+            return true;
         }
         EXECUTOR.execute(() -> {
             try {
@@ -97,6 +134,7 @@ public final class PicCache {
                 QUEUED.remove(code);
             }
         });
+        return true;
     }
 
     private static void download(int code) throws IOException {
@@ -113,6 +151,7 @@ public final class PicCache {
         for (String pattern : pins.pics.urls) {
             urls.add(pattern.replace("{code}", Integer.toUnsignedString(code)));
         }
+        pace();
         HttpFetch.Result result = HttpFetch.get(urls, raw, options);
         if (!result.ok) {
             noteMiss(code, result.error);
@@ -130,28 +169,50 @@ public final class PicCache {
             noteMiss(code, "解码失败");
             return;
         }
-        // mkpics.py 用 LANCZOS。JDK 没有 Lanczos，这里用双三次，档位尺寸与质量对齐。
-        writeJpeg(scale(image, 200, 290), dir.resolve(code + ".full.jpg"), 0.85f);
-        writeJpeg(scale(image, 64, 93), dir.resolve(code + ".icon.jpg"), 0.78f);
+        writeJpeg(scale(image, FULL_WIDTH, FULL_HEIGHT), dir.resolve(code + suffix(CardImageDb.TIER_FULL)), 0.85f);
+        writeJpeg(scale(image, ICON_WIDTH, ICON_HEIGHT), dir.resolve(code + suffix(CardImageDb.TIER_ICON)), 0.78f);
         LOGGER.info("卡图已缓存 {}", code);
         SyncListeners.firePicReady(code);
+    }
+
+    private static void pace() throws IOException {
         try {
-            Thread.sleep(1000);
+            synchronized (PACE) {
+                long wait = nextStartAt - System.currentTimeMillis();
+                if (wait > 0) {
+                    Thread.sleep(wait);
+                }
+                nextStartAt = System.currentTimeMillis() + MIN_INTERVAL_MS;
+            }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+            throw new IOException("卡图限速被打断", e);
         }
     }
 
+    static String suffix(int tier) {
+        if (tier == CardImageDb.TIER_ICON) {
+            return ".icon.jpg";
+        }
+        if (tier == CardImageDb.TIER_FULL) {
+            return ".full.jpg";
+        }
+        return null;
+    }
+
     private static Path file(int code, int tier) {
-        String suffix = tier == 1 ? ".icon.jpg" : ".full.jpg";
-        return picsDir().resolve(code + suffix);
+        String name = suffix(tier);
+        if (name == null) {
+            return picsDir().resolve(code + ".missing");
+        }
+        return picsDir().resolve(code + name);
     }
 
     private static Path picsDir() {
         return CacheLayout.pics(Platform.getGameFolder());
     }
 
-    private static BufferedImage scale(BufferedImage src, int width, int height) {
+    static BufferedImage scale(BufferedImage src, int width, int height) {
         BufferedImage dst = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
         Graphics2D graphics = dst.createGraphics();
         graphics.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC);

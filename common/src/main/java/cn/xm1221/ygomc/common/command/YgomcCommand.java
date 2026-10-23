@@ -24,7 +24,9 @@ import cn.xm1221.ygomc.common.ocg.Natives;
 import cn.xm1221.ygomc.common.ocg.OcgDuel;
 import cn.xm1221.ygomc.common.ocg.OcgEngine;
 import cn.xm1221.ygomc.common.sync.AssetSync;
+import cn.xm1221.ygomc.common.sync.PicCache;
 import com.mojang.brigadier.CommandDispatcher;
+import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import dev.architectury.event.events.common.CommandRegistrationEvent;
 import dev.architectury.event.events.common.LifecycleEvent;
@@ -108,7 +110,24 @@ public final class YgomcCommand {
                     AssetSync.applyPending();
                     ctx.getSource().sendSuccess(AssetSync::statusComponent, true);
                     return 1;
-                }));
+                }))
+                .then(Commands.literal("pic")
+                        .then(Commands.argument("code", IntegerArgumentType.integer(1))
+                                .executes(ctx -> {
+                                    int code = IntegerArgumentType.getInteger(ctx, "code");
+                                    int queued = PicCache.request(code);
+                                    if (queued < 0) {
+                                        ctx.getSource().sendFailure(Component.translatable("ygomc.sync.msg.pic_server"));
+                                        return 0;
+                                    }
+                                    if (queued == 0) {
+                                        ctx.getSource().sendFailure(Component.translatable("ygomc.sync.msg.pic_miss"));
+                                        return 0;
+                                    }
+                                    ctx.getSource().sendSuccess(
+                                            () -> Component.translatable("ygomc.sync.msg.pic", code), false);
+                                    return 1;
+                                })));
     }
 
     private static void register(CommandDispatcher<CommandSourceStack> dispatcher) {

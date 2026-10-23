@@ -4,15 +4,13 @@ import cn.xm1221.ygomc.common.data.CardDataDb;
 import cn.xm1221.ygomc.common.data.DataPacks;
 import cn.xm1221.ygomc.common.pack.model.Booster;
 import cn.xm1221.ygomc.common.pack.model.CardSetData;
+import cn.xm1221.ygomc.common.pack.model.KnownPrints;
 import cn.xm1221.ygomc.common.pack.model.PrintRef;
 import net.minecraft.core.Registry;
 import net.minecraft.core.RegistryAccess;
 import net.minecraft.resources.ResourceLocation;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
-import java.util.ArrayList;
-import java.util.List;
 
 /**
  * 数据包重载之后核对卡包：卡号在不在卡表里、抽法能不能开出来、盒装配比有没有引用错抽法。
@@ -82,30 +80,23 @@ public final class PackCatalog {
 
     /**
      * 去掉卡表里没有的卡号。全部被去掉时返回 {@code null}，调用方记一条警告。
-     * 没有卡表时原样展开。
+     * 没有卡表时只丢掉非正卡号。规则与 {@link KnownPrints} 相同，开包走同一套。
      */
     private static CardSetData knownCards(CardSetDef set, CardDataDb db, ResourceLocation boosterId, int[] dropped) {
-        if (db == null) {
-            return set.toModel();
-        }
-        List<PrintRef> kept = new ArrayList<>();
         CardSetData expanded = set.toModel();
+        java.util.function.IntPredicate known = db == null ? null : db::contains;
         for (var rarity : cn.xm1221.ygomc.common.card.CardRarity.values()) {
-            kept.addAll(expanded.pool(rarity));
-        }
-        List<PrintRef> known = new ArrayList<>();
-        for (PrintRef print : kept) {
-            if (!db.contains(print.code())) {
-                LOGGER.warn("卡包 {} 的卡号 {} 不在卡片数据库里，已从池中剔除", boosterId, print.code());
-                dropped[0]++;
-                continue;
+            for (PrintRef print : expanded.pool(rarity)) {
+                if (!KnownPrints.keep(print.code(), known)) {
+                    LOGGER.warn("卡包 {} 的卡号 {} 不在卡片数据库里，已从池中剔除", boosterId, print.code());
+                    dropped[0]++;
+                }
             }
-            known.add(print);
         }
-        if (known.isEmpty()) {
+        CardSetData filtered = KnownPrints.filter(expanded, known);
+        if (filtered == null) {
             LOGGER.warn("卡包 {} 剔除未知卡号后池是空的", boosterId);
-            return null;
         }
-        return new CardSetData(known);
+        return filtered;
     }
 }

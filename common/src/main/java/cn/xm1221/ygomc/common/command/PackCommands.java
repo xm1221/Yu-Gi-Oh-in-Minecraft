@@ -7,6 +7,7 @@ import cn.xm1221.ygomc.common.pack.data.BoosterBoxDef;
 import cn.xm1221.ygomc.common.pack.data.BoosterDef;
 import cn.xm1221.ygomc.common.pack.data.PackRegistries;
 import cn.xm1221.ygomc.common.pack.model.Booster;
+import cn.xm1221.ygomc.common.pack.model.CardSetData;
 import cn.xm1221.ygomc.common.pack.model.Odds;
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
@@ -150,7 +151,12 @@ public final class PackCommands {
             return missing(source, id);
         }
         Booster mechanics = booster.value().mechanics();
-        long[] counts = PackOpening.simulate(mechanics, booster.value().set().value().toModel(), packs);
+        CardSetData set = PackOpening.playable(booster.value().set().value().toModel());
+        if (set == null) {
+            source.sendFailure(Component.translatable("ygomc.pack.failed"));
+            return 0;
+        }
+        long[] counts = PackOpening.simulate(mechanics, set, packs);
         source.sendSuccess(() -> Component.translatable("ygomc.pack.simulate_head", packs, id.toString()), false);
         for (CardRarity rarity : CardRarity.values()) {
             double expected = packs * Odds.expectedCount(mechanics, rarity);

@@ -6,15 +6,8 @@ import cn.xm1221.ygomc.common.pack.data.BoosterDef;
 import cn.xm1221.ygomc.common.pack.data.CardSetDef;
 import cn.xm1221.ygomc.common.pack.data.PackCatalog;
 import cn.xm1221.ygomc.common.pack.data.PackRegistries;
-import cn.xm1221.ygomc.common.sync.CacheLayout;
-import dev.architectury.platform.Platform;
-import net.minecraft.network.chat.Component;
-import net.minecraft.server.packs.PackLocationInfo;
-import net.minecraft.server.packs.PackSelectionConfig;
+import cn.xm1221.ygomc.common.sync.SetsPackFinder;
 import net.minecraft.server.packs.PackType;
-import net.minecraft.server.packs.PathPackResources;
-import net.minecraft.server.packs.repository.Pack;
-import net.minecraft.server.packs.repository.PackSource;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.common.Mod;
 import net.neoforged.neoforge.common.NeoForge;
@@ -22,8 +15,6 @@ import net.neoforged.neoforge.event.AddPackFindersEvent;
 import net.neoforged.neoforge.event.AddReloadListenerEvent;
 import net.neoforged.neoforge.registries.DataPackRegistryEvent;
 
-import java.nio.file.Files;
-import java.util.Optional;
 
 /**
  * NeoForge 入口。
@@ -71,27 +62,14 @@ public final class YgomcNeoForge {
 
     /**
      * 把 {@code <游戏目录>/ygomc/sets} 挂成服务端数据包。
-     * 位置用 BOTTOM：存档 {@code datapacks/} 里的同 id 后加载，玩家手改的那份盖过自动生成的。
+     * 位置用 BOTTOM。世界 {@code datapacks/} 默认 TOP，后加载，盖过自动生成的卡包。
      * 计划第 6 节。目录这时候可以还不存在，同步线程稍后写好，下次重载再看见。
      */
     private static void addPackFinders(AddPackFindersEvent event) {
         if (event.getPackType() != PackType.SERVER_DATA) {
             return;
         }
-        event.addRepositorySource(consumer -> {
-            var path = CacheLayout.sets(Platform.getGameFolder());
-            if (!Files.isRegularFile(path.resolve("pack.mcmeta"))) {
-                return;
-            }
-            Pack pack = Pack.readMetaAndCreate(
-                    new PackLocationInfo("ygomc_sets", Component.literal("ygomc sets"), PackSource.WORLD, Optional.empty()),
-                    new PathPackResources.PathResourcesSupplier(path),
-                    PackType.SERVER_DATA,
-                    new PackSelectionConfig(true, Pack.Position.BOTTOM, false));
-            if (pack != null) {
-                consumer.accept(pack);
-            }
-        });
+        event.addRepositorySource(SetsPackFinder::load);
     }
 
     private static void validatePacks(AddReloadListenerEvent event) {

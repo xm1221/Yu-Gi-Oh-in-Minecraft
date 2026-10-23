@@ -26,7 +26,8 @@ import java.util.List;
  * 启动之后在守护线程里把卡库、脚本和卡包补到 {@code ygomc/}。
  * 缺网或失败都不阻断模组加载。见计划第 5、6 节。
  *
- * <p>TODO 计划第 9 节 P3：慢速全库预取命令。{@code picsPrefetchAll} 先只占着配置，默认关。
+ * <p>TODO 计划第 9 节 P3：{@code odds_origin}、稳定包色、慢速全库预取。
+ * {@code picsPrefetchAll} 仍默认关，打开也不会遍历 {@code cards.bin}。单张排队见 {@code /ygomc sync pic}。
  */
 public final class AssetSync {
 
@@ -249,6 +250,9 @@ public final class AssetSync {
         }
         if (settings.sets) {
             setsChanged = sets(game, settings, pins, manifest);
+        }
+        if (settings.picsPrefetchAll) {
+            LOGGER.info("picsPrefetchAll 已打开，但全库预取仍是计划第 9 节 P3，这次不会遍历 cards.bin");
         }
         manifest.pinsSchema = pins.schema;
         manifest.save(CacheLayout.manifest(game));
@@ -595,7 +599,13 @@ public final class AssetSync {
         }
         current.execute(() -> {
             try {
-                current.reloadResources(current.getPackRepository().getSelectedIds());
+                var repository = current.getPackRepository();
+                repository.reload();
+                if (repository.getPack(SetsPackFinder.PACK_ID) != null
+                        && !repository.getSelectedIds().contains(SetsPackFinder.PACK_ID)) {
+                    repository.addPack(SetsPackFinder.PACK_ID);
+                }
+                current.reloadResources(repository.getSelectedIds());
                 LOGGER.info("已请求重载数据包，让 ygomc/sets 进入当前世界");
             } catch (RuntimeException e) {
                 LOGGER.warn("卡包数据包重载失败（目录仍在，下次进世界会再试）：{}", e.toString());

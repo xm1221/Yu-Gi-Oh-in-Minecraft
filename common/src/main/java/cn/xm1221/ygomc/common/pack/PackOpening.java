@@ -4,6 +4,8 @@ import cn.xm1221.ygomc.common.card.CardComponents;
 import cn.xm1221.ygomc.common.card.CardItem;
 import cn.xm1221.ygomc.common.card.CardRarity;
 import cn.xm1221.ygomc.common.card.CardRef;
+import cn.xm1221.ygomc.common.data.CardDataDb;
+import cn.xm1221.ygomc.common.data.DataPacks;
 import cn.xm1221.ygomc.common.net.PackNet;
 import cn.xm1221.ygomc.common.pack.data.BoosterBoxDef;
 import cn.xm1221.ygomc.common.pack.data.BoosterDef;
@@ -14,6 +16,7 @@ import cn.xm1221.ygomc.common.pack.data.PrintSpec;
 import cn.xm1221.ygomc.common.pack.model.Booster;
 import cn.xm1221.ygomc.common.pack.model.CardSetData;
 import cn.xm1221.ygomc.common.pack.model.Collation;
+import cn.xm1221.ygomc.common.pack.model.KnownPrints;
 import cn.xm1221.ygomc.common.pack.model.Odds;
 import cn.xm1221.ygomc.common.pack.model.PackRollException;
 import cn.xm1221.ygomc.common.pack.model.PackRoller;
@@ -36,6 +39,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Random;
 import java.util.UUID;
+import java.util.function.IntPredicate;
 
 /**
  * 开包和开盒。随机数来自单独的一把锁，不和世界掉落共用。
@@ -80,7 +84,11 @@ public final class PackOpening {
         }
         BoosterDef def = booster.value();
         Booster mechanics = def.mechanics();
-        CardSetData set = def.set().value().toModel();
+        CardSetData set = playable(def.set().value().toModel());
+        if (set == null) {
+            tell(player, "ygomc.pack.failed");
+            return false;
+        }
         BoxLot lot = stack.get(CardComponents.BOX_LOT.get());
         Pull fixed = null;
         PackLedger ledger = PackLedger.get(player);
@@ -161,9 +169,15 @@ public final class PackOpening {
                 give(player, pack);
             }
         }
+        CardDataDb db = DataPacks.get().cardData();
+        IntPredicate known = db == null ? null : db::contains;
         for (PrintSpec extra : box.extras()) {
-            give(player, card(extra.toRef()));
-            opened.add(extra.toRef());
+            PrintRef ref = extra.toRef();
+            if (!KnownPrints.keep(ref.code(), known)) {
+                continue;
+            }
+            give(player, card(ref));
+            opened.add(ref);
         }
         if (!opened.isEmpty()) {
             PackNet.send(player, opened);
@@ -186,7 +200,16 @@ public final class PackOpening {
         return lines;
     }
 
-    /** 模拟 {@code packs} 包，返回每种稀有度的张数。权限命令用，不进背包。 */
+    /**
+     * 按卡表丢掉未知卡密。滤完为空返回 {@code null}，调用方不要开包。
+     * 没有卡表时只丢掉非正卡号，和 {@link cn.xm1221.ygomc.common.pack.data.PackCatalog} 同一套。
+     */
+    public static CardSetData playable(CardSetData expanded) {
+        CardDataDb db = DataPacks.get().cardData();
+        return KnownPrints.filter(expanded, db == null ? null : db::contains);
+    }
+
+    /** 模拟 {@code packs} 包，返回每种稀有度的张数。权限命令用，不进背包。池必须已经滤过未知卡密。 */
     public static long[] simulate(Booster booster, CardSetData set, int packs) {
         long[] counts = new long[CardRarity.values().length];
         synchronized (LOCK) {

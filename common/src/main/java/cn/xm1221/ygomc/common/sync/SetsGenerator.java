@@ -28,8 +28,7 @@ import java.util.zip.ZipFile;
  * 从 YGOJSON 生成卡包数据包。语义对齐 {@code tools/mksets.py}，专用服不依赖本机 Python。
  *
  * <p>TODO 计划第 7 节（P3）：{@code odds_origin}、按卡号前缀稳定染色。这一版颜色仍是
- * {@code #3C5AA0}，和离线脚本一致，方便同一份夹具对拍。
- * TODO 计划第 6 节：{@code PackOpening} 滤掉不在 {@code cards.bin} 里的卡密仍是 P2。
+ * {@code #3C5AA0}，和离线脚本一致，方便同一份夹具对拍。未知卡密由开包路径过滤，不写进 JSON。
  */
 public final class SetsGenerator {
 
