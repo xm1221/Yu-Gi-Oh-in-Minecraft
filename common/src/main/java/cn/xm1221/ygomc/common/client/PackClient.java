@@ -4,16 +4,17 @@ import cn.xm1221.ygomc.common.net.PackNet;
 import cn.xm1221.ygomc.common.pack.model.PrintRef;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.resources.ResourceLocation;
 
 import java.util.ArrayDeque;
 import java.util.List;
 
 /**
- * 开包结果送到界面上。界面开着时先排队，关掉当前这一包再看下一包。
+ * 开包结果入队与展示。关当前开包屏后才开下一包。
  */
 public final class PackClient {
 
-    private static final ArrayDeque<List<PrintRef>> PENDING = new ArrayDeque<>();
+    private static final ArrayDeque<PackNet.OpenedPack> PENDING = new ArrayDeque<>();
 
     private PackClient() {
     }
@@ -23,19 +24,19 @@ public final class PackClient {
         PackNet.registerClient(PackClient::accept);
     }
 
-    private static void accept(List<PrintRef> cards) {
-        if (cards.isEmpty()) {
+    private static void accept(PackNet.OpenedPack pack) {
+        if (pack.cards().isEmpty()) {
             return;
         }
         Minecraft minecraft = Minecraft.getInstance();
         if (minecraft.screen instanceof PackOpenScreen) {
-            PENDING.add(List.copyOf(cards));
+            PENDING.add(pack);
         } else {
-            minecraft.setScreen(new PackOpenScreen(cards));
+            minecraft.setScreen(new PackOpenScreen(pack));
         }
     }
 
-    /** 当前界面关掉之后再打开排队的下一包。已经有别的界面时不动。 */
+    /** 当前开包屏关掉之后再开队列里的下一包；已有别的界面时不抢。 */
     public static void openPending() {
         Minecraft minecraft = Minecraft.getInstance();
         if (minecraft.screen != null || PENDING.isEmpty()) {

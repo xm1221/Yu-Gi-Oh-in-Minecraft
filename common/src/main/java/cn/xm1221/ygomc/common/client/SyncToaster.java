@@ -3,6 +3,7 @@ package cn.xm1221.ygomc.common.client;
 import cn.xm1221.ygomc.common.data.DataPack;
 import cn.xm1221.ygomc.common.data.DataPacks;
 import cn.xm1221.ygomc.common.sync.AssetSync;
+import cn.xm1221.ygomc.common.sync.PackFaceCache;
 import cn.xm1221.ygomc.common.sync.PicCache;
 import cn.xm1221.ygomc.common.sync.PicStatus;
 import cn.xm1221.ygomc.common.sync.SyncAnnounce;
@@ -26,6 +27,7 @@ public final class SyncToaster {
     private static final SyncAnnounce.PicGate PICS = new SyncAnnounce.PicGate();
     private static boolean hooked;
     private static boolean picPrefetchArmed;
+    private static boolean packFacePrefetchArmed;
 
     private SyncToaster() {
     }
@@ -71,6 +73,7 @@ public final class SyncToaster {
      */
     private static void announcePics(Minecraft minecraft, boolean playerPresent) {
         maybeAutoPrefetch();
+        maybeAutoPackFaces();
         SyncAnnounce.PicCue cue;
         try {
             cue = PICS.tick(PicCache.status(), playerPresent);
@@ -136,4 +139,40 @@ public final class SyncToaster {
             picPrefetchArmed = true;
         }
     }
+
+    /** 开局预取卡包包面；只武装一次。缺面时由 PackFaceCache.peek 按需补。 */
+    private static void maybeAutoPackFaces() {
+        if (packFacePrefetchArmed) {
+            return;
+        }
+        if (PackFaceCache.prefetchRunning() || PackFaceCache.armed()) {
+            packFacePrefetchArmed = true;
+            return;
+        }
+        SyncSettings settings;
+        try {
+            settings = SyncConfig.current();
+        } catch (Throwable e) {
+            return;
+        }
+        if (!settings.enabled || !settings.sets) {
+            packFacePrefetchArmed = true;
+            return;
+        }
+        AssetSync.Status sync = AssetSync.status();
+        if (sync != null) {
+            AssetSync.Phase phase = sync.phase();
+            if (phase == AssetSync.Phase.DOWNLOADING
+                    || phase == AssetSync.Phase.CHECKING
+                    || phase == AssetSync.Phase.CONVERTING
+                    || phase == AssetSync.Phase.APPLYING) {
+                return;
+            }
+        }
+        int started = PackFaceCache.startPrefetchFromSets();
+        if (started == 1 || started == -1 || started == -2 || PackFaceCache.armed()) {
+            packFacePrefetchArmed = true;
+        }
+    }
+
 }

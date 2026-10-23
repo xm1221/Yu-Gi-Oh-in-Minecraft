@@ -70,3 +70,10 @@ local-data/sets/
 ```
 
 `<id>` 是文件名。不写命名空间时默认是 `ygomc`，所以 `sod_jp` 和 `ygomc:sod_jp` 是同一个包。`give`、`box`、`simulate` 需要权限 2。右键开包；盒装卡包右键拆成包，潜行右键直接开成卡。
+
+
+## 包面图
+
+`locales.jp.image`（YGOJSON / Yugipedia 产品图 URL）会写入 booster 的 `display.face`。
+游戏开始时客户端尽量一次下载到 `ygomc/cache/pack_faces/`；缺图时开包界面再按需补。
+不入库、不进 jar。罕贵仍按 YGOJSON 的 rarity 映射到 common/rare/super/ultra/secret，不编造比例。

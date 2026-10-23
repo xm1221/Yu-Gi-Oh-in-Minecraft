@@ -13,7 +13,8 @@ import java.util.List;
 import java.util.function.Consumer;
 
 /**
- * 开包结果（服务器 → 客户端）。卡在发包之前已经进了背包，这个包只负责展示。
+ * 开包结果：服务端 → 客户端。抽卡在服务端之前已经定了本包，这里只负责展示。
+ * 额外带 booster id 与包面 URL，客户端用来渲染真实包面（缺则按需下载）。
  */
 @SuppressWarnings("removal")
 public final class PackNet {
@@ -21,24 +22,36 @@ public final class PackNet {
     public static final ResourceLocation OPENED =
             ResourceLocation.fromNamespaceAndPath("ygomc", "pack_opened");
 
-    private static Consumer<List<PrintRef>> handler;
+    public record OpenedPack(List<PrintRef> cards, ResourceLocation boosterId, String faceUrl) {
+        public OpenedPack {
+            cards = List.copyOf(cards);
+            faceUrl = faceUrl == null ? "" : faceUrl;
+        }
+    }
+
+    private static Consumer<OpenedPack> handler;
 
     private PackNet() {
     }
 
     /** 只在客户端调用。 */
-    public static void registerClient(Consumer<List<PrintRef>> opened) {
+    public static void registerClient(Consumer<OpenedPack> opened) {
         handler = opened;
         NetworkManager.registerReceiver(NetworkManager.Side.S2C, OPENED, (buf, ctx) -> {
-            List<PrintRef> cards = read(buf);
-            Consumer<List<PrintRef>> got = handler;
+            OpenedPack pack = read(buf);
+            Consumer<OpenedPack> got = handler;
             if (got != null) {
-                ctx.queue(() -> got.accept(cards));
+                ctx.queue(() -> got.accept(pack));
             }
         });
     }
 
     public static void send(ServerPlayer player, List<PrintRef> cards) {
+        send(player, cards, null, "");
+    }
+
+    public static void send(ServerPlayer player, List<PrintRef> cards,
+                            ResourceLocation boosterId, String faceUrl) {
         RegistryFriendlyByteBuf buf = new RegistryFriendlyByteBuf(Unpooled.buffer(), player.registryAccess());
         buf.writeVarInt(cards.size());
         for (PrintRef card : cards) {
@@ -46,10 +59,15 @@ public final class PackNet {
             buf.writeVarInt(card.rarity().id());
             buf.writeVarInt(card.variant());
         }
+        buf.writeBoolean(boosterId != null);
+        if (boosterId != null) {
+            buf.writeResourceLocation(boosterId);
+        }
+        buf.writeUtf(faceUrl == null ? "" : faceUrl, 512);
         NetworkManager.sendToPlayer(player, OPENED, buf);
     }
 
-    private static List<PrintRef> read(RegistryFriendlyByteBuf buf) {
+    private static OpenedPack read(RegistryFriendlyByteBuf buf) {
         int count = buf.readVarInt();
         List<PrintRef> cards = new ArrayList<>(count);
         for (int i = 0; i < count; i++) {
@@ -58,6 +76,8 @@ public final class PackNet {
             int variant = buf.readVarInt();
             cards.add(new PrintRef(code, rarity, variant, 1));
         }
-        return cards;
+        ResourceLocation boosterId = buf.readBoolean() ? buf.readResourceLocation() : null;
+        String faceUrl = buf.readUtf(512);
+        return new OpenedPack(cards, boosterId, faceUrl);
     }
 }

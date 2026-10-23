@@ -314,9 +314,13 @@ def main():
                 continue
             prefix = locale.get("prefix") or file_id.upper()
             color = pack_color(prefix)
+            display = {"name": {"text": name}, "color": color, "rarity": "common"}
+            face = locale.get("image") or ""
+            if isinstance(face, str) and face.strip():
+                display["face"] = face.strip()
             write(os.path.join(data_root, "booster", file_id + ".json"), {
                 "set": "ygomc:" + file_id,
-                "display": {"name": {"text": name}, "color": color, "rarity": "common"},
+                "display": display,
                 "pulls": pulls,
                 "odds_origin": odds_origin,
                 "duplicates": "avoid_in_pack",

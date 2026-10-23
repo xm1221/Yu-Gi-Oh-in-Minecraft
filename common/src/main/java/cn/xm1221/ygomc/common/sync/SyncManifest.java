@@ -28,6 +28,8 @@ public final class SyncManifest {
     public Map<String, String> databaseSha256 = new LinkedHashMap<>();
     public String scriptsSha = "";
     public String setsSha256 = "";
+    /** SetsGenerator 输出格式；升版本会强制用缓存 zip 重生成（例如补 face）。 */
+    public int setsFormat = 0;
     /** 对局进行中已经转换好、还没换上的版本。 */
     public String stagedDatabaseSha = "";
     public String stagedScriptsSha = "";

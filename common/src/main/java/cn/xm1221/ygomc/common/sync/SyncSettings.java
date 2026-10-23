@@ -15,7 +15,7 @@ public final class SyncSettings {
     public boolean sets = true;
     public boolean picsOnDemand = true;
     /** 为真时客户端在卡库就绪后并行下载缺的卡图。命令也可以单独开跑。 */
-    public boolean picsPrefetchAll = false;
+    public boolean picsPrefetchAll = true;
     /** TCP/TLS 连接超时（秒）。大文件正文见 {@link HttpFetch#LARGE_BODY_TIMEOUT}。 */
     public int timeoutSeconds = 30;
     public int maxPicBytes = 2_000_000;

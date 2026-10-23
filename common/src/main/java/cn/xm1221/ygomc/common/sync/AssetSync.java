@@ -31,6 +31,9 @@ import java.util.List;
  */
 public final class AssetSync {
 
+    /** SetsGenerator 输出格式；升版本会强制用缓存 zip 重生成。 */
+    public static final int SETS_FORMAT = 2;
+
     private static final Logger LOGGER = LoggerFactory.getLogger("ygomc/sync");
     private static final Object LOCK = new Object();
     private static final List<String> BIN_NAMES = List.of("cards.bin", "texts.bin", "strings.bin");
@@ -70,6 +73,7 @@ public final class AssetSync {
     }
 
     /** 模组入口在 {@code DataPacks.init} 和 {@code OcgEngine.prepare} 之后调用。立刻返回。 */
+    /** 只在游戏开始调度一次全量同步；平时不反复联网。卡图/包面开局预取，未知再补。 */
     public static void schedule() {
         hookLifecycle();
         SyncSettings settings;
@@ -473,7 +477,8 @@ public final class AssetSync {
             throws IOException {
         Path live = CacheLayout.sets(game);
         boolean present = Files.isRegularFile(live.resolve("pack.mcmeta"));
-        if (present && pins.sets.sha256.equalsIgnoreCase(manifest.setsSha256)) {
+        if (present && pins.sets.sha256.equalsIgnoreCase(manifest.setsSha256)
+                && manifest.setsFormat >= SETS_FORMAT) {
             LOGGER.info("卡包清单一致，跳过（{}）", pins.sets.sha256.substring(0, 16));
             return false;
         }
@@ -508,6 +513,7 @@ public final class AssetSync {
             manifest.sets.cardSets = result.cardSets();
             manifest.sets.boosters = result.boosters();
             manifest.sets.boxes = result.boxes();
+            manifest.setsFormat = SETS_FORMAT;
             LOGGER.info("卡包已写入 ygomc/sets：系列 {} 包 {} 盒 {}，没有卡密的印刷 {}。查找器见计划第 6 节",
                     result.cardSets(), result.boosters(), result.boxes(), result.noPassword());
             return true;

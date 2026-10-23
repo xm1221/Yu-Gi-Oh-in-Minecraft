@@ -239,6 +239,10 @@ public final class SetsGenerator {
                 display.add("name", nameText);
                 display.addProperty("color", color);
                 display.addProperty("rarity", "common");
+                String face = text(locale, "image");
+                if (!face.isBlank()) {
+                    display.addProperty("face", face);
+                }
                 booster.add("display", display);
                 booster.add("pulls", pulls);
                 booster.addProperty("odds_origin", oddsOrigin);

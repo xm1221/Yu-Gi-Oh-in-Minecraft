@@ -55,6 +55,7 @@ class ScriptAndSetsTest {
         assertEquals("sheet_adapted", tcg.get("odds_origin").getAsString());
         assertEquals("preconstructed", pre.get("odds_origin").getAsString());
         assertEquals(PackColors.of("PLN-JP"), plain.getAsJsonObject("display").get("color").getAsString());
+        assertEquals("https://example.test/pln.png", plain.getAsJsonObject("display").get("face").getAsString());
         assertEquals(PackColors.of("TCG-JP"), tcg.getAsJsonObject("display").get("color").getAsString());
         assertEquals(plain.getAsJsonObject("display").get("color").getAsString(),
                 box.getAsJsonObject("display").get("color").getAsString());
@@ -135,7 +136,7 @@ class ScriptAndSetsTest {
             put(out, "cards/missing.json", "{}");
             put(out, "sets.json", "[\"plain\",\"tcg\",\"pre\",\"empty\",\"demo\"]");
             put(out, "sets/plain.json", """
-                    {"name":{"en":"Plain Pack","ja":"虚构补充包"},"locales":{"jp":{"prefix":"PLN-JP","date":"2020-01-01"}},
+                    {"name":{"en":"Plain Pack","ja":"虚构补充包"},"locales":{"jp":{"prefix":"PLN-JP","date":"2020-01-01","image":"https://example.test/pln.png"}},
                      "contents":[{"locales":["jp"],"cards":[
                        {"card":"c1","rarity":"common","qty":1},
                        {"card":"c2","rarity":"rare","qty":2},

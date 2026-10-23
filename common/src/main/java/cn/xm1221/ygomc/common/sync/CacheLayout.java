@@ -57,6 +57,11 @@ public final class CacheLayout {
         return cache(gameDir).resolve("pics");
     }
 
+    /** 卡包包面图缓存：按 booster id 存 JPEG/PNG。 */
+    public static Path packFaces(Path gameDir) {
+        return cache(gameDir).resolve("pack_faces");
+    }
+
     public static Path staging(Path gameDir) {
         return cache(gameDir).resolve("staging");
     }

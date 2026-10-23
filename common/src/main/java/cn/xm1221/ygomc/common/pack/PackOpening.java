@@ -125,7 +125,7 @@ public final class PackOpening {
             stack.shrink(1);
         }
         giveCards(player, cards);
-        PackNet.send(player, cards);
+        PackNet.send(player, cards, boosterKey(booster), faceUrl(booster));
         if (announce) {
             tell(player, "ygomc.pack.opened", cards.size());
         }
@@ -180,7 +180,7 @@ public final class PackOpening {
             opened.add(ref);
         }
         if (!opened.isEmpty()) {
-            PackNet.send(player, opened);
+            PackNet.send(player, opened, boosterKey(box.booster()), faceUrl(box.booster()));
         }
         tell(player, intoCards ? "ygomc.box.opened_cards" : "ygomc.box.opened", box.packs());
         return true;
@@ -269,4 +269,20 @@ public final class PackOpening {
     private static void tell(ServerPlayer player, String key, Object... args) {
         player.displayClientMessage(Component.translatable(key, args), true);
     }
+
+    private static ResourceLocation boosterKey(Holder<BoosterDef> booster) {
+        if (booster == null || !booster.isBound()) {
+            return null;
+        }
+        return booster.unwrapKey().map(key -> key.location()).orElse(null);
+    }
+
+    private static String faceUrl(Holder<BoosterDef> booster) {
+        if (booster == null || !booster.isBound()) {
+            return "";
+        }
+        return booster.value().display().face().orElse("");
+    }
+
+
 }
