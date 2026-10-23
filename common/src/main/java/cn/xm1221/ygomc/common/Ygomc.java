@@ -4,6 +4,7 @@ import cn.xm1221.ygomc.common.card.CardComponents;
 import cn.xm1221.ygomc.common.command.YgomcCommand;
 import cn.xm1221.ygomc.common.duel.DuelConfig;
 import cn.xm1221.ygomc.common.duel.DuelRoom;
+import cn.xm1221.ygomc.common.duel.DuelTables;
 import cn.xm1221.ygomc.common.net.CollectionNet;
 import cn.xm1221.ygomc.common.net.YgomcNet;
 import cn.xm1221.ygomc.common.data.DataPacks;
@@ -81,6 +82,8 @@ public final class Ygomc {
         // 收到应答后交给哪个房间。放在这里而不是 DuelRoom 的静态块里：
         // 静态块什么时候被触发不好预测，而「没接上」的症状是应答被静默丢弃。
         DuelRoom.registerAnswerSink();
+        // 决斗台的候场表。下线与停服时清掉「谁在等」，免得拆了世界还占着那一格。
+        DuelTables.init();
 
         // 数据包不是加载的前提（缺文件是正常情况），这里只是让状态在日志里可见。
         DataPacks.init();

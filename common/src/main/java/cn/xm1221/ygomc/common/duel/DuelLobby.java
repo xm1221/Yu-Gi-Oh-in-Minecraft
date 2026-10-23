@@ -53,6 +53,37 @@ public final class DuelLobby {
         return INVITES.get(player.getUUID());
     }
 
+    /** 这位玩家选好的对战卡组；还没选是 {@code null}。 */
+    public static Seat selected(UUID player) {
+        return DECKS.get(player);
+    }
+
+    /**
+     * 写入对战卡组，不发聊天。
+     *
+     * <p>决斗台自己有一句候场/开局的话，再叠一条「卡组已选」会抢在它前面
+     * （{@link #chooseDeck} 的发言要排回主线程，而台子的话是当场说的）。
+     * 卡组盒和指令仍走会发言的 {@link #selectDeck} / {@link #chooseDeck}。
+     *
+     * @return 失败原因；成功是 {@code null}
+     */
+    public static String storeDeck(ServerPlayer player, DeckData deck, String label) {
+        if (DuelRoom.isDueling(player)) {
+            return "对局进行中，卡组不能改";
+        }
+        DeckValidator.Report report = DeckValidator.validate(deck, DataPacks.get());
+        if (!report.ok()) {
+            return "「" + label + "」不能用于开局：\n" + report.describe();
+        }
+        DECKS.put(player.getUUID(), new Seat(loadout(deck), label));
+        return null;
+    }
+
+    /** 开局之后丢掉「这一局用哪副」。下一局要重新选，不能悄悄沿用。 */
+    public static void clearDeck(UUID player) {
+        DECKS.remove(player);
+    }
+
     /**
      * 把一副卡组设为对战用。校验不过就不开局资格，原选择保留。
      *

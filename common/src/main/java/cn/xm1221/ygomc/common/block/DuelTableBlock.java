@@ -1,11 +1,15 @@
 package cn.xm1221.ygomc.common.block;
 
+import cn.xm1221.ygomc.common.duel.DuelDiskHooks;
+import cn.xm1221.ygomc.common.duel.DuelTables;
 import com.mojang.serialization.MapCodec;
 import net.minecraft.core.BlockPos;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.ItemInteractionResult;
 import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
@@ -15,18 +19,19 @@ import net.minecraft.world.phys.BlockHitResult;
 /**
  * 决斗台（固定在场上的决斗场地）。
  *
- * <h2>为什么既有决斗盘又有决斗台</h2>
- * 两者是同一个 {@code DuelRoom} 的两个入口：决斗盘是「随身带着、见到谁就跟谁打」，
- * 决斗台是「摆在场景里的一处场地」——服务器大厅、剧情关卡、观众围观都用它。
- * 台子本身<b>不持有任何对局状态</b>（不存玩家、不存房间），
- * 它只是个「点击起点」：真正的房间由服务端管理器创建，
- * 这样台子可以被随意破坏/搬运而不影响正在进行的对局。
+ * <p>台子本身不写方块实体。谁在等、谁正在打，记在 {@link DuelTables} 里，
+ * 按维度和坐标分开，所以两台可以各开一局。真正的对局仍由 {@code DuelRoom} 跑。
+ * 拆掉台子只丢掉这一格的候场，不中止已经开始的对局。
  *
- * <h2>1.21 的方块交互被拆成了两个回调</h2>
- * 1.21 以前只有一个 {@code use}；现在拆成
- * {@link #useWithoutItem}（空手右键）与 {@link #useItemOn}（手持物品右键），
- * 因为原版需要区分「物品要起作用」与「只是按一下方块」。这里两个都留了实现位置：
- * 手持卡组盒点台子、与空手点台子都可能是有效动作。
+ * <h2>右键</h2>
+ * <ul>
+ *   <li>空台：坐下等对手。潜行则用已选卡组对人机开局（和 {@code /ygomc duel} 同一条路）。</li>
+ *   <li>已经有人候场：另一个人右键加入；候场的人再点一次离开，潜行则改成人机。</li>
+ *   <li>这一格正在打，而且点的人是参与者：客户端把对局界面拉回来。</li>
+ *   <li>旁观，或自己已经有别的局：只发一句说明。</li>
+ * </ul>
+ * 手持卡组盒点台子，先把那副卡组写成对战卡组。潜行手里拿着方块时让路，
+ * 方便把方块贴着台子放下去。
  */
 public class DuelTableBlock extends Block {
 
@@ -42,7 +47,6 @@ public class DuelTableBlock extends Block {
      * {@code simpleCodec(DuelTableBlock::new)} 这类真实编解码，
      * 否则数据包无法描述这个方块。
      */
-    // TODO(M2): 若加入方块状态（朝向 / 是否被占用），同步实现 codec() 与 createBlockStateDefinition。
     @Override
     protected MapCodec<? extends Block> codec() {
         return super.codec();
@@ -55,20 +59,48 @@ public class DuelTableBlock extends Block {
      * 它多携带一个「手上的物品是否发生变化」的信息，原版据此决定要不要给客户端
      * 回发物品更新。用错类型会导致客户端手里的物品显示与服务端不同步。
      */
-    // TODO(M2): 手持卡组盒点台子 = 用这副卡组开局；手持决斗盘点台子 = 加入等待中的房间。
     @Override
     protected ItemInteractionResult useItemOn(ItemStack stack, BlockState state, Level level, BlockPos pos,
                                              Player player, InteractionHand hand, BlockHitResult hitResult) {
-        return super.useItemOn(stack, state, level, pos, player, hand, hitResult);
+        if (player.isShiftKeyDown() && stack.getItem() instanceof BlockItem) {
+            return ItemInteractionResult.PASS_TO_DEFAULT_BLOCK_INTERACTION;
+        }
+        if (level.isClientSide()) {
+            // 参与者把界面拉回来。是不是这一格的人，服务端会再判；
+            // 客户端没有台子占用表，只能先按「自己有没有一局」来拉。
+            DuelDiskHooks.reopenScreen();
+            return ItemInteractionResult.SUCCESS;
+        }
+        if (player instanceof ServerPlayer server) {
+            DuelTables.interact(server, level, pos, hand);
+        }
+        return ItemInteractionResult.SUCCESS;
     }
 
     /**
-     * 空手右键决斗台。
+     * 空手右键，以及主手潜行拿着方块时 {@link #useItemOn} 让路之后的默认交互。
      */
-    // TODO(M2): 空手右键 = 查看该台子当前房间状态（谁在打、观众几人）；无房间时提示如何开局。
     @Override
     protected InteractionResult useWithoutItem(BlockState state, Level level, BlockPos pos,
                                                Player player, BlockHitResult hitResult) {
-        return super.useWithoutItem(state, level, pos, player, hitResult);
+        if (player.isShiftKeyDown() && player.getMainHandItem().getItem() instanceof BlockItem) {
+            return InteractionResult.PASS;
+        }
+        if (level.isClientSide()) {
+            DuelDiskHooks.reopenScreen();
+            return InteractionResult.SUCCESS;
+        }
+        if (player instanceof ServerPlayer server) {
+            DuelTables.interact(server, level, pos, InteractionHand.MAIN_HAND);
+        }
+        return InteractionResult.SUCCESS;
+    }
+
+    @Override
+    protected void onRemove(BlockState state, Level level, BlockPos pos, BlockState newState, boolean movedByPiston) {
+        if (!state.is(newState.getBlock())) {
+            DuelTables.release(level, pos);
+        }
+        super.onRemove(state, level, pos, newState, movedByPiston);
     }
 }
