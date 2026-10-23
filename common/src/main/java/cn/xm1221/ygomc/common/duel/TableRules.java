@@ -39,6 +39,8 @@ public final class TableRules {
         BUSY,
         /** 候场的人已经不在线。 */
         HOST_OFFLINE,
+        /** 候场的人已经用别的入口开了局。这一席该腾出来，不能再加入。 */
+        HOST_STARTED,
         /** 点的人还没选卡组。 */
         NEED_MY_DECK,
         /** 候场的人还没选卡组。 */
@@ -54,10 +56,11 @@ public final class TableRules {
      * @param myDeck               点的人已经选了卡组
      * @param hostDeck             候场的人已经选了卡组；空台时无意义
      * @param sneak                这一下是不是潜行
+     * @param hostDueling          候场的人自己已经有一局（例如用指令或决斗盘开的）
      */
     public record View(Phase phase, boolean clickerIsHost, boolean clickerIsParticipant,
                        boolean clickerDueling, boolean hostOnline, boolean myDeck,
-                       boolean hostDeck, boolean sneak) {
+                       boolean hostDeck, boolean sneak, boolean hostDueling) {
     }
 
     private TableRules() {
@@ -79,6 +82,9 @@ public final class TableRules {
         if (v.phase == Phase.WAITING) {
             if (!v.clickerIsHost && !v.hostOnline) {
                 return Action.HOST_OFFLINE;
+            }
+            if (!v.clickerIsHost && v.hostDueling) {
+                return Action.HOST_STARTED;
             }
             if (v.clickerIsHost) {
                 if (!v.sneak) {

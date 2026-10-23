@@ -1,5 +1,6 @@
 package cn.xm1221.ygomc.common.block;
 
+import cn.xm1221.ygomc.common.deck.DeckBoxItem;
 import cn.xm1221.ygomc.common.duel.DuelDiskHooks;
 import cn.xm1221.ygomc.common.duel.DuelTables;
 import com.mojang.serialization.MapCodec;
@@ -79,6 +80,9 @@ public class DuelTableBlock extends Block {
 
     /**
      * 空手右键，以及主手潜行拿着方块时 {@link #useItemOn} 让路之后的默认交互。
+     *
+     * <p>主手空着时，原版不会再拿副手去点方块：这一下已经在这里返回成功。
+     * 副手的卡组盒要在这里读，否则空主手加副手卡组盒选不上卡组。
      */
     @Override
     protected InteractionResult useWithoutItem(BlockState state, Level level, BlockPos pos,
@@ -91,9 +95,20 @@ public class DuelTableBlock extends Block {
             return InteractionResult.SUCCESS;
         }
         if (player instanceof ServerPlayer server) {
-            DuelTables.interact(server, level, pos, InteractionHand.MAIN_HAND);
+            DuelTables.interact(server, level, pos, deckHand(player));
         }
         return InteractionResult.SUCCESS;
+    }
+
+    /** 主手是卡组盒就用主手；主手不是、副手是，才读副手。 */
+    private static InteractionHand deckHand(Player player) {
+        if (player.getMainHandItem().getItem() instanceof DeckBoxItem) {
+            return InteractionHand.MAIN_HAND;
+        }
+        if (player.getOffhandItem().getItem() instanceof DeckBoxItem) {
+            return InteractionHand.OFF_HAND;
+        }
+        return InteractionHand.MAIN_HAND;
     }
 
     @Override

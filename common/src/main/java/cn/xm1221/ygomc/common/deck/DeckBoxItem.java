@@ -73,10 +73,10 @@ public class DeckBoxItem extends Item {
                 DeckData deck = ender
                         ? PlayerCollections.get(serverPlayer).deck(serverPlayer.getUUID()).toDeckData()
                         : cards(stack).toDeckData();
-                String label = ender ? "末影卡盒" : "卡组盒";
-                String problem = DuelLobby.selectDeck(serverPlayer, deck, label);
+                String label = ender ? "item.ygomc.ender_deck_box" : "item.ygomc.deck_box";
+                Component problem = DuelLobby.selectDeck(serverPlayer, deck, label, true);
                 if (problem != null) {
-                    serverPlayer.displayClientMessage(Component.literal(problem), false);
+                    serverPlayer.displayClientMessage(problem, false);
                 }
             }
             return InteractionResultHolder.sidedSuccess(stack, level.isClientSide());

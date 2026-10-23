@@ -35,8 +35,38 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public final class DuelLobby {
 
-    /** 某位玩家选的卡组。 */
-    public record Seat(OcgDuel.DeckLoadout loadout, String label) {
+    /**
+     * 某位玩家选的卡组。
+     *
+     * @param labelKey 为真时 {@code label} 是语言键（卡组盒的物品名），界面上要再翻译一次
+     */
+    public record Seat(OcgDuel.DeckLoadout loadout, String label, boolean labelKey) {
+        public Seat(OcgDuel.DeckLoadout loadout, String label) {
+            this(loadout, label, false);
+        }
+
+        /** 发给客户端的名字。语言键留到客户端翻，卡组名原样显示。 */
+        public Component labelText() {
+            if (label == null || label.isEmpty()) {
+                return Component.literal("");
+            }
+            return labelKey ? Component.translatable(label) : Component.literal(label);
+        }
+
+        /**
+         * 嵌进仍是中文的指令句。卡组盒的键在服务端翻不出来，这里用和语言文件一致的中文名，
+         * 避免句子里露出 {@code item.ygomc.*}。
+         */
+        public String labelPlain() {
+            if (!labelKey || label == null) {
+                return label == null ? "" : label;
+            }
+            return switch (label) {
+                case "item.ygomc.ender_deck_box" -> "末影卡盒";
+                case "item.ygomc.deck_box" -> "卡组盒";
+                default -> label;
+            };
+        }
     }
 
     /** 玩家 UUID → 他选的卡组。 */
@@ -65,17 +95,19 @@ public final class DuelLobby {
      * （{@link #chooseDeck} 的发言要排回主线程，而台子的话是当场说的）。
      * 卡组盒和指令仍走会发言的 {@link #selectDeck} / {@link #chooseDeck}。
      *
+     * @param labelKey {@code label} 是语言键，而不是已经写好的卡组名
      * @return 失败原因；成功是 {@code null}
      */
-    public static String storeDeck(ServerPlayer player, DeckData deck, String label) {
+    public static Component storeDeck(ServerPlayer player, DeckData deck, String label, boolean labelKey) {
         if (DuelRoom.isDueling(player)) {
-            return "对局进行中，卡组不能改";
+            return Component.translatable("ygomc.table.deck_locked");
         }
         DeckValidator.Report report = DeckValidator.validate(deck, DataPacks.get());
         if (!report.ok()) {
-            return "「" + label + "」不能用于开局：\n" + report.describe();
+            Component name = labelKey ? Component.translatable(label) : Component.literal(label);
+            return Component.translatable("ygomc.table.deck_rejected", name, Component.literal(report.describe()));
         }
-        DECKS.put(player.getUUID(), new Seat(loadout(deck), label));
+        DECKS.put(player.getUUID(), new Seat(loadout(deck), label, labelKey));
         return null;
     }
 
@@ -89,24 +121,32 @@ public final class DuelLobby {
      *
      * @return 失败原因；成功是 {@code null}
      */
-    public static String selectDeck(ServerPlayer player, DeckData deck, String label) {
+    public static Component selectDeck(ServerPlayer player, DeckData deck, String label, boolean labelKey) {
         DeckValidator.Report report = DeckValidator.validate(deck, DataPacks.get());
         if (!report.ok()) {
-            return "「" + label + "」不能用于开局：\n" + report.describe();
+            Component name = labelKey ? Component.translatable(label) : Component.literal(label);
+            return Component.translatable("ygomc.table.deck_rejected", name, Component.literal(report.describe()));
         }
-        chooseDeck(player, loadout(deck), label, report.warnings().size());
+        chooseDeck(player, loadout(deck), label, report.warnings().size(), labelKey);
         return null;
     }
 
     /** 选一副卡组（改主意就再选一次）。对局中途不许改。 */
     public static void chooseDeck(ServerPlayer player, OcgDuel.DeckLoadout loadout, String label,
                                   int warnings) {
+        chooseDeck(player, loadout, label, warnings, false);
+    }
+
+    /** @param labelKey {@code label} 是语言键。指令选的卡组名不是键。 */
+    public static void chooseDeck(ServerPlayer player, OcgDuel.DeckLoadout loadout, String label,
+                                  int warnings, boolean labelKey) {
         if (DuelRoom.isDueling(player)) {
-            say(player, "对局进行中，卡组不能改");
+            say(player, Component.translatable("ygomc.table.deck_locked"));
             return;
         }
-        DECKS.put(player.getUUID(), new Seat(loadout, label));
-        say(player, "双人局卡组已选：「" + label + "」"
+        Seat seat = new Seat(loadout, label, labelKey);
+        DECKS.put(player.getUUID(), seat);
+        say(player, "双人局卡组已选：「" + seat.labelPlain() + "」"
                 + (warnings > 0 ? "（有 " + warnings + " 项提示）" : ""));
     }
 
@@ -125,7 +165,7 @@ public final class DuelLobby {
         Seat mine = DECKS.get(from.getUUID());
         say(to, Component.translatable("ygomc.lobby.invited", from.getName().getString(),
                 mine == null ? Component.translatable("ygomc.lobby.no_deck_yet")
-                        : Component.translatable("ygomc.lobby.picked", mine.label())));
+                        : Component.translatable("ygomc.lobby.picked", mine.labelText())));
         return "已邀请 " + to.getName().getString() + "。双方潜行右键卡组盒选定卡组后，由对方拿决斗盘接受。";
     }
 
@@ -162,10 +202,10 @@ public final class DuelLobby {
         // 留着会让下一局悄悄沿用上一局的卡组，看起来像「换的卡组没生效」。
         DECKS.remove(inviter.getUUID());
         DECKS.remove(me.getUUID());
-        say(inviter, "对局开始：你「" + his.label() + "」对 " + me.getName().getString()
-                + "「" + mine.label() + "」");
-        return "对局开始：你「" + mine.label() + "」对 " + inviter.getName().getString()
-                + "「" + his.label() + "」";
+        say(inviter, "对局开始：你「" + his.labelPlain() + "」对 " + me.getName().getString()
+                + "「" + mine.labelPlain() + "」");
+        return "对局开始：你「" + mine.labelPlain() + "」对 " + inviter.getName().getString()
+                + "「" + his.labelPlain() + "」";
     }
 
     private static String inviteMessage(LobbyRules.Blocker blocker, ServerPlayer to) {
@@ -199,7 +239,7 @@ public final class DuelLobby {
     public static String describe(ServerPlayer player) {
         Seat seat = DECKS.get(player.getUUID());
         UUID inviter = INVITES.get(player.getUUID());
-        return "候场：卡组 " + (seat == null ? "未选" : "「" + seat.label() + "」")
+        return "候场：卡组 " + (seat == null ? "未选" : "「" + seat.labelPlain() + "」")
                 + "，邀请 " + (inviter == null ? "无" : inviter.toString());
     }
 

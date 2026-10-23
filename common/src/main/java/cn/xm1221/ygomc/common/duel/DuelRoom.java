@@ -210,6 +210,7 @@ public final class DuelRoom implements OcgDuel.Observer {
             ACTIVE.remove(player.getUUID());
             return "开局失败：" + e.getMessage();
         }
+        DuelTables.releaseWaiting(player.getUUID());
         return null;
     }
 
@@ -262,6 +263,8 @@ public final class DuelRoom implements OcgDuel.Observer {
             ACTIVE.remove(second.getUUID());
             return "开局失败：" + e.getMessage();
         }
+        DuelTables.releaseWaiting(first.getUUID());
+        DuelTables.releaseWaiting(second.getUUID());
         return null;
     }
 

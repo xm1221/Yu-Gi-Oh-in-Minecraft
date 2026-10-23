@@ -68,9 +68,9 @@ public final class DuelTables {
      */
     public static void interact(ServerPlayer player, Level level, BlockPos pos, InteractionHand hand) {
         if (!DuelRoom.isDueling(player)) {
-            String rejected = takeHeldDeck(player, hand);
+            Component rejected = takeHeldDeck(player, hand);
             if (rejected != null) {
-                say(player, Component.literal(rejected));
+                say(player, rejected);
                 return;
             }
         }
@@ -83,6 +83,7 @@ public final class DuelTables {
         ServerPlayer waiting = hostPlayer(player, binding);
         DuelLobby.Seat mine = DuelLobby.selected(id);
         DuelLobby.Seat theirs = waiting == null ? null : DuelLobby.selected(waiting.getUUID());
+        boolean hostDueling = waiting != null && DuelRoom.isDueling(waiting);
 
         TableRules.Action action = TableRules.decide(new TableRules.View(
                 live ? TableRules.Phase.LIVE : binding == null ? TableRules.Phase.EMPTY : TableRules.Phase.WAITING,
@@ -92,7 +93,8 @@ public final class DuelTables {
                 waiting != null,
                 mine != null,
                 theirs != null,
-                player.isShiftKeyDown()));
+                player.isShiftKeyDown(),
+                hostDueling));
 
         switch (action) {
             case SIT -> sit(player, key, mine);
@@ -118,6 +120,12 @@ public final class DuelTables {
                     releaseWaiting(key, binding.host);
                 }
                 say(player, Component.translatable("ygomc.table.host_gone"));
+            }
+            case HOST_STARTED -> {
+                if (binding != null && binding.host != null) {
+                    releaseWaiting(key, binding.host);
+                }
+                say(player, Component.translatable("ygomc.table.host_dueling"));
             }
             case NEED_MY_DECK -> say(player, Component.translatable("ygomc.table.need_deck"));
             case NEED_THEIR_DECK -> say(player, Component.translatable("ygomc.table.need_their_deck",
@@ -162,7 +170,7 @@ public final class DuelTables {
         if (mine == null) {
             say(player, Component.translatable("ygomc.table.waiting_need_deck"));
         } else {
-            say(player, Component.translatable("ygomc.table.waiting", mine.label()));
+            say(player, Component.translatable("ygomc.table.waiting", mine.labelText()));
         }
     }
 
@@ -181,7 +189,7 @@ public final class DuelTables {
         TABLES.put(key, binding);
         WAITING.remove(player.getUUID());
         say(player, Component.translatable("ygomc.table.started_solo",
-                mine.label(), mine.loadout().main().length, mine.loadout().extra().length));
+                mine.labelText(), mine.loadout().main().length, mine.loadout().extra().length));
     }
 
     private static void join(ServerPlayer player, Key key, ServerPlayer host,
@@ -201,9 +209,9 @@ public final class DuelTables {
         WAITING.remove(host.getUUID());
         WAITING.remove(player.getUUID());
         say(host, Component.translatable("ygomc.table.started_you",
-                theirs.label(), player.getName().getString(), mine.label()));
+                theirs.labelText(), player.getName().getString(), mine.labelText()));
         say(player, Component.translatable("ygomc.table.started_you",
-                mine.label(), host.getName().getString(), theirs.label()));
+                mine.labelText(), host.getName().getString(), theirs.labelText()));
     }
 
     /** 这个人若在别的台子上候场，先让出来。正在打的那一格不动。 */
@@ -212,6 +220,21 @@ public final class DuelTables {
         if (occupied != null && !occupied.equals(here)) {
             releaseWaiting(occupied, player.getUUID());
         }
+    }
+
+    /**
+     * 这个人若还在某台候场，把那一席腾出来。
+     * 指令或决斗盘开局成功时调用：席位不该继续显示「在等」，否则下一个人会去加入一场已经开始的对局。
+     */
+    public static void releaseWaiting(UUID player) {
+        if (player == null) {
+            return;
+        }
+        Key key = WAITING.get(player);
+        if (key == null) {
+            return;
+        }
+        releaseWaiting(key, player);
     }
 
     private static void releaseWaiting(Key key, UUID host) {
@@ -276,7 +299,7 @@ public final class DuelTables {
      *
      * @return 校验失败的原因；手里不是卡组盒，或写成功，都是 {@code null}
      */
-    private static String takeHeldDeck(ServerPlayer player, InteractionHand hand) {
+    private static Component takeHeldDeck(ServerPlayer player, InteractionHand hand) {
         ItemStack stack = player.getItemInHand(hand);
         if (!(stack.getItem() instanceof DeckBoxItem box)) {
             return null;
@@ -284,8 +307,8 @@ public final class DuelTables {
         var deck = box.ender()
                 ? PlayerCollections.get(player).deck(player.getUUID()).toDeckData()
                 : DeckBoxItem.cards(stack).toDeckData();
-        String label = box.ender() ? "末影卡盒" : "卡组盒";
-        return DuelLobby.storeDeck(player, deck, label);
+        String label = box.ender() ? "item.ygomc.ender_deck_box" : "item.ygomc.deck_box";
+        return DuelLobby.storeDeck(player, deck, label, true);
     }
 
     private static void say(Player player, Component message) {
