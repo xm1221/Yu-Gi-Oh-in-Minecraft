@@ -284,8 +284,9 @@ public final class DataPack implements Closeable {
      * {@code pics.bin}，而是单独一个 {@code back.jpg}——为一张 130 KB 的图
      * 去重打 334 MB 的卡图包不值得。
      *
-     * <p>读不到时返回 {@code null}，渲染端再退化成占位框。这是<b>预期情况</b>：
-     * 卡背是 KONAMI 的美术，和卡图一样不随模组分发，只从用户本地数据包读。
+     * <p>读不到时返回 {@code null}。这是<b>预期情况</b>：官方卡背不随模组分发。
+     * 客户端遇到 {@code null} 会改用模组自带的藏青金框牌背，而不是占位框，也不是这张卡的正面。
+     * 玩家若在数据包旁放了 {@code back.jpg}，仍然优先用那一张。
      * 只读一次并缓存——它是全局唯一的一份，没有 LRU 的必要。
      */
     public byte[] cardBack() {

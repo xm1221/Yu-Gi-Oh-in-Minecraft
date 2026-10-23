@@ -8,6 +8,7 @@ import com.mojang.blaze3d.platform.NativeImage;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.texture.DynamicTexture;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.server.packs.resources.Resource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -15,10 +16,12 @@ import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * 卡图贴图的按需解码与缓存：{@code pics.bin} 里的 JPEG → GPU 纹理。
@@ -98,6 +101,16 @@ public final class CardTextures {
     private static final ResourceLocation BACK_LOCATION =
             ResourceLocation.fromNamespaceAndPath("ygomc", PATH_PREFIX + "back");
 
+    /**
+     * 模组自带牌背。数据包没有 {@code back.jpg} 时用这一张，
+     * 手持卡和 {@link CardArt#drawBack} 都走 {@link #back()}，所以两边一起修好。
+     *
+     * <p>图案沿用物品图标 {@code textures/item/card.png} 的藏青底、金框和蓝宝石，
+     * 画成 200×290，和 FULL 卡面同比例。不是 KONAMI 的卡背，也不从网上下载。
+     */
+    private static final ResourceLocation BUNDLED_BACK =
+            ResourceLocation.fromNamespaceAndPath("ygomc", "textures/card/back.png");
+
     private static ResourceLocation backLocation;
     private static int backWidth;
     private static int backHeight;
@@ -165,10 +178,13 @@ public final class CardTextures {
      * 卡背纹理位置。
      *
      * <p>它<b>不</b>进 LRU：全局只有这一张，淘汰它没有任何收益，
-     * 而重新加载要多走一次文件 I/O 加解码。所以只在第一次调用时尝试加载，
-     * 读不到就永远返回 {@code null}，不会每次调用都去碰磁盘。
+     * 而重新加载要多走一次文件 I/O 加解码。所以只在第一次调用时尝试加载。
      *
-     * <p>没有数据组件、卡号查不到、或者这张卡在数据包里没图的，都回退到这里。
+     * <p>优先用数据包里的 {@code back.jpg}（玩家自己的牌背）。没有，或者那张图解不出来，
+     * 就用模组自带的 {@link #BUNDLED_BACK}。两种结果都不是正面 JPEG：
+     * 有正面图的卡，背面必须是牌背。
+     *
+     * <p>没有数据组件、卡号查不到、或者这张卡在数据包里没图的，正面也回退到这里。
      */
     public static ResourceLocation back() {
         if (backTried) {
@@ -176,22 +192,48 @@ public final class CardTextures {
         }
         backTried = true;
         byte[] jpeg = DataPacks.get().cardBack();
-        if (jpeg == null || jpeg.length == 0) {
-            // 这不是错误：卡背是 KONAMI 的美术，不随模组分发。
-            LOGGER.info("数据包里没有卡背（{} 缺失），缺图与无组件的卡会显示占位框",
-                    DataPack.BACK_FILE);
-            return null;
+        if (jpeg != null && jpeg.length > 0) {
+            NativeImage image = decode(jpeg, 0, -1);
+            if (image != null) {
+                DynamicTexture texture = new DynamicTexture(image);
+                Minecraft.getInstance().getTextureManager().register(BACK_LOCATION, texture);
+                backLocation = BACK_LOCATION;
+                backWidth = image.getWidth();
+                backHeight = image.getHeight();
+                return backLocation;
+            }
         }
-        NativeImage image = decode(jpeg, 0, -1);
-        if (image == null) {
-            return null;
+        // 官方卡背不随模组分发。自带的这张是图标同款的藏青金框，不是正面图。
+        if (useBundledBack()) {
+            LOGGER.info("数据包里没有可用的卡背（{} 缺失或无法解码），使用模组自带牌背 {}",
+                    DataPack.BACK_FILE, BUNDLED_BACK);
+            return backLocation;
         }
-        DynamicTexture texture = new DynamicTexture(image);
-        Minecraft.getInstance().getTextureManager().register(BACK_LOCATION, texture);
-        backLocation = BACK_LOCATION;
-        backWidth = image.getWidth();
-        backHeight = image.getHeight();
-        return backLocation;
+        LOGGER.warn("数据包里没有卡背，模组自带牌背也读不到，缺图会显示占位框");
+        return null;
+    }
+
+    /** 把模组资源里的牌背记成当前卡背。读不到文件时返回 false，不改 {@link #backLocation}。 */
+    private static boolean useBundledBack() {
+        Optional<Resource> resource = Minecraft.getInstance().getResourceManager().getResource(BUNDLED_BACK);
+        if (resource.isEmpty()) {
+            return false;
+        }
+        try (InputStream in = resource.get().open(); NativeImage image = NativeImage.read(in)) {
+            backWidth = image.getWidth();
+            backHeight = image.getHeight();
+        } catch (IOException | RuntimeException e) {
+            LOGGER.warn("模组自带牌背读取失败 {}: {}", BUNDLED_BACK, e.toString());
+            return false;
+        }
+        if (backWidth <= 0 || backHeight <= 0) {
+            backWidth = 0;
+            backHeight = 0;
+            return false;
+        }
+        // 不注册 DynamicTexture：这是资源包里的普通 PNG，渲染时按资源位置绑定。
+        backLocation = BUNDLED_BACK;
+        return true;
     }
 
     /** 卡背的像素宽度；没加载到卡背时返回 0。 */
@@ -234,11 +276,12 @@ public final class CardTextures {
         }
         CACHE.clear();
         PENDING_RELEASE.clear();
-        // 卡背也要重置，否则重载后 backTried 会让我们一直用着已释放的纹理。
-        if (backLocation != null) {
+        // 只有数据包那张是我们注册的 DynamicTexture，要还掉显存。
+        // 模组自带牌背是资源包 PNG，没在这里注册，release 会把它从贴图管理器里摘掉。
+        if (BACK_LOCATION.equals(backLocation)) {
             Minecraft.getInstance().getTextureManager().release(backLocation);
-            backLocation = null;
         }
+        backLocation = null;
         backTried = false;
         backWidth = 0;
         backHeight = 0;

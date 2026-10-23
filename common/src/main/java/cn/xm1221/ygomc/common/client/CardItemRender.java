@@ -33,7 +33,15 @@ public final class CardItemRender {
 
     private CardItemRender() {}
 
-    /** 卡面高度占多少个方块。宽度按卡图长宽比推出来，免得拉扁。 */
+    /**
+     * 进显示变换之前的卡面高度，单位是方块。宽度仍按卡图长宽比推，不在这里改比例。
+     *
+     * <p>GUI 把 1 个方块画成 16 像素，所以 0.9 大约是 14 像素高，物品栏和快捷栏还能看清字样。
+     * 手持、掉落、头上、物品展示框的缩小不写在这里：那些档位的旋转、平移和缩放在
+     * {@code assets/ygomc/models/item/card.json} 的 {@code display} 里，原版
+     * {@code ItemRenderer} 会在调用本方法<b>之前</b>乘到 pose 上。这里再缩一次就会缩两遍。
+     * 按 0.9 的底尺寸，第一人称约 0.34 格高，第三人称约 0.29 格高，掉落约 0.32 格高。
+     */
     private static final float CARD_HEIGHT = 0.9F;
 
     /** 标准卡面长宽（200:290，与 {@code pics.bin} 的 FULL 档一致）。 */
@@ -47,9 +55,9 @@ public final class CardItemRender {
     /**
      * 在当前 pose 下画一个卡牌物品。
      *
-     * @param context 显示档位（GUI / 手持 / 掉落…）。
-     *                <b>当前没有拿它做任何事</b>——显示变换还没有逐档适配。
-     *                留着这个参数是因为那件事迟早要做，而改签名会同时牵动两个平台的调用点。
+     * @param context 显示档位（GUI / 手持 / 掉落…）。各档的缩放和朝向已经由物品模型的
+     *                {@code display} 写进这个 pose，本方法不再改它，避免和模型叠两次。
+     *                参数留在签名里是因为两个平台的调用点都要按原版 {@code renderByItem} 传进来。
      */
     public static void render(ItemStack stack, ItemDisplayContext context, PoseStack pose,
                               MultiBufferSource buffers, int light, int overlay) {
@@ -75,9 +83,8 @@ public final class CardItemRender {
         if (frontTex == null) {
             return;
         }
-        if (backTex == null) {
-            backTex = frontTex;
-        }
+        // 正面有图时，缺牌背也不许改贴正面。两面都是卡图，玩家会以为牌背没做。
+        // 数据包没有 back.jpg 时 CardTextures.back() 会落到模组自带牌背；这里只是守住那条线。
 
         CardPlate plate = CardPlate.of(CARD_HEIGHT, CardPlate.THICKNESS, aspectW, aspectH);
 
@@ -90,6 +97,9 @@ public final class CardItemRender {
                 case BACK -> backTex;
                 case EDGE -> WHITE;
             };
+            if (texture == null) {
+                continue;
+            }
             RenderType type = quad.material() == CardPlate.Material.EDGE
                     ? RenderType.entitySolid(texture)
                     : RenderType.entityCutout(texture);
