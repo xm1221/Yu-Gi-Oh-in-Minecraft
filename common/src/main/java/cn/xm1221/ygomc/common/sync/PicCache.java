@@ -212,7 +212,7 @@ public final class PicCache {
         options.maxBytes = settings.maxPicBytes();
         options.etagStore = CacheLayout.etag(Platform.getGameFolder());
         java.util.List<String> urls = new java.util.ArrayList<>();
-        for (String pattern : pins.pics.urls) {
+        for (String pattern : SyncUrls.resolve(Platform.getGameFolder(), settings, SyncUrls.Key.PICS, pins.pics.urls)) {
             urls.add(pattern.replace("{code}", Integer.toUnsignedString(code)));
         }
         pace();

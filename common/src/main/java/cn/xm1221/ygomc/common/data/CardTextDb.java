@@ -91,7 +91,10 @@ public final class CardTextDb {
      * @throws IOException 文件缺失、魔数不符、是旧版格式、版本不符或长度不自洽
      */
     public static CardTextDb load(Path file) throws IOException {
-        byte[] all = Files.readAllBytes(file);
+        return decode(Files.readAllBytes(file), file.toString());
+    }
+
+    public static CardTextDb decode(byte[] all, String label) throws IOException {
         ByteBuffer bb = ByteBuffer.wrap(all).order(ByteOrder.LITTLE_ENDIAN);
 
         byte[] magic = new byte[8];
@@ -99,11 +102,11 @@ public final class CardTextDb {
         if (Arrays.equals(magic, OLD_MAGIC)) {
             // 不静默降级：静默降级的症状是「所有效果名都显示编号」+ 卡文全空，
             // 而那是最难被联想到数据层的一类故障。宁可起不来。
-            throw new IOException(file + " 是旧版 texts.bin（魔数 YGOMCTX1，当前需要 YGOMCTX2）。"
+            throw new IOException(label + " 是旧版 texts.bin（魔数 YGOMCTX1，当前需要 YGOMCTX2）。"
                     + "请重跑 tools/mkdatapack.py 重新生成数据包");
         }
         if (!Arrays.equals(magic, MAGIC)) {
-            throw new IOException(file + " 不是 texts.bin（魔数不符）");
+            throw new IOException(label + " 不是 texts.bin（魔数不符）");
         }
         int version = bb.getInt();
         int count = bb.getInt();

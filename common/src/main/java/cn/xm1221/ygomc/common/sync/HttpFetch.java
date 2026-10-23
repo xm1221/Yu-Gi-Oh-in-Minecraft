@@ -68,6 +68,12 @@ public final class HttpFetch {
         public String expectedSha256;
         public Path etagStore;
         public int maxRedirects = 2;
+        /** 正文读到一块就回调一次。{@code total} 未知时为 -1。 */
+        public Progress progress;
+    }
+
+    public interface Progress {
+        void onBytes(long done, long total);
     }
 
     public static final class Result {
@@ -206,7 +212,8 @@ public final class HttpFetch {
                 Path partial = destination.resolveSibling(destination.getFileName() + ".partial");
                 try {
                     Files.createDirectories(destination.getParent());
-                    String hash = writeBody(response.body(), partial, declared, options.maxBytes, readTimeout);
+                    String hash = writeBody(response.body(), partial, declared, options.maxBytes, readTimeout,
+                            options.progress);
                     if (options.expectedSha256 != null && !options.expectedSha256.isBlank()
                             && !Digests.hexEquals(options.expectedSha256, hash)) {
                         Files.deleteIfExists(partial);
@@ -248,9 +255,10 @@ public final class HttpFetch {
     }
 
     private static String writeBody(InputStream in, Path partial, long declared, long maxBytes,
-                                    Duration readTimeout) throws IOException {
+                                    Duration readTimeout, Progress progress) throws IOException {
         MessageDigest digest = Digests.newDigest();
         long total = 0;
+        long reported = 0;
         long deadline = System.nanoTime() + readTimeout.toNanos();
         AtomicBoolean timedOut = new AtomicBoolean();
         // request timeout 在响应头到达时就被 JDK 取消，慢速正文要自己掐。
@@ -283,6 +291,13 @@ public final class HttpFetch {
                     }
                     digest.update(buf, 0, n);
                     out.write(buf, 0, n);
+                    if (progress != null && (reported == 0 || total - reported >= 256 * 1024)) {
+                        reported = total;
+                        progress.onBytes(total, declared);
+                    }
+                }
+                if (progress != null) {
+                    progress.onBytes(total, declared);
                 }
             }
             if (declared >= 0 && total != declared) {

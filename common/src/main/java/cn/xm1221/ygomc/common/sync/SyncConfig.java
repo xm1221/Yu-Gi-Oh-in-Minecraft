@@ -22,6 +22,12 @@ public class SyncConfig implements ConfigData {
     public int timeoutSeconds = 30;
     public int maxPicBytes = 2_000_000;
     public boolean allowReplaceNewerLocal = false;
+    public boolean urlPrepend = false;
+    public java.util.List<String> cardsCdbUrls = new java.util.ArrayList<>();
+    public java.util.List<String> stringsConfUrls = new java.util.ArrayList<>();
+    public java.util.List<String> scriptUrls = new java.util.ArrayList<>();
+    public java.util.List<String> setUrls = new java.util.ArrayList<>();
+    public java.util.List<String> picUrls = new java.util.ArrayList<>();
 
     private static ConfigHolder<SyncConfig> holder;
 
@@ -44,6 +50,12 @@ public class SyncConfig implements ConfigData {
         settings.timeoutSeconds = raw.timeoutSeconds;
         settings.maxPicBytes = raw.maxPicBytes;
         settings.allowReplaceNewerLocal = raw.allowReplaceNewerLocal;
+        settings.urlPrepend = raw.urlPrepend;
+        settings.cardsCdbUrls = raw.cardsCdbUrls;
+        settings.stringsConfUrls = raw.stringsConfUrls;
+        settings.scriptUrls = raw.scriptUrls;
+        settings.setUrls = raw.setUrls;
+        settings.picUrls = raw.picUrls;
         return settings;
     }
 }

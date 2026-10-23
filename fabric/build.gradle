@@ -42,6 +42,7 @@ dependencies {
     // 开发运行走 runtime；发行 jar 把同一份库折进 shadow。module-info 不能跟 NeoForge 生成的模块描述撞在一起。
     def sqlite = "org.xerial:sqlite-jdbc:$rootProject.sqlite_jdbc_version"
     runtimeOnly sqlite
+    localRuntime sqlite
     shadowBundle sqlite
 }
 

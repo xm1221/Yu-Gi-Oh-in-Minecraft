@@ -86,13 +86,16 @@ public final class StringsDb {
      * @throws IOException 文件缺失、魔数不符、版本不符、长度不自洽或某节 id 未升序
      */
     public static StringsDb load(Path file) throws IOException {
-        byte[] all = Files.readAllBytes(file);
+        return decode(Files.readAllBytes(file), file.toString());
+    }
+
+    public static StringsDb decode(byte[] all, String label) throws IOException {
         ByteBuffer bb = ByteBuffer.wrap(all).order(ByteOrder.LITTLE_ENDIAN);
 
         byte[] magic = new byte[8];
         bb.get(magic);
         if (!Arrays.equals(magic, MAGIC)) {
-            throw new IOException(file + " 不是 strings.bin（魔数不符）。"
+            throw new IOException(label + " 不是 strings.bin（魔数不符）。"
                     + "请重跑 tools/mkdatapack.py 重新生成数据包");
         }
         int version = bb.getInt();

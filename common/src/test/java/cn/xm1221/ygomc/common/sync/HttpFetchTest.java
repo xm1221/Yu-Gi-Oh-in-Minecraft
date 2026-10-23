@@ -58,6 +58,34 @@ class HttpFetchTest {
     }
 
     @Test
+    void progressReportsBytesAndLength() throws Exception {
+        byte[] body = "ygomc-progress".getBytes(StandardCharsets.UTF_8);
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/body", exchange -> {
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
+        server.start();
+        try {
+            Path dest = Files.createTempDirectory("ygomc-progress").resolve("file.bin");
+            HttpFetch.Options options = options();
+            java.util.concurrent.atomic.AtomicLong seenDone = new java.util.concurrent.atomic.AtomicLong(-1);
+            java.util.concurrent.atomic.AtomicLong seenTotal = new java.util.concurrent.atomic.AtomicLong(-2);
+            options.progress = (done, total) -> {
+                seenDone.set(done);
+                seenTotal.set(total);
+            };
+            HttpFetch.Result result = HttpFetch.get(List.of(url(server, "/body")), dest, options);
+            assertTrue(result.ok, result.error);
+            assertEquals(body.length, seenDone.get());
+            assertEquals(body.length, seenTotal.get());
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
     void shaMismatchDeletesPartial() throws Exception {
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/bad", exchange -> {

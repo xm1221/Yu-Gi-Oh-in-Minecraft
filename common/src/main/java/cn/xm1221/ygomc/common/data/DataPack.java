@@ -1,5 +1,7 @@
 package cn.xm1221.ygomc.common.data;
 
+import cn.xm1221.ygomc.common.sync.CdbToBins;
+
 import java.io.Closeable;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -106,12 +108,26 @@ public final class DataPack implements Closeable {
             problems.add("数据包目录不存在: " + dir.toAbsolutePath()
                     + "。请先运行 tools/mkdatapack.py 与 tools/mkpics.py");
         } else {
-            data = tryOpen(problems, "cards.bin", "tools/mkdatapack.py",
-                    () -> CardDataDb.load(dir.resolve("cards.bin")));
-            text = tryOpen(problems, "texts.bin", "tools/mkdatapack.py",
-                    () -> CardTextDb.load(dir.resolve("texts.bin")));
-            str = tryOpen(problems, "strings.bin", "tools/mkdatapack.py",
-                    () -> StringsDb.load(dir.resolve("strings.bin")));
+            Path cdb = dir.resolve("cards.cdb");
+            Path conf = dir.resolve("strings.conf");
+            if (Files.isRegularFile(cdb) && Files.isRegularFile(conf)) {
+                try {
+                    CdbToBins.Images built = CdbToBins.images(cdb, conf);
+                    data = CardDataDb.decode(built.cards(), cdb.toString());
+                    text = CardTextDb.decode(built.texts(), cdb.toString());
+                    str = StringsDb.decode(built.strings(), conf.toString());
+                } catch (IOException | RuntimeException e) {
+                    problems.add("cards.cdb 加载失败（需要 sqlite-jdbc，原文仍在 "
+                            + dir.toAbsolutePath() + "）: " + e.getMessage());
+                }
+            } else {
+                data = tryOpen(problems, "cards.bin", "tools/mkdatapack.py",
+                        () -> CardDataDb.load(dir.resolve("cards.bin")));
+                text = tryOpen(problems, "texts.bin", "tools/mkdatapack.py",
+                        () -> CardTextDb.load(dir.resolve("texts.bin")));
+                str = tryOpen(problems, "strings.bin", "tools/mkdatapack.py",
+                        () -> StringsDb.load(dir.resolve("strings.bin")));
+            }
             images = tryOpen(problems, "pics.bin", "tools/mkpics.py",
                     () -> CardImageDb.open(dir.resolve("pics.bin")));
         }

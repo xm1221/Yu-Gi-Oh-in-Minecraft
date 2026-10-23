@@ -79,13 +79,16 @@ public final class CardDataDb {
      * @throws IOException 文件缺失、魔数/版本/记录长度不符、卡号非升序
      */
     public static CardDataDb load(Path file) throws IOException {
-        byte[] all = Files.readAllBytes(file);
+        return decode(Files.readAllBytes(file), file.toString());
+    }
+
+    public static CardDataDb decode(byte[] all, String label) throws IOException {
         ByteBuffer bb = ByteBuffer.wrap(all).order(ByteOrder.LITTLE_ENDIAN);
 
         byte[] magic = new byte[8];
         bb.get(magic);
         if (!Arrays.equals(magic, MAGIC)) {
-            throw new IOException(file + " 不是 cards.bin（魔数不符）");
+            throw new IOException(label + " 不是 cards.bin（魔数不符）");
         }
         int version = bb.getInt();
         int count = bb.getInt();
@@ -114,7 +117,7 @@ public final class CardDataDb {
             prev = codes[i];
             bb.get(blob, i * STRUCT_BYTES, STRUCT_BYTES);
         }
-        return new CardDataDb(file, codes, blob);
+        return new CardDataDb(Path.of(label), codes, blob);
     }
 
     /** 卡号数组，直接交给 {@code Ocg.putCards}。 */

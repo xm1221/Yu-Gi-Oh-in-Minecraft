@@ -325,7 +325,7 @@
   "ygomc.browser.prev100": "« 100 back",
   "ygomc.browser.next100": "100 on »",
   "ygomc.browser.no_pack": "Data pack unavailable; card images cannot be browsed.",
-  "ygomc.browser.no_pack_detail": "pics.bin / cards.bin / texts.bin are missing.",
+  "ygomc.browser.no_pack_detail": "pics.bin is missing, or the card database (cards.cdb and strings.conf, or legacy bins) cannot be opened.",
   "ygomc.browser.no_art": "no image",
   "ygomc.browser.no_name": "(no card name)",
   "ygomc.browser.no_desc": "(no card text)",
@@ -359,12 +359,14 @@
   "ygomc.sync.msg.keep_local": "local datapack does not match the manifest; keeping the local files",
   "ygomc.sync.msg.player_scripts": "player-supplied scripts are already present",
   "ygomc.sync.msg.downloading": "downloading %s",
+  "ygomc.sync.msg.progress": "Downloading %s (%s)",
+  "ygomc.sync.msg.installing": "Installing %s",
   "ygomc.sync.msg.converting": "converting the card database or packs",
   "ygomc.sync.msg.applying": "loading the new database and scripts",
   "ygomc.sync.msg.ready": "%s cards, %s script files",
   "ygomc.sync.msg.failed": "sync failed: %s",
   "ygomc.sync.msg.degraded": "Some downloads failed; using local files: %s",
-  "ygomc.sync.msg.no_datapack": "Card database download failed and there is no local datapack (ygomc/datapack), so no cards are available (%s)",
+  "ygomc.sync.msg.no_datapack": "Card database download failed and cards.cdb / strings.conf are missing (ygomc/datapack), so no cards are available (%s)",
   "ygomc.sync.msg.deferred": "a duel is in progress, so the new files wait",
   "ygomc.sync.msg.applied": "reloaded the card database and scripts",
   "ygomc.sync.msg.nothing_pending": "nothing is waiting to be applied",
@@ -377,5 +379,5 @@
   "ygomc.sync.msg.prefetch_stop": "Prefetch will stop",
   "ygomc.sync.msg.prefetch_idle": "No prefetch is running",
   "ygomc.sync.msg.prefetch_busy": "A prefetch is already running",
-  "ygomc.sync.msg.prefetch_nodb": "cards.bin is missing, so prefetch cannot start"
+  "ygomc.sync.msg.prefetch_nodb": "No card database, so prefetch cannot start"
 }

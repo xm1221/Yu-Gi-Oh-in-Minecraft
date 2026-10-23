@@ -18,21 +18,13 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 把 {@code cards.cdb} 收成 {@code cards.bin}、{@code texts.bin}、{@code strings.bin}。
- * 字节布局对齐 {@code tools/mkdatapack.py}，对局仍然只读 bin。
+ * 把 {@code cards.cdb} 收成引擎仍要的 {@code cards.bin}、{@code texts.bin}、{@code strings.bin} 字节。
+ * 字节布局对齐 {@code tools/mkdatapack.py}。同步只保存原文；打开数据包时在内存里转换。
  */
 public final class CdbToBins {
 
     public static final int TYPE_LINK = 0x4000000;
     private static final int DESC_COUNT = 16;
-
-    static {
-        try {
-            Class.forName("org.sqlite.JDBC");
-        } catch (ClassNotFoundException e) {
-            throw new IllegalStateException("缺少 sqlite-jdbc", e);
-        }
-    }
 
     private CdbToBins() {
     }
@@ -40,7 +32,11 @@ public final class CdbToBins {
     public record Result(int cards, int emptyDesc, int emptyStr, int[] stringCounts) {
     }
 
-    public static Result convert(Path cdb, Path stringsConf, Path outDir) throws IOException {
+    /**
+     * 把 cdb 和 strings.conf 收成引擎仍要的三份字节。不写 {@code ygomc/datapack}。
+     * 游戏打开数据包时在内存里用，同步线程只负责把原文放进目录。
+     */
+    public static Images images(Path cdb, Path stringsConf) throws IOException {
         List<Integer> dataIds = new ArrayList<>();
         List<Integer> textIds = new ArrayList<>();
         Connection ids = open(cdb);
@@ -57,32 +53,73 @@ public final class CdbToBins {
         if (dataIds.isEmpty()) {
             throw new IOException("cards.cdb 的 datas 表没有数据");
         }
-        Files.createDirectories(outDir);
-        Path cardsPartial = outDir.resolve("cards.bin.partial");
-        Path textsPartial = outDir.resolve("texts.bin.partial");
-        Path stringsPartial = outDir.resolve("strings.bin.partial");
         int cards;
         int emptyDesc;
         int emptyStr;
-        int[] counts;
+        byte[] cardBytes;
+        byte[] textBytes;
         Connection con = open(cdb);
         try {
-            cards = writeCards(con, cardsPartial);
-            int[] textStats = writeTexts(con, textsPartial);
-            emptyDesc = textStats[0];
-            emptyStr = textStats[1];
+            cardBytes = writeCards(con);
+            cards = cardCount(cardBytes);
+            byte[][] texts = writeTexts(con);
+            textBytes = texts[0];
+            emptyDesc = texts[1].length == 0 ? 0 : ByteBuffer.wrap(texts[1]).order(ByteOrder.LITTLE_ENDIAN).getInt();
+            emptyStr = texts[2].length == 0 ? 0 : ByteBuffer.wrap(texts[2]).order(ByteOrder.LITTLE_ENDIAN).getInt();
         } finally {
             close(con);
         }
-        counts = writeStrings(stringsConf, stringsPartial);
-        verifyMagic(cardsPartial, "YGOMCCD1");
-        verifyMagic(textsPartial, "YGOMCTX2");
-        verifyMagic(stringsPartial, "YGOMCST1");
-        verifyAscending(cardsPartial, 20, 84);
-        replace(cardsPartial, outDir.resolve("cards.bin"));
-        replace(textsPartial, outDir.resolve("texts.bin"));
-        replace(stringsPartial, outDir.resolve("strings.bin"));
-        return new Result(cards, emptyDesc, emptyStr, counts);
+        byte[] stringBytes = writeStrings(stringsConf);
+        verifyMagic(cardBytes, "YGOMCCD1");
+        verifyMagic(textBytes, "YGOMCTX2");
+        verifyMagic(stringBytes, "YGOMCST1");
+        verifyAscending(cardBytes, 20, 84);
+        int[] counts = stringCounts(stringBytes);
+        return new Images(cardBytes, textBytes, stringBytes, new Result(cards, emptyDesc, emptyStr, counts));
+    }
+
+    public record Images(byte[] cards, byte[] texts, byte[] strings, Result stats) {
+    }
+
+    /** 只数 {@code datas} 行。同步用来写清单，失败不影响原文是否已经落盘。 */
+    public static int countDatas(Path cdb) throws IOException {
+        Connection con = open(cdb);
+        try (Statement st = con.createStatement();
+             ResultSet rs = st.executeQuery("select count(*) from datas")) {
+            return rs.next() ? rs.getInt(1) : 0;
+        } catch (SQLException e) {
+            throw new IOException(e.getMessage(), e);
+        } finally {
+            close(con);
+        }
+    }
+
+    /** 离线对照 {@code mkdatapack.py} 用。同步不再把这三份 bin 当成正式数据包。 */
+    public static Result convert(Path cdb, Path stringsConf, Path outDir) throws IOException {
+        Images built = images(cdb, stringsConf);
+        Files.createDirectories(outDir);
+        writeReplacing(outDir.resolve("cards.bin"), built.cards);
+        writeReplacing(outDir.resolve("texts.bin"), built.texts);
+        writeReplacing(outDir.resolve("strings.bin"), built.strings);
+        return built.stats;
+    }
+
+    private static void writeReplacing(Path dest, byte[] bytes) throws IOException {
+        Path partial = dest.resolveSibling(dest.getFileName() + ".partial");
+        Files.write(partial, bytes);
+        replace(partial, dest);
+    }
+
+    private static int cardCount(byte[] cards) {
+        if (cards.length < 16) {
+            return 0;
+        }
+        return ByteBuffer.wrap(cards, 12, 4).order(ByteOrder.LITTLE_ENDIAN).getInt();
+    }
+
+    private static int[] stringCounts(byte[] strings) {
+        ByteBuffer head = ByteBuffer.wrap(strings, 12, 16).order(ByteOrder.LITTLE_ENDIAN);
+        return new int[]{head.getInt(), head.getInt(), head.getInt(), head.getInt()};
     }
 
     private static void close(Connection con) throws IOException {
@@ -94,6 +131,11 @@ public final class CdbToBins {
     }
 
     private static Connection open(Path cdb) throws IOException {
+        try {
+            Class.forName("org.sqlite.JDBC");
+        } catch (ClassNotFoundException e) {
+            throw new IOException("缺少 sqlite-jdbc", e);
+        }
         String url = "jdbc:sqlite:" + cdb.toAbsolutePath().toUri() + "?mode=ro";
         try {
             return DriverManager.getConnection(url);
@@ -112,12 +154,11 @@ public final class CdbToBins {
         }
     }
 
-    private static int writeCards(Connection con, Path out) throws IOException {
+    private static byte[] writeCards(Connection con) throws IOException {
         String sql = "select id,ot,alias,setcode,type,atk,def,level,race,attribute,category "
                 + "from datas order by id";
         try (Statement st = con.createStatement();
-             ResultSet rs = st.executeQuery(sql);
-             var channel = Files.newOutputStream(out)) {
+             ResultSet rs = st.executeQuery(sql)) {
             List<byte[]> rows = new ArrayList<>();
             int previous = Integer.MIN_VALUE;
             boolean first = true;
@@ -140,11 +181,12 @@ public final class CdbToBins {
             header.putInt(1);
             header.putInt(rows.size());
             header.putInt(84);
+            var channel = new java.io.ByteArrayOutputStream();
             channel.write(header.array());
             for (byte[] row : rows) {
                 channel.write(row);
             }
-            return rows.size();
+            return channel.toByteArray();
         } catch (IOException e) {
             throw e;
         } catch (Exception e) {
@@ -188,7 +230,8 @@ public final class CdbToBins {
         }
     }
 
-    private static int[] writeTexts(Connection con, Path out) throws IOException {
+    /** @return [file bytes, emptyDesc as 4 le bytes, emptyStr as 4 le bytes] */
+    private static byte[][] writeTexts(Connection con) throws IOException {
         StringBuilder cols = new StringBuilder("id, name, desc");
         for (int i = 1; i <= DESC_COUNT; i++) {
             cols.append(", str").append(i);
@@ -250,12 +293,15 @@ public final class CdbToBins {
             head.putInt(header);
             head.putInt(poolOff);
             head.putInt(pool.length);
-            try (var channel = Files.newOutputStream(out)) {
-                channel.write(head.array());
-                channel.write(index);
-                channel.write(pool);
-            }
-            return new int[]{emptyDesc, emptyStr};
+            var channel = new java.io.ByteArrayOutputStream();
+            channel.write(head.array());
+            channel.write(index);
+            channel.write(pool);
+            ByteBuffer stats = ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN);
+            stats.putInt(emptyDesc);
+            ByteBuffer stats2 = ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN);
+            stats2.putInt(emptyStr);
+            return new byte[][]{channel.toByteArray(), stats.array(), stats2.array()};
         } catch (IOException e) {
             throw e;
         } catch (Exception e) {
@@ -263,7 +309,7 @@ public final class CdbToBins {
         }
     }
 
-    private static int[] writeStrings(Path conf, Path out) throws IOException {
+    private static byte[] writeStrings(Path conf) throws IOException {
         StringsConf parsed = StringsConf.parse(conf);
         String[] order = {"system", "counter", "victory", "setname"};
         Map<String, Map<Long, String>> sections = Map.of(
@@ -299,24 +345,21 @@ public final class CdbToBins {
         head.putInt(header);
         head.putInt(header + indexBytes.length);
         head.putInt(poolBytes.length);
-        try (var channel = Files.newOutputStream(out)) {
-            channel.write(head.array());
-            channel.write(indexBytes);
-            channel.write(poolBytes);
-        }
-        return counts;
+        var channel = new java.io.ByteArrayOutputStream();
+        channel.write(head.array());
+        channel.write(indexBytes);
+        channel.write(poolBytes);
+        return channel.toByteArray();
     }
 
-    private static void verifyMagic(Path file, String magic) throws IOException {
-        byte[] head = Files.readAllBytes(file);
+    private static void verifyMagic(byte[] head, String magic) throws IOException {
         byte[] expect = magic.getBytes(StandardCharsets.US_ASCII);
         if (head.length < expect.length || !Arrays.equals(expect, 0, expect.length, head, 0, expect.length)) {
-            throw new IOException(file.getFileName() + " 魔数不是 " + magic);
+            throw new IOException("魔数不是 " + magic);
         }
     }
 
-    private static void verifyAscending(Path cards, int header, int stride) throws IOException {
-        byte[] data = Files.readAllBytes(cards);
+    private static void verifyAscending(byte[] data, int header, int stride) throws IOException {
         int previous = Integer.MIN_VALUE;
         boolean first = true;
         for (int off = header; off + 4 <= data.length; off += stride) {

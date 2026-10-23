@@ -35,19 +35,22 @@ public final class SyncToaster {
         Minecraft minecraft = Minecraft.getInstance();
         boolean playerPresent = minecraft != null && minecraft.player != null;
         SyncAnnounce.Outcome outcome = GATE.tick(AssetSync.status(), playerPresent);
-        if (!outcome.log() && !outcome.chat()) {
+        if (!outcome.log() && !outcome.chat() && !outcome.actionBar()) {
             return;
         }
         AssetSync.Status current = outcome.status();
+        boolean warn = current.phase() == AssetSync.Phase.DEGRADED || current.phase() == AssetSync.Phase.FAILED;
         Component detail = Component.translatable(current.messageKey(), current.argsArray());
-        Component line = Component.translatable(outcome.actionBar() ? "ygomc.sync.chat.warn" : "ygomc.sync.chat", detail);
+        Component line = Component.translatable(warn ? "ygomc.sync.chat.warn" : "ygomc.sync.chat", detail);
         if (outcome.log()) {
             LOGGER.info("资源同步：{}", line.getString());
         }
-        if (!outcome.chat() || minecraft.player == null) {
+        if (minecraft.player == null) {
             return;
         }
-        minecraft.player.displayClientMessage(line, false);
+        if (outcome.chat()) {
+            minecraft.player.displayClientMessage(line, false);
+        }
         if (outcome.actionBar()) {
             minecraft.player.displayClientMessage(line, true);
         }

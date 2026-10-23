@@ -394,7 +394,7 @@ ETag：对 pin 已固定的 URL，ETag 只是少下字节的优化。pin 未变�
 | 字段 | 默认 | 含义 |
 |---|---|---|
 | `enabled` | true | 总开关。false 时行为与今天完全一致 |
-| `database` | true | 拉 cdb 并生成三个 bin |
+| `database` | true | 拉 `cards.cdb` 与 `strings.conf`，原文放进 `ygomc/datapack`。打开数据包时在内存里收成引擎要的字节，不再写出三个 bin |
 | `scripts` | true | 拉脚本 |
 | `sets` | true | 拉 YGOJSON 并生成数据包 |
 | `picsOnDemand` | true | 缺图时按卡密拉。专用服忽略 |
@@ -402,16 +402,22 @@ ETag：对 pin 已固定的 URL，ETag 只是少下字节的优化。pin 未变�
 | `timeoutSeconds` | 30 | 只限制 TCP/TLS 连接。卡库、脚本、卡包的正文另有读取上限 |
 | `maxPicBytes` | 2000000 | 单张图上限，防下到网页 |
 | `allowReplaceNewerLocal` | false | 见上，默认不盖玩家手摆的较新文件 |
+| `urlPrepend` | false | 下面的地址列表非空时：false 整表替换 pin，true 排在 pin 前面 |
+| `cardsCdbUrls` / `stringsConfUrls` / `scriptUrls` / `setUrls` / `picUrls` | 空 | 对应卡库、文本、脚本、卡包、卡图。卡图模板里仍写 `{code}` |
+
+同一组列表也可以写在游戏目录的 `ygomc/urls.json`，这一层盖过 Cloth。键名用 `cardsCdb`（或 `cards_cdb` / `database`）、`stringsConf`（或 `strings_conf`）、`scripts`、`sets`、`pics`。文件里的 `prepend` 盖过 Cloth 的 `urlPrepend`。空列表或坏 JSON 等于没写，继续用 pin。`pins.json` 里的 sha / sha256 不变，只换地址。
 
 旧配置缺字段时用默认值，和 `DuelConfig` 一样。
 
-大陆网络上 `raw.githubusercontent.com` 经常在 TLS 握手被掐断，`code.moenext.com` 会回 403。`pins.json` 因此在原地址之前加了 jsDelivr（fastly、gcore、testingcf）、`cdn.jsdmirror.com`，以及 `ghproxy.net` / `gh-proxy.com` 对 GitHub raw、archive、release 的转发。某一条失败会继续试后面的地址。慢代理大约 15KB/s：8MB 的 `cards.cdb` 要十几分钟，约 56MB 的卡包 zip 要一小时左右。正文读取上限是 90 分钟，不要求玩家先改 `timeoutSeconds`。下载失败或退回本地文件时，客户端在聊天和动作条各提示一次；标题画面上还没有玩家就先挂着，进世界后再显示，本地没有 `ygomc/datapack` 时直接说明没有卡。
+大陆网络上 `raw.githubusercontent.com` 经常在 TLS 握手被掐断，`code.moenext.com` 会回 403。`pins.json` 因此在原地址之前加了 jsDelivr（fastly、gcore、testingcf）、`cdn.jsdmirror.com`，以及 `ghproxy.net` / `gh-proxy.com` 对 GitHub raw、archive、release 的转发。某一条失败会继续试后面的地址。慢代理大约 15KB/s：8MB 的 `cards.cdb` 要十几分钟，约 56MB 的卡包 zip 要一小时左右。正文读取上限是 90 分钟，不要求玩家先改 `timeoutSeconds`。下载过程中客户端在动作条上刷新当前资源（卡库、文本、脚本、卡包）和已下字节；每种资源进聊天一次。下载失败或退回本地文件时，聊天和动作条再各提示一次；标题画面上还没有玩家就先挂着，进世界后再显示。本地没有 `cards.cdb` 和 `strings.conf` 时直接说明没有卡。
+
+同步不再把 `cards.cdb` 收成 `cards.bin` / `texts.bin` / `strings.bin`。正式目录是 `ygomc/datapack/cards.cdb` 与 `strings.conf`。`DataPack.open` 看到这两份原文就在内存里做成引擎要的字节；目录里没有原文时才读旧的 bin（离线 `mkdatapack.py` 仍可写出 bin）。读 cdb 需要 `sqlite-jdbc`：发行 jar 里 shadow 进去，NeoForge `runClient` 还要放进 `forgeRuntimeLibrary`（`runtimeOnly` 到不了那条 classpath）。
 
 ## 5. 客户端与服务端的分工
 
 | 步骤 | 专用服 | 整合服（单人） | 连到远程服的客户端 |
 |---|---|---|---|
-| cdb → 三个 bin | 必须 | 必须 | 必须（本地显示卡名卡文；网上不传全文） |
+| `cards.cdb` + `strings.conf`（打开时在内存里收成引擎字节；没有原文才读旧 bin） | 必须 | 必须 | 必须（本地显示卡名卡文；网上不传全文） |
 | 脚本 | 必须，否则开不了局 | 必须 | 可缺。`OcgEngine.prepare` 失败只打日志 |
 | 卡包数据包 | 必须，否则只有 jar 内 `demo` | 必须 | 不生成、不安装。包定义由服务器数据包同步 |
 | 卡图 | 跳过 | 按需 | 按需 |

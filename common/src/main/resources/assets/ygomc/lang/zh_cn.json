@@ -325,7 +325,7 @@
   "ygomc.browser.prev100": "« 前 100",
   "ygomc.browser.next100": "后 100 »",
   "ygomc.browser.no_pack": "数据包不可用，无法浏览卡图。",
-  "ygomc.browser.no_pack_detail": "缺少 pics.bin / cards.bin / texts.bin。",
+  "ygomc.browser.no_pack_detail": "缺少 pics.bin，或卡库（cards.cdb 与 strings.conf，或旧版 bin）打不开。",
   "ygomc.browser.no_art": "无卡图",
   "ygomc.browser.no_name": "（无卡名）",
   "ygomc.browser.no_desc": "（没有卡文）",
@@ -359,12 +359,14 @@
   "ygomc.sync.msg.keep_local": "本地数据包与清单不一致，保留本地",
   "ygomc.sync.msg.player_scripts": "已有玩家自备脚本，不覆盖",
   "ygomc.sync.msg.downloading": "正在下载 %s",
+  "ygomc.sync.msg.progress": "正在下载 %s（%s）",
+  "ygomc.sync.msg.installing": "正在安装 %s",
   "ygomc.sync.msg.converting": "正在转换卡库或卡包",
   "ygomc.sync.msg.applying": "正在装载新的卡库与脚本",
   "ygomc.sync.msg.ready": "卡库 %s 张，脚本 %s 个文件",
   "ygomc.sync.msg.failed": "同步失败：%s",
   "ygomc.sync.msg.degraded": "部分资源下载失败，继续使用本地文件：%s",
-  "ygomc.sync.msg.no_datapack": "卡库下载失败，本地没有数据包（ygomc/datapack），游戏里没有卡（%s）",
+  "ygomc.sync.msg.no_datapack": "卡库下载失败，本地没有 cards.cdb 和 strings.conf（ygomc/datapack），游戏里没有卡（%s）",
   "ygomc.sync.msg.deferred": "对局进行中，换上新文件推迟",
   "ygomc.sync.msg.applied": "已重新装载卡库与脚本",
   "ygomc.sync.msg.nothing_pending": "没有等待换上的文件",
@@ -377,5 +379,5 @@
   "ygomc.sync.msg.prefetch_stop": "已要求停止预取",
   "ygomc.sync.msg.prefetch_idle": "没有正在进行的预取",
   "ygomc.sync.msg.prefetch_busy": "预取已经在跑",
-  "ygomc.sync.msg.prefetch_nodb": "没有 cards.bin，不能预取"
+  "ygomc.sync.msg.prefetch_nodb": "没有卡库，不能预取"
 }

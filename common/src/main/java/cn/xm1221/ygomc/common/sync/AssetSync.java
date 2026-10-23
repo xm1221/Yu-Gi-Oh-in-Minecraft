@@ -151,9 +151,11 @@ public final class AssetSync {
                     pins = SyncPins.loadDefault();
                 }
                 runLocked(gameDir, settings, pins, applyEngine);
-            } catch (Exception e) {
+            } catch (Throwable e) {
                 LOGGER.warn("资源同步失败，继续使用已有文件：{}", e.toString());
-                set(Phase.FAILED, "sync", "ygomc.sync.msg.failed", true, true, String.valueOf(e.getMessage()));
+                Throwable cause = e.getCause() == null ? e : e.getCause();
+                String message = cause.getMessage() == null ? cause.toString() : cause.getMessage();
+                set(Phase.FAILED, "sync", "ygomc.sync.msg.failed", true, true, message);
             }
         }
     }
@@ -280,18 +282,18 @@ public final class AssetSync {
             reloadServerPacks();
         }
 
-        boolean binsOk = binsValid(CacheLayout.datapack(game));
+        boolean plainOk = plainValid(CacheLayout.datapack(game));
         boolean scriptsOk = Files.isRegularFile(CacheLayout.script(game).resolve("constant.lua"))
                 || !settings.scripts;
         boolean databaseFailed = manifest.degraded.stream().anyMatch(line -> line.startsWith("database"));
         if (manifest.pendingReload) {
             LOGGER.info("对局进行中，新的卡库或脚本留在缓存里，下一局开始前或 /ygomc sync apply 才会换上");
             set(Phase.DEGRADED, "pending", "ygomc.sync.msg.deferred", true, true);
-        } else if (databaseFailed && !binsOk) {
+        } else if (databaseFailed && !plainOk) {
             LOGGER.warn("卡库下载失败，本地没有数据包：{}", manifest.degraded);
             set(scriptsOk ? Phase.DEGRADED : Phase.FAILED, "done", "ygomc.sync.msg.no_datapack", true, true,
                     String.join(" ", manifest.degraded));
-        } else if (!manifest.degraded.isEmpty() && (binsOk || scriptsOk)) {
+        } else if (!manifest.degraded.isEmpty() && (plainOk || scriptsOk)) {
             LOGGER.info("部分资源没更新，继续使用已有文件：{}", manifest.degraded);
             set(Phase.DEGRADED, "done", "ygomc.sync.msg.degraded", true, true, String.join(" ", manifest.degraded));
         } else if (!manifest.degraded.isEmpty()) {
@@ -312,17 +314,17 @@ public final class AssetSync {
                                     boolean applyEngine) throws IOException {
         boolean duel = applyEngine && OcgEngine.duelBlocksReload();
         Path live = CacheLayout.datapack(game);
-        boolean valid = binsValid(live);
+        boolean valid = plainValid(live);
         boolean hashesMatch = valid && hashesMatch(live, manifest);
         SyncPolicy.Database decision = SyncPolicy.database(valid, hashesMatch, manifest.databaseSha,
                 pins.database.sha, settings.allowReplaceNewerLocal);
         Path pending = CacheLayout.pendingDatapack(game);
-        if (duel && sameSha(pins.database.sha, manifest.stagedDatabaseSha) && binsValid(pending)) {
+        if (duel && sameSha(pins.database.sha, manifest.stagedDatabaseSha) && plainValid(pending)) {
             LOGGER.info("卡库 {} 已暂存，等对局结束再换上", shortSha(pins.database.sha));
             return false;
         }
         if (decision == SyncPolicy.Database.SKIP) {
-            LOGGER.info("卡库清单一致，跳过（{}，{} 张）", shortSha(pins.database.sha), manifest.cardCount);
+            LOGGER.info("卡库清单一致，跳过（{}）", shortSha(pins.database.sha));
             return false;
         }
         if (decision == SyncPolicy.Database.KEEP_LOCAL) {
@@ -330,50 +332,46 @@ public final class AssetSync {
             set(Phase.CHECKING, "database", "ygomc.sync.msg.keep_local", false, true);
             return false;
         }
-        set(Phase.DOWNLOADING, "cards.cdb", "ygomc.sync.msg.downloading", true, false, "cards.cdb");
         LOGGER.info("开始下载卡库 {}", shortSha(pins.database.sha));
         Path cache = CacheLayout.database(game, pins.database.sha);
         SyncPins.FilePin cdb = pins.requireFile("cards.cdb");
         SyncPins.FilePin conf = pins.requireFile("strings.conf");
-        if (!fetchPinned(cdb, cache.resolve("cards.cdb"), settings, 64L * 1024 * 1024, game)) {
+        List<String> cdbUrls = SyncUrls.resolve(game, settings, SyncUrls.Key.CARDS_CDB, cdb.urls);
+        List<String> confUrls = SyncUrls.resolve(game, settings, SyncUrls.Key.STRINGS_CONF, conf.urls);
+        if (!fetchPinned(cdb, cdbUrls, cache.resolve("cards.cdb"), settings, 64L * 1024 * 1024, game, "卡库")) {
             manifest.degraded.add("database:download");
             LOGGER.warn("卡库下载失败，继续使用已有文件");
             return false;
         }
-        if (!fetchPinned(conf, cache.resolve("strings.conf"), settings, 8L * 1024 * 1024, game)) {
+        if (!fetchPinned(conf, confUrls, cache.resolve("strings.conf"), settings, 8L * 1024 * 1024, game, "文本")) {
             manifest.degraded.add("database:download");
-            LOGGER.warn("strings.conf 下载失败，不替换现有的 strings.bin");
+            LOGGER.warn("strings.conf 下载失败，不替换现有的卡库原文");
             return false;
         }
-        set(Phase.CONVERTING, "bins", "ygomc.sync.msg.converting", true, false);
-        // 先写到空白目录。转换中途失败不能把正式目录换成「新的 cards.bin + 旧的 texts.bin」，
-        // 那种混装过了魔数检查，pin 又没变时会被当成玩家手改的文件，之后不再重下。
-        Path scratch = CacheLayout.staging(game).resolve("bins-out");
-        ScriptInstaller.deleteTree(scratch);
+        set(Phase.APPLYING, "cards.cdb", "ygomc.sync.msg.installing", true, false, "卡库");
         try {
-            CdbToBins.Result result = CdbToBins.convert(cache.resolve("cards.cdb"), cache.resolve("strings.conf"), scratch);
             duel = applyEngine && OcgEngine.duelBlocksReload();
             Path target = duel ? pending : live;
-            publishBins(scratch, target);
-            ScriptInstaller.deleteTree(scratch);
-            manifest.cardCount = result.cards();
-            LOGGER.info("卡库已写入，{} 张（commit {}）", result.cards(), shortSha(pins.database.sha));
+            publishPlain(cache.resolve("cards.cdb"), cache.resolve("strings.conf"), target);
+            LOGGER.info("卡库原文已放入 {}（commit {}）", target, shortSha(pins.database.sha));
             if (duel) {
                 manifest.pendingReload = true;
                 manifest.stagedDatabaseSha = pins.database.sha;
-                LOGGER.info("对局进行中，三个 bin 先放在缓存");
+                LOGGER.info("对局进行中，cards.cdb 先放在缓存");
                 return false;
             }
-            rememberBins(live, manifest);
-            manifest.databaseSha256.put("cards.cdb", Digests.sha256(cache.resolve("cards.cdb")));
-            manifest.databaseSha256.put("strings.conf", Digests.sha256(cache.resolve("strings.conf")));
+            rememberPlain(live, manifest);
             manifest.databaseSha = pins.database.sha;
             manifest.stagedDatabaseSha = "";
+            try {
+                manifest.cardCount = CdbToBins.countDatas(live.resolve("cards.cdb"));
+            } catch (IOException e) {
+                LOGGER.info("卡库原文已就位，张数留到打开数据包时再数：{}", e.getMessage());
+            }
             return true;
         } catch (IOException e) {
-            ScriptInstaller.deleteTree(scratch);
-            LOGGER.warn("卡库转换失败，保留上一份 bin：{}", e.getMessage());
-            manifest.degraded.add("database:convert");
+            LOGGER.warn("卡库原文落盘失败，保留上一份：{}", e.getMessage());
+            manifest.degraded.add("database:install");
             return false;
         }
     }
@@ -398,12 +396,13 @@ public final class AssetSync {
             set(Phase.CHECKING, "scripts", "ygomc.sync.msg.player_scripts", false, true);
             return false;
         }
-        set(Phase.DOWNLOADING, "scripts", "ygomc.sync.msg.downloading", true, false, "ygopro-scripts");
         LOGGER.info("开始下载脚本 {}（GPL-2.0，不随模组分发）", shortSha(pins.scripts.sha));
         Path zip = CacheLayout.scriptsZip(game, pins.scripts.sha);
         HttpFetch.Options options = options(settings, 80L * 1024 * 1024, game);
+        options.progress = (done, total) -> progress("scripts", "脚本", done, total);
         if (!Files.isRegularFile(zip)) {
-            HttpFetch.Result fetched = HttpFetch.get(pins.scripts.urls, zip, options);
+            HttpFetch.Result fetched = HttpFetch.get(
+                    SyncUrls.resolve(game, settings, SyncUrls.Key.SCRIPTS, pins.scripts.urls), zip, options);
             if (!fetched.ok) {
                 LOGGER.warn("脚本下载失败，继续使用已有文件：{}", fetched.error);
                 manifest.degraded.add("scripts:download");
@@ -412,6 +411,7 @@ public final class AssetSync {
         }
         duel = applyEngine && OcgEngine.duelBlocksReload();
         Path target = duel ? pending : CacheLayout.script(game);
+        set(Phase.APPLYING, "scripts", "ygomc.sync.msg.installing", true, false, "脚本");
         try {
             int files = ScriptInstaller.install(zip, target);
             LOGGER.info("脚本已落盘，{} 个文件，commit {}，GPL-2.0，不随模组分发", files, shortSha(pins.scripts.sha));
@@ -449,14 +449,15 @@ public final class AssetSync {
             LOGGER.info("已有玩家自备卡包目录，不覆盖");
             return false;
         }
-        set(Phase.DOWNLOADING, "sets", "ygomc.sync.msg.downloading", true, false, "YGOJSON");
         LOGGER.info("开始下载卡包 zip，期望 sha256 {}", pins.sets.sha256);
         Path zip = CacheLayout.setsZip(game, pins.sets.sha256);
         boolean cached = Files.isRegularFile(zip) && Digests.hexEquals(pins.sets.sha256, Digests.sha256(zip));
         if (!cached) {
             HttpFetch.Options options = options(settings, 200L * 1024 * 1024, game);
             options.expectedSha256 = pins.sets.sha256;
-            HttpFetch.Result fetched = HttpFetch.get(pins.sets.urls, zip, options);
+            options.progress = (done, total) -> progress("sets", "卡包", done, total);
+            HttpFetch.Result fetched = HttpFetch.get(
+                    SyncUrls.resolve(game, settings, SyncUrls.Key.SETS, pins.sets.urls), zip, options);
             if (!fetched.ok) {
                 LOGGER.warn("卡包 zip 下载或校验失败，保留上一份：{}", fetched.error);
                 manifest.degraded.add("sets:download");
@@ -464,7 +465,7 @@ public final class AssetSync {
                 return false;
             }
         }
-        set(Phase.CONVERTING, "sets", "ygomc.sync.msg.converting", true, false);
+        set(Phase.CONVERTING, "sets", "ygomc.sync.msg.installing", true, false, "卡包");
         Path incoming = CacheLayout.staging(game).resolve("sets-out");
         ScriptInstaller.deleteTree(incoming);
         try {
@@ -487,9 +488,10 @@ public final class AssetSync {
 
     private static void promotePending(Path game, SyncManifest manifest) throws IOException {
         Path pendingBins = CacheLayout.pendingDatapack(game);
-        if (binsValid(pendingBins)) {
-            publishBins(pendingBins, CacheLayout.datapack(game));
-            rememberBins(CacheLayout.datapack(game), manifest);
+        if (plainValid(pendingBins)) {
+            publishPlain(pendingBins.resolve("cards.cdb"), pendingBins.resolve("strings.conf"),
+                    CacheLayout.datapack(game));
+            rememberPlain(CacheLayout.datapack(game), manifest);
             if (manifest.stagedDatabaseSha != null && !manifest.stagedDatabaseSha.isBlank()) {
                 manifest.databaseSha = manifest.stagedDatabaseSha;
             }
@@ -507,12 +509,12 @@ public final class AssetSync {
         manifest.pendingReload = false;
     }
 
-    private static void rememberBins(Path dir, SyncManifest manifest) throws IOException {
+    private static void rememberPlain(Path dir, SyncManifest manifest) throws IOException {
         if (manifest.databaseSha256 == null) {
             manifest.databaseSha256 = new java.util.LinkedHashMap<>();
         }
-        for (String name : BIN_NAMES) {
-            manifest.bins.put(name, Digests.sha256(dir.resolve(name)));
+        for (String name : PLAIN_NAMES) {
+            manifest.databaseSha256.put(name, Digests.sha256(dir.resolve(name)));
         }
     }
 
@@ -520,15 +522,16 @@ public final class AssetSync {
         return left != null && right != null && left.equalsIgnoreCase(right);
     }
 
-    private static boolean fetchPinned(SyncPins.FilePin file, Path dest, SyncSettings settings, long maxBytes,
-                                       Path game) throws IOException {
+    private static boolean fetchPinned(SyncPins.FilePin file, List<String> urls, Path dest, SyncSettings settings,
+                                       long maxBytes, Path game, String label) throws IOException {
         if (file.sha256 != null && !file.sha256.isBlank() && Files.isRegularFile(dest)
                 && Digests.hexEquals(file.sha256, Digests.sha256(dest))) {
             return true;
         }
         HttpFetch.Options options = options(settings, maxBytes, game);
         options.expectedSha256 = file.sha256;
-        HttpFetch.Result result = HttpFetch.get(file.urls, dest, options);
+        options.progress = (done, total) -> progress(file.id, label, done, total);
+        HttpFetch.Result result = HttpFetch.get(urls, dest, options);
         if (!result.ok) {
             LOGGER.warn("下载 {} 失败：{}", file.id, result.error);
             return false;
@@ -557,10 +560,43 @@ public final class AssetSync {
         return floor;
     }
 
-    private static boolean binsValid(Path dir) {
-        return magic(dir.resolve("cards.bin"), "YGOMCCD1")
-                && magic(dir.resolve("texts.bin"), "YGOMCTX2")
-                && magic(dir.resolve("strings.bin"), "YGOMCST1");
+    private static final List<String> PLAIN_NAMES = List.of("cards.cdb", "strings.conf");
+
+    private static boolean plainValid(Path dir) {
+        return Files.isRegularFile(dir.resolve("cards.cdb")) && Files.isRegularFile(dir.resolve("strings.conf"));
+    }
+
+    private static void publishPlain(Path cdb, Path conf, Path dir) throws IOException {
+        Files.createDirectories(dir);
+        copyFile(cdb, dir.resolve("cards.cdb"));
+        copyFile(conf, dir.resolve("strings.conf"));
+    }
+
+    private static void copyFile(Path from, Path to) throws IOException {
+        Path partial = to.resolveSibling(to.getFileName() + ".partial");
+        Files.copy(from, partial, StandardCopyOption.REPLACE_EXISTING);
+        moveReplace(partial, to);
+    }
+
+    private static void progress(String step, String label, long done, long total) {
+        set(Phase.DOWNLOADING, step, done, total, "ygomc.sync.msg.progress", true, false, label, amount(done, total));
+    }
+
+    private static String amount(long done, long total) {
+        if (total > 0) {
+            return human(done) + " / " + human(total);
+        }
+        return human(done);
+    }
+
+    private static String human(long bytes) {
+        if (bytes < 1024) {
+            return bytes + " B";
+        }
+        if (bytes < 1024 * 1024) {
+            return String.format(java.util.Locale.ROOT, "%.1f KB", bytes / 1024.0);
+        }
+        return String.format(java.util.Locale.ROOT, "%.1f MB", bytes / (1024.0 * 1024.0));
     }
 
     private static boolean magic(Path file, String magic) {
@@ -577,11 +613,11 @@ public final class AssetSync {
     }
 
     private static boolean hashesMatch(Path dir, SyncManifest manifest) throws IOException {
-        if (manifest.bins == null || manifest.bins.isEmpty()) {
+        if (manifest.databaseSha256 == null || manifest.databaseSha256.isEmpty()) {
             return false;
         }
-        for (String name : BIN_NAMES) {
-            String want = manifest.bins.get(name);
+        for (String name : PLAIN_NAMES) {
+            String want = manifest.databaseSha256.get(name);
             if (want == null || !Digests.hexEquals(want, Digests.sha256(dir.resolve(name)))) {
                 return false;
             }
@@ -697,7 +733,12 @@ public final class AssetSync {
     }
 
     private static void set(Phase phase, String step, String key, boolean announce, boolean offline, String... args) {
-        status = new Status(phase, step, -1, -1, key, List.of(args), announce, offline);
+        set(phase, step, -1, -1, key, announce, offline, args);
+    }
+
+    private static void set(Phase phase, String step, long done, long total, String key, boolean announce,
+                            boolean offline, String... args) {
+        status = new Status(phase, step, done, total, key, List.of(args), announce, offline);
     }
 
     private static String shortSha(String sha) {
