@@ -273,8 +273,8 @@ public class CardItem extends Item {
     }
 
     /**
-     * Right-click held card: open CardBrowserScreen (large art + name/stats/desc).
-     * Same CardTips/CardArt path as binder single-card detail; no new screen type.
+     * Right-click held card: open {@link cn.xm1221.ygomc.common.client.CardInspectScreen}
+     * (single-card large art + name/stats/desc). Not CardBrowserScreen — no paging.
      */
     @Override
     public InteractionResultHolder<ItemStack> use(Level level, Player player, InteractionHand hand) {
@@ -286,7 +286,7 @@ public class CardItem extends Item {
         if (level.isClientSide()) {
             int code = held.cardCode();
             EnvExecutor.runInEnv(Env.CLIENT, () -> () ->
-                    cn.xm1221.ygomc.common.client.CardBrowserScreen.open(code));
+                    cn.xm1221.ygomc.common.client.CardInspectScreen.open(code));
         }
         return InteractionResultHolder.sidedSuccess(stack, level.isClientSide());
     }

@@ -7,9 +7,10 @@ import cn.xm1221.ygomc.common.data.DataPacks;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.screens.Screen;
-import net.minecraft.network.chat.Component;
 
 /**
+ * 卡图调试浏览界面（可翻页 / ±100）。手持卡查看请用 {@link CardInspectScreen}，勿复用本类。
+ *
  * 卡图浏览界面：翻看卡池里的卡，看卡图、卡名、数值与卡文。
  *
  * <h2>为什么先做这个界面</h2>
@@ -94,9 +95,19 @@ public final class CardBrowserScreen extends Screen {
         index = Math.floorMod(index + delta, codes.length);
     }
 
+
+    /**
+     * 故意为空。1.21 {@code Screen} 调用链已会压暗/模糊；再调原版会灰蒙蒙。
+     * 底板在 {@link #render} 里自填。见 {@code .agent/常见错误}。
+     */
+    @Override
+    public void renderBackground(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
+    }
+
     @Override
     public void render(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
-        renderBackground(g, mouseX, mouseY, partialTick);
+        // 自填半透明底；勿再调原版 renderBackground（会灰蒙蒙）。
+        g.fill(0, 0, width, height, 0xA03C5566);
 
         int x = (width - PANEL_W) / 2;
         int y = (height - PANEL_H) / 2;

@@ -19,3 +19,7 @@ Minecraft 1.21.1，公共代码在 `common`，Fabric 和 NeoForge 只做各自�
 源码是 `common`、`fabric`、`neoforge`。`ocg` 是引擎和 JNI，`duel` 是房间和对局，`client` 是界面，`card`、`collection`、`deck`、`pack` 是物品和卡包。`tools` 生成本地数据包和贴图，说明在 `tools/README.md`。
 
 运行时读 `cards.bin`，不读 `cards.cdb`。不另加一套规则引擎，也不用 GeckoLib。
+
+## 常见坑
+
+GUI 灰蒙蒙、双层压暗等复发问题见同目录 [常见错误](./常见错误)。

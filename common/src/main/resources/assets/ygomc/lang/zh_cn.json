@@ -320,6 +320,7 @@
   "ygomc.duel.error.cannot_send": "这个操作发不出去：%s",
 
   "ygomc.browser.title": "卡图浏览",
+  "ygomc.inspect.title": "查看卡片",
   "ygomc.browser.prev": "◀ 上一张",
   "ygomc.browser.next": "下一张 ▶",
   "ygomc.browser.prev100": "« 前 100",

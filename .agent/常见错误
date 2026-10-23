@@ -1,0 +1,55 @@
+# 常见错误
+
+## GUI 灰蒙蒙（双层压暗 / 毛玻璃膜）
+
+### 症状
+
+打开卡图查看、卡册、决斗等自定义界面时，整屏灰蒙蒙，卡图和文字像被洗白、发糊。
+
+### 原因
+
+Minecraft **1.20.5 / 1.21** 起，`Screen.render`（或其调用链）**已经会先**给屏幕做一次模糊/压暗。
+
+若子类再做下面任一操作，就会在自定义 UI 上叠一层「霜玻璃灰膜」：
+
+1. 在 `render` 里再调用 `renderBackground(...)`（尤其是未覆盖的原版实现）
+2. `renderBackground` 里调用 `super.renderBackground(...)`
+3. 自己填半透明底的同时，仍让原版 blur/dim 再跑一遍（双层压暗）
+
+仓库里 `DuelScreen` 的注释已写明：原版背景（压暗 + 高斯模糊）叠在自填色之上，卡图会被洗掉一层。
+
+### 正确写法（本仓库约定）
+
+参考 `DuelScreen`、`BinderScreen`：
+
+1. **覆盖 `renderBackground` 为空**（不要 `super`，不要画任何东西）
+2. 在自己的 `render` 里**自行** `fill` 半透明底板（位置和透明度自己控）
+3. **不要**在 `render` 开头再调 `renderBackground`
+4. 卡类 UI **不要依赖**原版 blur 当氛围
+
+示例（决斗界面自填色）：
+
+```java
+@Override
+public void renderBackground(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
+    // 故意为空：交给 Screen 调用链也不会再叠原版膜
+}
+
+@Override
+public void render(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
+    g.fill(0, 0, width, height, 0xA03C5566); // 自控半透明底
+    // ... 再画面板 / 卡图 ...
+    super.render(g, mouseX, mouseY, partialTick); // 只画 widgets
+}
+```
+
+### 曾踩坑的类
+
+- `CardBrowserScreen`：曾在 `render` 开头调用 `renderBackground` → 手持查看灰蒙蒙
+- 手持卡查看应使用独立的 `CardInspectScreen`（单卡大图+介绍，无翻页），同样必须空 `renderBackground`
+
+### 相关
+
+- `DuelScreen.renderBackground`（空）+ `render` 自填 `0xA03C5566`
+- `BinderScreen.renderBackground`（空）+ `CollectionTextures.panel`
+- `CardInspectScreen` / 修好后的 `CardBrowserScreen`

@@ -351,6 +351,7 @@ public final class DuelText {
     public static final String ERROR_CANNOT_SEND = "ygomc.duel.error.cannot_send";
 
     // ── 卡图浏览界面（{@code CardBrowserScreen}） ─────────────────────────
+    public static final String INSPECT_TITLE = "ygomc.inspect.title";
     public static final String BROWSER_TITLE = "ygomc.browser.title";
     public static final String BROWSER_PREV = "ygomc.browser.prev";
     public static final String BROWSER_NEXT = "ygomc.browser.next";

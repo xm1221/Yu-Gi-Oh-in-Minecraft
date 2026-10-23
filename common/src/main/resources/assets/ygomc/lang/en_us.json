@@ -320,6 +320,7 @@
   "ygomc.duel.error.cannot_send": "That action could not be sent: %s",
 
   "ygomc.browser.title": "Card Images",
+  "ygomc.inspect.title": "Card Inspect",
   "ygomc.browser.prev": "◀ Prev",
   "ygomc.browser.next": "Next ▶",
   "ygomc.browser.prev100": "« 100 back",
