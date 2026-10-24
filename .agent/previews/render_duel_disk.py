@@ -247,21 +247,31 @@ def render_view(display_key, out_name, elev, azim):
 
 
 paths = []
-paths.append(render_view("firstperson_righthand", "duel_disk_v3_fp.png", elev=18, azim=50))
-paths.append(render_view("thirdperson_righthand", "duel_disk_v3_tp.png", elev=12, azim=95))
-paths.append(render_view("gui", "duel_disk_v3_gui.png", elev=32, azim=40))
+# Canonical names + v4 aliases (aspect-aware UV rebuild).
+for display_key, base, elev, azim in (
+    ("firstperson_righthand", "fp", 18, 50),
+    ("thirdperson_righthand", "tp", 12, 95),
+    ("gui", "gui", 32, 40),
+):
+    paths.append(render_view(display_key, f"duel_disk_{base}.png", elev, azim))
+    shutil.copy2(os.path.join(OUT_DIR, f"duel_disk_{base}.png"), os.path.join(OUT_DIR, f"duel_disk_v4_{base}.png"))
+    shutil.copy2(os.path.join(OUT_DIR, f"duel_disk_{base}.png"), os.path.join(DESKTOP_OUT, f"duel_disk_v4_{base}.png"))
 pivot.rotation_euler = (0, 0, 0)
 pivot.location = (8, 8, 8)
 pivot.scale = (1, 1, 1)
 aim_camera(28, 38)
-paths.append(save_both("duel_disk_v3_rest.png"))
+paths.append(save_both("duel_disk_rest.png"))
+shutil.copy2(os.path.join(OUT_DIR, "duel_disk_rest.png"), os.path.join(OUT_DIR, "duel_disk_v4_rest.png"))
+shutil.copy2(os.path.join(OUT_DIR, "duel_disk_rest.png"), os.path.join(DESKTOP_OUT, "duel_disk_v4_rest.png"))
 pivot.rotation_euler = (0, 0, 0)
 pivot.location = (8, 8, 8)
 pivot.scale = (1, 1, 1)
 aim_camera(70, 20)
-paths.append(save_both("duel_disk_v3_top.png"))
+paths.append(save_both("duel_disk_top.png"))
+shutil.copy2(os.path.join(OUT_DIR, "duel_disk_top.png"), os.path.join(OUT_DIR, "duel_disk_v4_top.png"))
+shutil.copy2(os.path.join(OUT_DIR, "duel_disk_top.png"), os.path.join(DESKTOP_OUT, "duel_disk_v4_top.png"))
 
-blend_path = os.path.join(OUT_DIR, "duel_disk_v3_preview.blend")
+blend_path = os.path.join(OUT_DIR, "duel_disk_v4_preview.blend")
 bpy.ops.wm.save_as_mainfile(filepath=blend_path)
 print("DONE", paths)
 print("BLEND", blend_path)

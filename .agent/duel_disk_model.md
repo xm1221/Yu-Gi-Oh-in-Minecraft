@@ -4,7 +4,17 @@ Anime-inspired KaibaCorp Battle City Duel Disk (vanilla JSON item model).
 
 - Model: `assets/ygomc/models/item/duel_disk.json`
 - Texture: `assets/ygomc/textures/item/duel_disk.png` (128x128 atlas)
-- Regenerate: `python tools/gen_duel_disk_model.py`
+- Blockbench project (embedded texture): `.agent/blockbench/duel_disk.bbmodel`
+- Regenerate model+atlas: `python tools/gen_duel_disk_model.py`
+- Regenerate bbmodel: `python tools/export_duel_disk_bbmodel.py`
+
+## UV mapping
+
+Faces use **aspect-aware box UVs** inside named atlas patches (`REGIONS` in
+`tools/gen_duel_disk_model.py`). Each face keeps its width/height ratio and is
+scaled to fit inside its patch (no full-swatch stamps, no UVs outside the
+painted region). `texture_size` stays `[128, 128]`; in-game texture path stays
+`ygomc:item/duel_disk`.
 
 ## Group tree (Blockbench)
 
@@ -27,11 +37,30 @@ root/
     bolts/        # hub_bolt_1..4
 ```
 
-Groups are written in Blockbench Java Block/Item format (`groups` array with
-nested objects + element indices). Open the JSON in Blockbench as a **Java
-Block/Item** model. Texture path stays `ygomc:item/duel_disk` for in-game use;
-in Blockbench, File → Import → Texture and point at
-`assets/ygomc/textures/item/duel_disk.png` (or set the resource pack root).
+## Blockbench
+
+**How we previewed:** Blender (`tools` / `.agent/previews/render_duel_disk.py`)
+loads `duel_disk.json` cubes and applies `textures/item/duel_disk.png` as a
+file-path image texture on each face UV. That is **not** Blockbench.
+
+**Why the Java JSON looks untextured in BB:** the model uses
+`"0": "ygomc:item/duel_disk"`. Blockbench only resolves that namespace if you
+set **File → Preferences → Minecraft assets / resource pack root** (wording
+varies by version) to this repo's `common/src/main/resources/assets`. Without
+that, the texture slot is empty → pink / black / invisible mesh.
+
+**Open with textures visible immediately:**
+`.agent/blockbench/duel_disk.bbmodel` — PNG is embedded as base64, groups under
+`root/` preserved. Prefer this file for editing in Blockbench.
+
+**Optional:** after setting the assets folder to `.../resources/assets`, the
+Java `duel_disk.json` also resolves `ygomc:` paths.
+
+**After editing in BB:** export / save back to Java Item/Block JSON and **keep**
+the `ygomc:item/duel_disk` texture namespace (do not strip it to a bare
+`item/duel_disk`, which would resolve as `minecraft:`). Then re-run
+`python tools/export_duel_disk_bbmodel.py` if you want an updated embedded
+project. Regenerate UVs from the Python generator if you change geometry bulk.
 
 ## Vanilla / Blockbench rotation limits
 
@@ -50,4 +79,4 @@ That bake keeps an octagonal hub silhouette without illegal JSON.
 1. `/give @s ygomc:duel_disk`
 2. Inventory icon: hub, five wing panels, pointed tip
 3. Third-person: cuff along the forearm
-4. Blockbench: open model → Outliner shows `root/` tree; no rotation warnings
+4. Blockbench: open `.agent/blockbench/duel_disk.bbmodel` — textured, `root/` tree, no rotation warnings

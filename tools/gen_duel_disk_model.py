@@ -287,18 +287,50 @@ draw.rectangle((x0 + 2, y0 + 2, x1 - 3, y1 - 3), fill=GOLD)
 
 
 def uv(region):
+    """Full atlas patch (legacy stamp). Prefer aspect_uv for real faces."""
     return list(REGIONS[region])
 
 
-def faces(top, side, bottom=None):
+def aspect_uv(region, face_w, face_h):
+    """Map a face into its atlas patch, preserving aspect and staying inside.
+
+    Model units map into the region with a uniform scale so the UV quad
+    never leaves the painted patch. Larger faces use more of the detail;
+    thin rails stay thin instead of stretching a whole swatch.
+    """
+    rx0, ry0, rx1, ry1 = REGIONS[region]
+    rw = float(rx1 - rx0)
+    rh = float(ry1 - ry0)
+    fw = max(abs(float(face_w)), 0.05)
+    fh = max(abs(float(face_h)), 0.05)
+    scale = min(rw / fw, rh / fh)
+    uw = fw * scale
+    uh = fh * scale
+    # Keep a tiny inset so nearest-neighbor sampling stays on painted pixels.
+    inset = 0.02 if min(uw, uh) > 0.2 else 0.0
+    u0 = rx0 + inset
+    v0 = ry0 + inset
+    u1 = min(rx0 + uw, rx1) - inset
+    v1 = min(ry0 + uh, ry1) - inset
+    if u1 <= u0:
+        u0, u1 = rx0, min(rx0 + max(uw, 0.25), rx1)
+    if v1 <= v0:
+        v0, v1 = ry0, min(ry0 + max(uh, 0.25), ry1)
+    return [round(u0, 3), round(v0, 3), round(u1, 3), round(v1, 3)]
+
+
+def faces(frm, to, top, side, bottom=None):
     bottom = bottom or side
+    dx = abs(to[0] - frm[0])
+    dy = abs(to[1] - frm[1])
+    dz = abs(to[2] - frm[2])
     return {
-        "north": {"uv": uv(side), "texture": "#0"},
-        "east": {"uv": uv(side), "texture": "#0"},
-        "south": {"uv": uv(side), "texture": "#0"},
-        "west": {"uv": uv(side), "texture": "#0"},
-        "up": {"uv": uv(top), "texture": "#0"},
-        "down": {"uv": uv(bottom), "texture": "#0"},
+        "north": {"uv": aspect_uv(side, dx, dy), "texture": "#0"},
+        "east": {"uv": aspect_uv(side, dz, dy), "texture": "#0"},
+        "south": {"uv": aspect_uv(side, dx, dy), "texture": "#0"},
+        "west": {"uv": aspect_uv(side, dz, dy), "texture": "#0"},
+        "up": {"uv": aspect_uv(top, dx, dz), "texture": "#0"},
+        "down": {"uv": aspect_uv(bottom, dx, dz), "texture": "#0"},
     }
 
 
@@ -310,7 +342,7 @@ def box(name, frm, to, top, side, bottom=None, rotation=None):
         "name": name,
         "from": [round(v, 3) for v in frm],
         "to": [round(v, 3) for v in to],
-        "faces": faces(top, side, bottom),
+        "faces": faces(frm, to, top, side, bottom),
     }
     if rotation:
         angle, axis, origin = rotation
@@ -673,6 +705,13 @@ def validate():
             u0, v0, u1, v1 = face["uv"]
             assert 0 <= u0 < u1 <= TEXTURE_SIZE, (element["name"], face["uv"])
             assert 0 <= v0 < v1 <= TEXTURE_SIZE, (element["name"], face["uv"])
+            # Each UV rect must sit entirely inside one atlas patch.
+            inside = False
+            for rx0, ry0, rx1, ry1 in REGIONS.values():
+                if u0 >= rx0 - 1e-6 and v0 >= ry0 - 1e-6 and u1 <= rx1 + 1e-6 and v1 <= ry1 + 1e-6:
+                    inside = True
+                    break
+            assert inside, (element["name"], face["uv"])
 
 
 validate()
@@ -689,7 +728,17 @@ Anime-inspired KaibaCorp Battle City Duel Disk (vanilla JSON item model).
 
 - Model: `assets/ygomc/models/item/duel_disk.json`
 - Texture: `assets/ygomc/textures/item/duel_disk.png` (128x128 atlas)
-- Regenerate: `python tools/gen_duel_disk_model.py`
+- Blockbench project (embedded texture): `.agent/blockbench/duel_disk.bbmodel`
+- Regenerate model+atlas: `python tools/gen_duel_disk_model.py`
+- Regenerate bbmodel: `python tools/export_duel_disk_bbmodel.py`
+
+## UV mapping
+
+Faces use **aspect-aware box UVs** inside named atlas patches (`REGIONS` in
+`tools/gen_duel_disk_model.py`). Each face keeps its width/height ratio and is
+scaled to fit inside its patch (no full-swatch stamps, no UVs outside the
+painted region). `texture_size` stays `[128, 128]`; in-game texture path stays
+`ygomc:item/duel_disk`.
 
 ## Group tree (Blockbench)
 
@@ -712,11 +761,30 @@ root/
     bolts/        # hub_bolt_1..4
 ```
 
-Groups are written in Blockbench Java Block/Item format (`groups` array with
-nested objects + element indices). Open the JSON in Blockbench as a **Java
-Block/Item** model. Texture path stays `ygomc:item/duel_disk` for in-game use;
-in Blockbench, File → Import → Texture and point at
-`assets/ygomc/textures/item/duel_disk.png` (or set the resource pack root).
+## Blockbench
+
+**How we previewed:** Blender (`tools` / `.agent/previews/render_duel_disk.py`)
+loads `duel_disk.json` cubes and applies `textures/item/duel_disk.png` as a
+file-path image texture on each face UV. That is **not** Blockbench.
+
+**Why the Java JSON looks untextured in BB:** the model uses
+`"0": "ygomc:item/duel_disk"`. Blockbench only resolves that namespace if you
+set **File → Preferences → Minecraft assets / resource pack root** (wording
+varies by version) to this repo's `common/src/main/resources/assets`. Without
+that, the texture slot is empty → pink / black / invisible mesh.
+
+**Open with textures visible immediately:**
+`.agent/blockbench/duel_disk.bbmodel` — PNG is embedded as base64, groups under
+`root/` preserved. Prefer this file for editing in Blockbench.
+
+**Optional:** after setting the assets folder to `.../resources/assets`, the
+Java `duel_disk.json` also resolves `ygomc:` paths.
+
+**After editing in BB:** export / save back to Java Item/Block JSON and **keep**
+the `ygomc:item/duel_disk` texture namespace (do not strip it to a bare
+`item/duel_disk`, which would resolve as `minecraft:`). Then re-run
+`python tools/export_duel_disk_bbmodel.py` if you want an updated embedded
+project. Regenerate UVs from the Python generator if you change geometry bulk.
 
 ## Vanilla / Blockbench rotation limits
 
@@ -735,7 +803,7 @@ That bake keeps an octagonal hub silhouette without illegal JSON.
 1. `/give @s ygomc:duel_disk`
 2. Inventory icon: hub, five wing panels, pointed tip
 3. Third-person: cuff along the forearm
-4. Blockbench: open model → Outliner shows `root/` tree; no rotation warnings
+4. Blockbench: open `.agent/blockbench/duel_disk.bbmodel` — textured, `root/` tree, no rotation warnings
 """
 with open(NOTE_PATH, "w", encoding="utf-8") as handle:
     handle.write(note)
