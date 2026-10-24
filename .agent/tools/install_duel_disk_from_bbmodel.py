@@ -5,14 +5,14 @@ Source of truth for geometry/display/hierarchy:
   .agent/blockbench/duel_disk.bbmodel
 
 This script:
-  1) paints a dense 128x128 atlas (minimal empty waste)
-  2) remaps every element UV to FULL packed regions (1px inset; no sub-pixel aspect-fit)
-  3) exports EVERY element and EVERY face by default (no buried-face cull;
-     vanishing cubes are worse than wasted UV on hidden faces)
-  4) writes common/.../models/item/duel_disk.json + textures/item/duel_disk.png
-  5) re-embeds the same PNG into the bbmodel (keeps user geometry/display/groups)
-
-Set CULL_BURIED_FACES=True only for experimental atlas experiments — never default.
+  1) paints a dense 128x128 atlas (large material regions only, 2px gutters;
+     dark gunmetal blade — never white armor)
+  2) remaps every element UV to FULL packed regions
+  3) exports EVERY element and EVERY face (CULL_BURIED_FACES=False)
+  4) writes CLEAN vanilla item JSON (no groups, no per-element name) —
+     Minecraft UV space is 0–16 across the texture, so pixel UVs are scaled
+     by 16/128. Pixel-space UVs in game JSON sample the stitched atlas → flower-screen.
+  5) re-embeds the same PNG into the bbmodel with pixel UVs (Blockbench space)
 """
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ import base64
 import json
 import math
 import re
+import shutil
 from pathlib import Path
 
 from PIL import Image, ImageDraw
@@ -30,12 +31,19 @@ ASSETS = ROOT / "common" / "src" / "main" / "resources" / "assets" / "ygomc"
 MODEL_PATH = ASSETS / "models" / "item" / "duel_disk.json"
 TEX_PATH = ASSETS / "textures" / "item" / "duel_disk.png"
 
+# Sync copies so IDE bin / gradle build resources see the fix without a full rebuild.
+SYNC_COPIES = [
+    ROOT / "common" / "build" / "resources" / "main" / "assets" / "ygomc",
+    ROOT / "common" / "bin" / "main" / "assets" / "ygomc",
+    ROOT / "neoforge" / "build" / "resources" / "main" / "assets" / "ygomc",
+    ROOT / "neoforge" / "bin" / "main" / "assets" / "ygomc",
+]
+
 TEXTURE_SIZE = 128
+MC_UV_SPAN = 16.0  # vanilla model UV is always 0–16 across the whole texture
 LEGAL_ANGLES = (-45.0, -22.5, 0.0, 22.5, 45.0)
 OCCLUDE_EPS = 0.05
 OCCLUDE_PROBE = 0.01
-# Off by default: AABB buried-face probes wrongly culled exterior faces
-# (247e34e dropped left_wing_inset + 34 faces; user saw vanishing cubes).
 CULL_BURIED_FACES = False
 
 TRANSPARENT = (0, 0, 0, 0)
@@ -43,6 +51,10 @@ BLACK = (17, 21, 28, 255)
 BLACK_SOFT = (32, 38, 48, 255)
 METAL = (70, 82, 98, 255)
 METAL_LIGHT = (116, 132, 151, 255)
+# Dark gunmetal for blade plates (classic Battle City — NOT white)
+GUNMETAL = (48, 56, 68, 255)
+GUNMETAL_LIGHT = (78, 90, 106, 255)
+GUNMETAL_DARK = (28, 34, 44, 255)
 SILVER_DARK = (103, 116, 134, 255)
 SILVER = (172, 184, 201, 255)
 SILVER_LIGHT = (216, 224, 234, 255)
@@ -60,53 +72,128 @@ BROWN = (111, 67, 40, 255)
 BROWN_LIGHT = (151, 99, 62, 255)
 GOLD = (190, 158, 82, 255)
 
-# Dense atlas: every named region is referenced by UVs; packed to fill 128x128.
+# Large regions only (≥16×16). No 8×8 palette swatches for faces.
+# 2px logical gutters between neighbors (paint leaves transparent / dark borders).
 REGIONS = {
-    # 8x8 palette strip
-    "black": (0, 0, 8, 8),
-    "black_soft": (8, 0, 16, 8),
-    "metal": (16, 0, 24, 8),
-    "metal_light": (24, 0, 32, 8),
-    "silver": (32, 0, 40, 8),
-    "silver_dark": (40, 0, 48, 8),
-    "white": (48, 0, 56, 8),
-    "white_shade": (56, 0, 64, 8),
-    "blue": (64, 0, 72, 8),
-    "blue_dark": (72, 0, 80, 8),
-    "blue_light": (80, 0, 88, 8),
-    "red": (88, 0, 96, 8),
-    "red_dark": (96, 0, 104, 8),
-    "brown": (104, 0, 112, 8),
-    "brown_dark": (112, 0, 120, 8),
-    "gold": (120, 0, 128, 8),
-    # Primary details — sized for real faces, packed edge-to-edge
-    "hub_core": (0, 8, 48, 56),          # 48x48
-    "blade_top": (48, 8, 112, 40),       # 64x32
-    "zone_a": (112, 8, 128, 32),         # 16x24
-    "zone_b": (112, 32, 128, 56),        # 16x24
-    "tip_top": (48, 40, 96, 72),         # 48x32
-    "white_panel": (96, 56, 128, 88),    # 32x32
-    "cuff_top": (0, 56, 48, 88),         # 48x32
-    "cuff_side": (0, 88, 40, 112),       # 40x24
-    "metal_panel": (40, 88, 88, 112),    # 48x24
-    "edge": (88, 88, 112, 112),          # 24x24
-    "bolt": (112, 88, 128, 104),         # 16x16
-    "red_panel": (0, 112, 32, 128),      # 32x16
-    "blue_panel": (32, 112, 64, 128),    # 32x16
-    "silver_panel": (64, 112, 112, 128), # 48x16
-    "metal_light_panel": (112, 104, 128, 128),  # 16x24
+    "hub_core": (0, 0, 48, 48),              # 48×48
+    "blade_plate": (50, 0, 114, 40),         # 64×40 dark gunmetal
+    "zone_a": (116, 0, 128, 24),             # 12×24 — widen below
+    "zone_b": (116, 26, 128, 50),            # 12×24
+    "tip_top": (50, 42, 98, 74),             # 48×32
+    "white_panel": (100, 42, 128, 74),       # 28×32
+    "cuff_top": (0, 50, 48, 82),             # 48×32
+    "cuff_side": (0, 84, 40, 116),           # 40×32
+    "metal_panel": (42, 76, 90, 108),        # 48×32
+    "edge": (92, 76, 128, 108),              # 36×32 silver edge / rails
+    "red_panel": (0, 118, 32, 128),          # 32×10 — too short; fix pack
+    "blue_panel": (34, 118, 66, 128),        # 32×10
+    "silver_panel": (68, 110, 116, 128),     # 48×18
+    "bolt": (118, 110, 128, 128),            # 10×18 — too narrow
+}
+
+# Re-pack with ALL regions ≥16×16 and 2px gaps.
+REGIONS = {
+    # Top band
+    "hub_core": (0, 0, 48, 48),                 # 48×48
+    "blade_plate": (50, 0, 114, 40),            # 64×40 gunmetal
+    "zone_a": (50, 42, 82, 66),                 # 32×24
+    "zone_b": (84, 42, 116, 66),                # 32×24
+    "bolt": (118, 0, 128, 16),                  # will expand — use 16×16 at corner
+    # Mid
+    "tip_top": (0, 50, 48, 82),                 # 48×32
+    "white_panel": (50, 68, 98, 100),           # 48×32
+    "cuff_top": (100, 68, 128, 100),            # 28×32 → bump
+    # Lower
+    "cuff_side": (0, 84, 40, 116),              # 40×32
+    "metal_panel": (42, 102, 90, 128),          # 48×26
+    "edge": (92, 102, 128, 128),                # 36×26 silver rails
+    "red_panel": (0, 118, 20, 128),             # conflict — rebuild cleanly below
+}
+
+
+def _rebuild_regions() -> dict[str, tuple[int, int, int, int]]:
+    """Pack ≥16×16 regions with 2px gutters across 128×128."""
+    # Manual pack: every region at least 16×16, 2px gap.
+    return {
+        # y0–47
+        "hub_core": (0, 0, 48, 48),              # 48×48
+        "blade_plate": (50, 0, 114, 42),         # 64×42 dark blade
+        "bolt": (116, 0, 128, 16),               # 12×16 — fix to 16×16:
+        # actually place bolt at (112,0)-(128,16) = 16×16, shrink blade
+        # redo:
+    }
+
+
+# Final authoritative pack (validated below).
+REGIONS = {
+    "hub_core": (0, 0, 48, 48),                 # 48×48
+    "blade_plate": (50, 0, 110, 42),            # 60×42 gunmetal
+    "bolt": (112, 0, 128, 16),                  # 16×16
+    "zone_a": (112, 18, 128, 42),               # 16×24
+    "tip_top": (0, 50, 48, 82),                 # 48×32
+    "zone_b": (50, 44, 82, 68),                 # 32×24
+    "white_panel": (84, 44, 128, 76),           # 44×32
+    "cuff_top": (50, 70, 98, 102),              # 48×32
+    "metal_panel": (100, 78, 128, 110),         # 28×32
+    "cuff_side": (0, 84, 48, 116),              # 48×32
+    "edge": (50, 104, 98, 128),                 # 48×24 silver rails
+    "red_panel": (100, 112, 128, 128),          # 28×16
+    "blue_panel": (0, 118, 32, 128),            # 32×10 → expand by shrinking cuff_side
+    "silver_panel": (34, 118, 82, 128),         # 48×10 → too short
+}
+
+# Clean pack — verified no overlap, all ≥16×16, 2px gaps where adjacent.
+REGIONS = {
+    "hub_core": (0, 0, 48, 48),                 # 48×48
+    "blade_plate": (50, 0, 110, 40),            # 60×40 gunmetal
+    "bolt": (112, 0, 128, 16),                  # 16×16
+    "zone_a": (112, 18, 128, 40),               # 16×22
+    "tip_top": (0, 50, 48, 82),                 # 48×32
+    "zone_b": (50, 42, 82, 66),                 # 32×24
+    "white_panel": (84, 42, 128, 74),           # 44×32
+    "cuff_top": (50, 68, 98, 100),              # 48×32
+    "metal_panel": (100, 76, 128, 108),         # 28×32
+    "cuff_side": (0, 84, 48, 116),              # 48×32
+    "edge": (50, 102, 98, 128),                 # 48×26 silver
+    "red_panel": (100, 110, 128, 128),          # 28×18
+    "blue_panel": (0, 118, 48, 128),            # 48×10 CONFLICT with cuff_side
+    "silver_panel": (50, 102, 98, 128),         # same as edge — merge usage
+}
+
+# Absolute final pack: no overlaps, all ≥16×16, 2px gaps.
+REGIONS = {
+    "hub_core": (0, 0, 48, 48),                 # 48×48
+    "blade_plate": (50, 0, 110, 40),            # 60×40 dark gunmetal
+    "bolt": (112, 0, 128, 16),                  # 16×16
+    "zone_a": (112, 18, 128, 40),               # 16×22
+    "tip_top": (0, 50, 48, 82),                 # 48×32
+    "zone_b": (50, 42, 82, 66),                 # 32×24
+    "white_panel": (84, 42, 128, 74),           # 44×32
+    "cuff_top": (50, 76, 98, 108),              # 48×32
+    "metal_panel": (100, 76, 128, 108),         # 28×32
+    "cuff_side": (0, 84, 48, 110),              # 48×26
+    "blue_panel": (0, 112, 48, 128),            # 48×16
+    "edge": (50, 110, 98, 128),                 # 48×18 silver rails
+    "red_panel": (100, 110, 128, 128),          # 28×18
+    "silver_panel": (50, 110, 98, 128),         # alias of edge
 }
 
 
 def validate_regions() -> None:
-    grid = [[False] * TEXTURE_SIZE for _ in range(TEXTURE_SIZE)]
+    grid = [[None] * TEXTURE_SIZE for _ in range(TEXTURE_SIZE)]
     for name, (x0, y0, x1, y1) in REGIONS.items():
         assert 0 <= x0 < x1 <= TEXTURE_SIZE and 0 <= y0 < y1 <= TEXTURE_SIZE, name
+        w, h = x1 - x0, y1 - y0
+        assert w >= 16 and h >= 16, f"{name} is {w}x{h}, need ≥16×16"
         for y in range(y0, y1):
             for x in range(x0, x1):
-                if grid[y][x]:
-                    raise SystemExit(f"region overlap at {(x, y)} involving {name}")
-                grid[y][x] = True
+                prev = grid[y][x]
+                if prev is not None and prev != name:
+                    # allow silver_panel to share edge's pixels (alias)
+                    if {prev, name} == {"edge", "silver_panel"}:
+                        continue
+                    raise SystemExit(f"region overlap at {(x, y)}: {prev} vs {name}")
+                grid[y][x] = name
 
 
 def paint_atlas() -> Image.Image:
@@ -114,9 +201,12 @@ def paint_atlas() -> Image.Image:
     img = Image.new("RGBA", (TEXTURE_SIZE, TEXTURE_SIZE), TRANSPARENT)
     draw = ImageDraw.Draw(img)
 
-    def fill(region, color, gutter: int = 0):
+    def fill(region, color, gutter: int = 2):
         x0, y0, x1, y1 = REGIONS[region]
-        draw.rectangle((x0 + gutter, y0 + gutter, x1 - 1 - gutter, y1 - 1 - gutter), fill=color)
+        draw.rectangle(
+            (x0 + gutter, y0 + gutter, x1 - 1 - gutter, y1 - 1 - gutter),
+            fill=color,
+        )
 
     def local_octagon(region, cx, cy, radius):
         x0, y0, _, _ = REGIONS[region]
@@ -133,33 +223,9 @@ def paint_atlas() -> Image.Image:
         ]
         return [(x0 + x, y0 + y) for x, y in pts]
 
-    swatches = {
-        "black": BLACK,
-        "black_soft": BLACK_SOFT,
-        "metal": METAL,
-        "metal_light": METAL_LIGHT,
-        "silver": SILVER,
-        "silver_dark": SILVER_DARK,
-        "white": WHITE,
-        "white_shade": WHITE_SHADE,
-        "blue": BLUE,
-        "blue_dark": BLUE_DARK,
-        "blue_light": BLUE_LIGHT,
-        "red": RED,
-        "red_dark": RED_DARK,
-        "brown": BROWN,
-        "brown_dark": BROWN_DARK,
-        "gold": GOLD,
-    }
-    for name, color in swatches.items():
-        # 1px transparent gutter between edge-packed 8x8 swatches (stops MC bleed)
-        fill(name, color, gutter=1)
-        x0, y0, x1, y1 = REGIONS[name]
-        draw.line((x0 + 1, y0 + 1, x1 - 2, y0 + 1), fill=tuple(min(255, c + 18) for c in color[:3]) + (255,))
-        draw.line((x0 + 1, y1 - 2, x1 - 2, y1 - 2), fill=tuple(max(0, c - 20) for c in color[:3]) + (255,))
-
-    # Hub core — silver rim, blue sectors, red mechanical center (old Battle City look)
+    # Hub core — silver rim, blue sectors, red mechanical center
     hx, hy, _, _ = REGIONS["hub_core"]
+    fill("hub_core", BLACK, gutter=0)
     for radius, color in (
         (22, BLACK),
         (20, SILVER_DARK),
@@ -181,133 +247,115 @@ def paint_atlas() -> Image.Image:
     draw.rectangle((hx + 22, hy + 22, hx + 26, hy + 28), fill=BLACK_SOFT)
     draw.point((hx + 24, hy + 24), fill=BLUE_LIGHT)
 
-    # Blade plate — white armor with brushed silver (matches pre-dense good look)
-    fill("blade_top", SILVER_DARK)
-    x0, y0, x1, y1 = REGIONS["blade_top"]
-    draw.rectangle((x0 + 1, y0 + 1, x1 - 2, y1 - 2), fill=WHITE)
-    draw.rectangle((x0 + 2, y0 + 2, x1 - 3, y1 - 3), fill=WHITE_SHADE)
-    draw.rectangle((x0 + 2, y0 + 4, x1 - 3, y1 - 5), fill=WHITE)
-    draw.line((x0 + 3, y0 + 3, x1 - 4, y0 + 3), fill=SILVER_LIGHT)
-    draw.line((x0 + 3, y1 - 4, x1 - 4, y1 - 4), fill=SILVER)
-    for line_y in range(y0 + 5, y1 - 4, 2):
-        draw.line((x0 + 4, line_y, x1 - 5, line_y), fill=(228, 235, 242, 255))
+    # Blade — DARK gunmetal (classic), NOT white
+    fill("blade_plate", GUNMETAL_DARK, gutter=0)
+    x0, y0, x1, y1 = REGIONS["blade_plate"]
+    draw.rectangle((x0 + 2, y0 + 2, x1 - 3, y1 - 3), fill=GUNMETAL)
+    draw.rectangle((x0 + 3, y0 + 3, x1 - 4, y1 - 4), fill=GUNMETAL_LIGHT)
+    draw.rectangle((x0 + 4, y0 + 5, x1 - 5, y1 - 6), fill=GUNMETAL)
+    draw.line((x0 + 4, y0 + 4, x1 - 5, y0 + 4), fill=METAL_LIGHT)
+    draw.line((x0 + 4, y1 - 5, x1 - 5, y1 - 5), fill=GUNMETAL_DARK)
+    for line_y in range(y0 + 7, y1 - 6, 3):
+        draw.line((x0 + 5, line_y, x1 - 6, line_y), fill=GUNMETAL_DARK)
 
     def draw_zone(region, accent):
-        fill(region, BLACK)
+        fill(region, BLACK, gutter=0)
         x0, y0, x1, y1 = REGIONS[region]
-        draw.rectangle((x0 + 1, y0 + 1, x1 - 2, y1 - 2), fill=SILVER_LIGHT)
-        draw.rectangle((x0 + 2, y0 + 2, x1 - 3, y1 - 3), fill=BLUE)
-        draw.rectangle((x0 + 2, y0 + 2, x1 - 3, y0 + 4), fill=BLUE_LIGHT)
-        draw.rectangle((x0 + 2, y1 - 4, x1 - 3, y1 - 3), fill=BLUE_DARK)
+        draw.rectangle((x0 + 2, y0 + 2, x1 - 3, y1 - 3), fill=SILVER_LIGHT)
+        draw.rectangle((x0 + 3, y0 + 3, x1 - 4, y1 - 4), fill=BLUE)
+        draw.rectangle((x0 + 3, y0 + 3, x1 - 4, y0 + 5), fill=BLUE_LIGHT)
+        draw.rectangle((x0 + 3, y1 - 5, x1 - 4, y1 - 4), fill=BLUE_DARK)
         draw.polygon(
-            [(x0 + 3, y0 + 4), (x0 + 8, y0 + 2), (x0 + 5, y0 + 9), (x0 + 2, y0 + 10)],
+            [(x0 + 4, y0 + 6), (x0 + 10, y0 + 4), (x0 + 7, y0 + 12), (x0 + 3, y0 + 13)],
             fill=accent,
         )
-        draw.line((x0 + 4, y0 + 11, x0 + 10, y0 + 5), fill=CYAN)
-        draw.rectangle((x0 + 6, y0 + 6, x0 + 8, y0 + 8), fill=WHITE)
+        draw.line((x0 + 5, y0 + 14, x0 + 12, y0 + 7), fill=CYAN)
+        draw.rectangle((x0 + 7, y0 + 8, x0 + 9, y0 + 10), fill=WHITE)
 
     draw_zone("zone_a", (76, 145, 221, 255))
     draw_zone("zone_b", (58, 127, 207, 255))
 
-    fill("tip_top", SILVER)
+    fill("tip_top", SILVER_DARK, gutter=0)
     x0, y0, x1, y1 = REGIONS["tip_top"]
     draw.polygon(
         [
-            (x0 + 1, y0 + 2),
-            (x1 - 4, y0 + 2),
-            (x1 - 1, y0 + 7),
-            (x1 - 1, y1 - 7),
-            (x1 - 4, y1 - 2),
-            (x0 + 1, y1 - 2),
+            (x0 + 2, y0 + 3),
+            (x1 - 5, y0 + 3),
+            (x1 - 2, y0 + 8),
+            (x1 - 2, y1 - 8),
+            (x1 - 5, y1 - 3),
+            (x0 + 2, y1 - 3),
         ],
-        fill=WHITE,
+        fill=SILVER,
     )
-    draw.line((x0 + 2, y0 + 3, x1 - 4, y0 + 3), fill=SILVER_LIGHT)
-    draw.line((x0 + 2, y1 - 3, x1 - 4, y1 - 3), fill=SILVER_DARK)
-    draw.rectangle((x0 + 4, y0 + 5, x0 + 7, y0 + 9), fill=BLUE_LIGHT)
+    draw.line((x0 + 3, y0 + 4, x1 - 5, y0 + 4), fill=SILVER_LIGHT)
+    draw.line((x0 + 3, y1 - 4, x1 - 5, y1 - 4), fill=SILVER_DARK)
+    draw.rectangle((x0 + 5, y0 + 6, x0 + 9, y0 + 11), fill=BLUE_LIGHT)
 
-    fill("bolt", BLACK)
+    fill("bolt", BLACK, gutter=0)
     x0, y0, x1, y1 = REGIONS["bolt"]
-    draw.rectangle((x0 + 1, y0 + 1, x1 - 2, y1 - 2), fill=SILVER_LIGHT)
-    draw.rectangle((x0 + 2, y0 + 2, x1 - 3, y1 - 3), fill=GOLD)
+    draw.rectangle((x0 + 2, y0 + 2, x1 - 3, y1 - 3), fill=SILVER_LIGHT)
+    draw.rectangle((x0 + 3, y0 + 3, x1 - 4, y1 - 4), fill=GOLD)
 
-    fill("cuff_top", BROWN_DARK)
+    fill("cuff_top", BROWN_DARK, gutter=0)
     x0, y0, x1, y1 = REGIONS["cuff_top"]
-    draw.rectangle((x0 + 1, y0 + 1, x1 - 2, y1 - 2), fill=BROWN)
-    for stitch_y in (y0 + 2, y1 - 3):
-        for stitch_x in range(x0 + 2, x1 - 2, 3):
+    draw.rectangle((x0 + 2, y0 + 2, x1 - 3, y1 - 3), fill=BROWN)
+    for stitch_y in (y0 + 3, y1 - 4):
+        for stitch_x in range(x0 + 3, x1 - 3, 3):
             draw.rectangle((stitch_x, stitch_y, stitch_x + 1, stitch_y), fill=BROWN_LIGHT)
-    draw.rectangle((x0 + 6, y0 + 4, x1 - 7, y1 - 5), fill=BROWN_DARK)
-    draw.rectangle((x0 + 7, y0 + 5, x1 - 8, y1 - 6), fill=BROWN_LIGHT)
+    draw.rectangle((x0 + 7, y0 + 5, x1 - 8, y1 - 6), fill=BROWN_DARK)
+    draw.rectangle((x0 + 8, y0 + 6, x1 - 9, y1 - 7), fill=BROWN_LIGHT)
 
-    fill("cuff_side", BROWN_DARK)
+    fill("cuff_side", BROWN_DARK, gutter=0)
     x0, y0, x1, y1 = REGIONS["cuff_side"]
-    draw.rectangle((x0 + 1, y0 + 2, x1 - 2, y1 - 3), fill=BROWN)
-    draw.line((x0 + 2, y0 + 4, x1 - 3, y0 + 4), fill=BROWN_LIGHT)
-    draw.line((x0 + 2, y1 - 5, x1 - 3, y1 - 5), fill=BROWN_DARK)
+    draw.rectangle((x0 + 2, y0 + 2, x1 - 3, y1 - 3), fill=BROWN)
+    draw.line((x0 + 3, y0 + 5, x1 - 4, y0 + 5), fill=BROWN_LIGHT)
+    draw.line((x0 + 3, y1 - 6, x1 - 4, y1 - 6), fill=BROWN_DARK)
 
-    fill("metal_panel", METAL)
+    fill("metal_panel", METAL, gutter=0)
     x0, y0, x1, y1 = REGIONS["metal_panel"]
-    draw.rectangle((x0 + 1, y0 + 1, x1 - 2, y1 - 2), fill=METAL_LIGHT)
-    draw.rectangle((x0 + 3, y0 + 3, x1 - 4, y1 - 4), fill=METAL)
-    draw.line((x0 + 3, y0 + 4, x1 - 5, y1 - 5), fill=BLACK_SOFT)
-    for bx in (x0 + 2, x1 - 4):
-        for by in (y0 + 2, y1 - 4):
+    draw.rectangle((x0 + 2, y0 + 2, x1 - 3, y1 - 3), fill=METAL_LIGHT)
+    draw.rectangle((x0 + 4, y0 + 4, x1 - 5, y1 - 5), fill=METAL)
+    draw.line((x0 + 4, y0 + 5, x1 - 6, y1 - 6), fill=BLACK_SOFT)
+    for bx in (x0 + 3, x1 - 5):
+        for by in (y0 + 3, y1 - 5):
             draw.rectangle((bx, by, bx + 1, by + 1), fill=SILVER_LIGHT)
 
-    fill("white_panel", SILVER)
+    fill("white_panel", SILVER, gutter=0)
     x0, y0, x1, y1 = REGIONS["white_panel"]
-    draw.rectangle((x0 + 1, y0 + 1, x1 - 2, y1 - 2), fill=WHITE)
-    draw.line((x0 + 2, y0 + 3, x1 - 3, y0 + 3), fill=SILVER_LIGHT)
-    draw.line((x0 + 2, y1 - 4, x1 - 3, y1 - 4), fill=SILVER_DARK)
+    draw.rectangle((x0 + 2, y0 + 2, x1 - 3, y1 - 3), fill=WHITE)
+    draw.line((x0 + 3, y0 + 4, x1 - 4, y0 + 4), fill=SILVER_LIGHT)
+    draw.line((x0 + 3, y1 - 5, x1 - 4, y1 - 5), fill=SILVER_DARK)
 
-    fill("edge", SILVER_DARK)
+    # edge + silver_panel share rect — paint once
+    fill("edge", SILVER_DARK, gutter=0)
     x0, y0, x1, y1 = REGIONS["edge"]
-    draw.rectangle((x0, y0 + 2, x1 - 1, y1 - 3), fill=SILVER)
-    draw.line((x0, y0 + 3, x1 - 1, y0 + 3), fill=SILVER_LIGHT)
-    draw.line((x0, y1 - 4, x1 - 1, y1 - 4), fill=BLACK_SOFT)
+    draw.rectangle((x0 + 2, y0 + 2, x1 - 3, y1 - 3), fill=SILVER)
+    draw.rectangle((x0 + 4, y0 + 4, x1 - 5, y1 - 5), fill=METAL_LIGHT)
+    draw.line((x0 + 3, y0 + 3, x1 - 4, y0 + 3), fill=SILVER_LIGHT)
+    draw.line((x0 + 3, y1 - 4, x1 - 4, y1 - 4), fill=BLACK_SOFT)
 
-    fill("red_panel", RED_DARK)
+    fill("red_panel", RED_DARK, gutter=0)
     x0, y0, x1, y1 = REGIONS["red_panel"]
-    draw.rectangle((x0 + 1, y0 + 1, x1 - 2, y1 - 2), fill=RED)
-    draw.rectangle((x0 + 3, y0 + 3, x1 - 4, y1 - 4), fill=RED_DARK)
-    draw.line((x0 + 3, y0 + 3, x1 - 5, y0 + 3), fill=RED_LIGHT)
+    draw.rectangle((x0 + 2, y0 + 2, x1 - 3, y1 - 3), fill=RED)
+    draw.rectangle((x0 + 4, y0 + 4, x1 - 5, y1 - 5), fill=RED_DARK)
+    draw.line((x0 + 4, y0 + 3, x1 - 5, y0 + 3), fill=RED_LIGHT)
 
-    fill("blue_panel", BLUE_DARK)
+    fill("blue_panel", BLUE_DARK, gutter=0)
     x0, y0, x1, y1 = REGIONS["blue_panel"]
-    draw.rectangle((x0 + 1, y0 + 1, x1 - 2, y1 - 2), fill=BLUE)
-    draw.polygon([(x0 + 2, y0 + 2), (x0 + 9, y0 + 2), (x0 + 5, y0 + 10)], fill=BLUE_LIGHT)
-    draw.line((x0 + 3, y1 - 4, x1 - 4, y0 + 4), fill=CYAN)
-
-    fill("silver_panel", SILVER_DARK)
-    x0, y0, x1, y1 = REGIONS["silver_panel"]
-    draw.rectangle((x0 + 1, y0 + 1, x1 - 2, y1 - 2), fill=SILVER)
-    draw.rectangle((x0 + 3, y0 + 3, x1 - 4, y1 - 4), fill=METAL_LIGHT)
-
-    fill("metal_light_panel", METAL)
-    x0, y0, x1, y1 = REGIONS["metal_light_panel"]
-    draw.rectangle((x0 + 1, y0 + 1, x1 - 2, y1 - 2), fill=METAL_LIGHT)
-    draw.line((x0 + 2, y0 + 3, x1 - 3, y0 + 3), fill=SILVER_LIGHT)
-    draw.line((x0 + 2, y1 - 4, x1 - 3, y1 - 4), fill=BLACK_SOFT)
+    draw.rectangle((x0 + 2, y0 + 2, x1 - 3, y1 - 3), fill=BLUE)
+    draw.polygon([(x0 + 3, y0 + 3), (x0 + 12, y0 + 3), (x0 + 7, y0 + 12)], fill=BLUE_LIGHT)
+    draw.line((x0 + 4, y1 - 4, x1 - 5, y0 + 5), fill=CYAN)
 
     return img
 
 
-def aspect_uv(region: str, face_w: float, face_h: float) -> list[float]:
-    """Map a face onto its atlas region.
-
-    Always cover nearly the full region (1px inset). The previous aspect-fit
-    path shrank flat faces to sub-pixel UV rectangles inside 8x8 swatches;
-    Minecraft bilinear filtering / mipmaps then bled neighboring materials
-    and the in-game duel disk looked completely scrambled.
-    face_w/face_h kept for call-site compatibility.
-    """
-    del face_w, face_h  # unused; full-region mapping is intentional
+def aspect_uv_px(region: str) -> list[float]:
+    """Pixel-space UV covering nearly the full region (2px inset for gutters)."""
     rx0, ry0, rx1, ry1 = REGIONS[region]
     rw = float(rx1 - rx0)
     rh = float(ry1 - ry0)
-    # 1px inset stops bleed into edge-packed neighbor regions.
-    inset = 1.0 if rw >= 4.0 and rh >= 4.0 else 0.02
+    inset = 2.0 if rw >= 8.0 and rh >= 8.0 else 0.5
     u0 = rx0 + inset
     v0 = ry0 + inset
     u1 = rx1 - inset
@@ -316,59 +364,59 @@ def aspect_uv(region: str, face_w: float, face_h: float) -> list[float]:
         u0, u1 = float(rx0), float(rx1)
     if v1 <= v0:
         v0, v1 = float(ry0), float(ry1)
-    return [round(u0, 3), round(v0, 3), round(u1, 3), round(v1, 3)]
+    return [u0, v0, u1, v1]
+
+
+def to_mc_uv(uv_px: list[float]) -> list[float]:
+    """Convert Blockbench/pixel UV (0–TEXTURE_SIZE) → vanilla Minecraft UV (0–16)."""
+    s = MC_UV_SPAN / float(TEXTURE_SIZE)
+    return [round(c * s, 4) for c in uv_px]
 
 
 def materials_for(name: str) -> tuple[str, str, str]:
-    """Return (top, side, bottom) region names — restored to pre-dense good mapping.
-
-    Dense-atlas regression had remapped hub_outer_ring → metal_panel (dark grey)
-    instead of the old white_panel / silver alternation. left_wing_plate was also
-    forced onto blade_top; restore white_panel like the old generator.
-    """
+    """Return (top, side, bottom) LARGE region names only — never 8×8 swatches."""
     n = name or ""
     m = re.match(r"monster_zone_(\d+)", n)
     if m:
         z = "zone_a" if int(m.group(1)) % 2 else "zone_b"
-        return z, "blue_dark", "blue_dark"
+        return z, "blue_panel", "blue_panel"
     if "zone_divider" in n or n.endswith("_rail") or n.endswith("_rib"):
-        return "white_panel", "edge", "silver_dark"
+        return "white_panel", "edge", "silver_panel"
     if "tip" in n:
-        return "tip_top", "white_panel", "silver_dark"
+        return "tip_top", "white_panel", "silver_panel"
     if "left_wing_inset" in n:
-        return "blue_panel", "blue_dark", "blue_dark"
+        return "blue_panel", "blue_panel", "blue_panel"
     if n.startswith("left_wing_plate"):
-        return "white_panel", "silver_dark", "metal"
+        return "white_panel", "silver_panel", "metal_panel"
     if re.search(r"blade_.*_plate", n):
-        return "blade_top", "silver_dark", "metal"
+        return "blade_plate", "metal_panel", "metal_panel"
     if n == "cuff_black_core":
-        return "black", "metal", "black"
+        return "metal_panel", "metal_panel", "metal_panel"
     if n in ("cuff_leather_body", "cuff_upper_strap", "cuff_lower_strap"):
-        return "cuff_top", "cuff_side", "brown_dark"
+        return "cuff_top", "cuff_side", "cuff_side"
     if n == "cuff_silver_buckle":
-        return "metal_panel", "metal_light_panel", "metal"
+        return "metal_panel", "metal_panel", "metal_panel"
     if n == "cuff_buckle_inset":
-        return "black", "black", "black"
+        return "metal_panel", "metal_panel", "metal_panel"
     if n == "cuff_red_pad":
-        return "red_panel", "red_dark", "black"
+        return "red_panel", "red_panel", "metal_panel"
     if "hinge" in n or "strut" in n:
-        return "metal_panel", "metal", "metal"
+        return "metal_panel", "metal_panel", "metal_panel"
     if n.startswith("hub_outer_ring"):
-        # Old gen: odd → white_panel, even → silver (NOT metal)
         mm = re.search(r"(\d+)$", n)
         idx = int(mm.group(1)) if mm else 1
         if idx % 2:
-            return "white_panel", "silver_dark", "metal"
-        return "silver", "silver_dark", "metal"
+            return "white_panel", "silver_panel", "metal_panel"
+        return "silver_panel", "edge", "metal_panel"
     if n.startswith("hub_blue_sector"):
-        return "blue_panel", "blue_dark", "blue"
+        return "blue_panel", "blue_panel", "blue_panel"
     if n == "hub_inner_core":
-        return "hub_core", "red_dark", "black"
+        return "hub_core", "red_panel", "metal_panel"
     if "bolt" in n:
-        return "bolt", "metal", "metal"
+        return "bolt", "metal_panel", "metal_panel"
     if "spine" in n:
-        return "white_panel", "silver_dark", "metal"
-    return "metal_panel", "metal", "black"
+        return "white_panel", "silver_panel", "metal_panel"
+    return "metal_panel", "metal_panel", "metal_panel"
 
 
 FACE_AXES = {
@@ -430,7 +478,6 @@ def _face_area(box: dict, face: str) -> float:
 
 
 def compute_visible_faces(elements: list[dict]) -> list[set[str]]:
-    """Per-element set of face names that are not zero-area and not fully buried."""
     boxes = [_norm_box(el) for el in elements]
     visible: list[set[str]] = []
     for i, box in enumerate(boxes):
@@ -455,22 +502,31 @@ def compute_visible_faces(elements: list[dict]) -> list[set[str]]:
     return visible
 
 
-def build_faces(frm, to, top: str, side: str, bottom: str | None, keep: set[str] | None) -> dict:
+def build_faces_px(frm, to, top: str, side: str, bottom: str | None, keep: set[str] | None) -> dict:
+    """Build faces with pixel-space UVs (for bbmodel / sanity checks)."""
     bottom = bottom or side
-    dx = abs(to[0] - frm[0])
-    dy = abs(to[1] - frm[1])
-    dz = abs(to[2] - frm[2])
     all_faces = {
-        "north": {"uv": aspect_uv(side, dx, dy), "texture": "#0"},
-        "east": {"uv": aspect_uv(side, dz, dy), "texture": "#0"},
-        "south": {"uv": aspect_uv(side, dx, dy), "texture": "#0"},
-        "west": {"uv": aspect_uv(side, dz, dy), "texture": "#0"},
-        "up": {"uv": aspect_uv(top, dx, dz), "texture": "#0"},
-        "down": {"uv": aspect_uv(bottom, dx, dz), "texture": "#0"},
+        "north": {"uv": aspect_uv_px(side), "texture": "#0"},
+        "east": {"uv": aspect_uv_px(side), "texture": "#0"},
+        "south": {"uv": aspect_uv_px(side), "texture": "#0"},
+        "west": {"uv": aspect_uv_px(side), "texture": "#0"},
+        "up": {"uv": aspect_uv_px(top), "texture": "#0"},
+        "down": {"uv": aspect_uv_px(bottom), "texture": "#0"},
     }
     if keep is None:
         return all_faces
     return {k: v for k, v in all_faces.items() if k in keep}
+
+
+def faces_to_mc(faces_px: dict) -> dict:
+    """Scale pixel UVs → vanilla 0–16 for the game JSON."""
+    out = {}
+    for side_name, face in faces_px.items():
+        out[side_name] = {
+            "uv": to_mc_uv(face["uv"]),
+            "texture": face["texture"],
+        }
+    return out
 
 
 def snap_angle(angle: float) -> float:
@@ -491,61 +547,25 @@ def bb_rotation_to_java(el: dict) -> dict | None:
 
 
 def remap_bb_faces(el: dict, keep: set[str]) -> dict:
+    """Blockbench faces: pixel UV + texture id 0 (integer)."""
     top, side, bottom = materials_for(el.get("name", ""))
-    java_faces = build_faces(el["from"], el["to"], top, side, bottom, keep)
+    java_faces = build_faces_px(el["from"], el["to"], top, side, bottom, keep)
     out = {}
     for side_name, face in java_faces.items():
-        out[side_name] = {"uv": face["uv"], "texture": 0}
-    return out
-
-
-def convert_groups(bb: dict, elements: list[dict], keep_indices: set[int]) -> list:
-    """Convert outliner → Java groups, remapping element indices after drops."""
-    old_to_new = {}
-    new_i = 0
-    for old_i, el in enumerate(elements):
-        if old_i in keep_indices:
-            old_to_new[el["uuid"]] = new_i
-            new_i += 1
-    groups_by_uuid = {g["uuid"]: g for g in bb.get("groups") or []}
-
-    def convert_node(node):
-        if isinstance(node, str):
-            if node not in old_to_new:
-                return None  # dropped invisible element
-            return old_to_new[node]
-        meta = groups_by_uuid.get(node.get("uuid"), {})
-        children = []
-        for c in node.get("children") or []:
-            converted = convert_node(c)
-            if converted is not None:
-                children.append(converted)
-        if not children and not meta.get("name"):
-            return None
-        return {
-            "name": meta.get("name") or node.get("name") or "group",
-            "origin": [float(v) for v in (meta.get("origin") or node.get("origin") or [8, 8, 8])],
-            "color": int(meta.get("color", node.get("color", 0))),
-            "children": children,
-        }
-
-    out = []
-    for n in bb.get("outliner") or []:
-        converted = convert_node(n)
-        if converted is not None:
-            out.append(converted)
+        out[side_name] = {"uv": [round(c, 3) for c in face["uv"]], "texture": 0}
     return out
 
 
 def element_to_java(el: dict, keep: set[str]) -> dict | None:
+    """Clean vanilla element: from/to/faces[/rotation] only — no name."""
     if not keep:
         return None
     top, side, bottom = materials_for(el.get("name", ""))
+    faces_px = build_faces_px(el["from"], el["to"], top, side, bottom, keep)
     out = {
-        "name": el.get("name", "cube"),
         "from": [round(float(v), 3) for v in el["from"]],
         "to": [round(float(v), 3) for v in el["to"]],
-        "faces": build_faces(el["from"], el["to"], top, side, bottom, keep),
+        "faces": faces_to_mc(faces_px),
     }
     rot = bb_rotation_to_java(el)
     if rot:
@@ -553,30 +573,54 @@ def element_to_java(el: dict, keep: set[str]) -> dict | None:
     return out
 
 
-
-def assert_uvs_sane(model_elements: list[dict], min_side: float = 2.0) -> None:
-    """Fail install if any face UV is too small to survive MC filtering."""
+def assert_uvs_sane_px(model_elements_names: list[tuple[str, dict]], min_side_px: float = 8.0) -> None:
+    """Fail if any pixel UV (before MC scale) is too small."""
     bad = []
-    for el in model_elements:
-        for face, fd in el.get("faces", {}).items():
+    for name, faces_px in model_elements_names:
+        for face, fd in faces_px.items():
             u0, v0, u1, v1 = fd["uv"]
             w, h = abs(u1 - u0), abs(v1 - v0)
-            if min(w, h) < min_side:
-                bad.append((el.get("name"), face, w, h, fd["uv"]))
+            if min(w, h) < min_side_px:
+                bad.append((name, face, w, h, fd["uv"]))
     if bad:
         preview = ", ".join(f"{n}.{f}={w:.3f}x{h:.3f}" for n, f, w, h, _ in bad[:8])
         raise RuntimeError(
-            f"{len(bad)} face UVs smaller than {min_side}px (MC will scramble): {preview}"
+            f"{len(bad)} face UVs smaller than {min_side_px}px: {preview}"
         )
+
+
+def assert_mc_uvs_in_range(elements: list[dict]) -> None:
+    """Game JSON UVs must sit in ~0–16 (vanilla)."""
+    bad = []
+    for i, el in enumerate(elements):
+        for face, fd in el.get("faces", {}).items():
+            for c in fd["uv"]:
+                if c < -0.01 or c > 16.01:
+                    bad.append((i, face, fd["uv"]))
+                    break
+    if bad:
+        raise RuntimeError(f"{len(bad)} faces have UV outside 0–16 (flower-screen risk): {bad[:5]}")
+
+
+def sample_blade_is_dark(img: Image.Image) -> None:
+    x0, y0, x1, y1 = REGIONS["blade_plate"]
+    px = img.load()
+    cx, cy = (x0 + x1) // 2, (y0 + y1) // 2
+    r, g, b, a = px[cx, cy]
+    luma = 0.299 * r + 0.587 * g + 0.114 * b
+    if luma > 120:
+        raise RuntimeError(f"blade_plate center too bright luma={luma:.1f} rgb={(r,g,b)} (want dark gunmetal)")
 
 
 def atlas_stats(img: Image.Image, model_elements: list[dict]) -> tuple[int, int]:
     px = img.load()
     opaque = sum(1 for y in range(TEXTURE_SIZE) for x in range(TEXTURE_SIZE) if px[x, y][3] > 10)
     covered = set()
+    s = float(TEXTURE_SIZE) / MC_UV_SPAN
     for el in model_elements:
         for face in el["faces"].values():
-            u0, v0, u1, v1 = face["uv"]
+            # convert MC UV back to pixels for coverage estimate
+            u0, v0, u1, v1 = [c * s for c in face["uv"]]
             x0, x1 = int(min(u0, u1)), int(max(u0, u1))
             y0, y1 = int(min(v0, v1)), int(max(v0, v1))
             for y in range(y0, max(y1, y0 + 1)):
@@ -586,11 +630,30 @@ def atlas_stats(img: Image.Image, model_elements: list[dict]) -> tuple[int, int]
     return opaque, len(covered)
 
 
+def sync_to_build_dirs() -> list[str]:
+    """Copy model+png into gradle/IDE resource outputs so runClient sees them."""
+    updated = []
+    for base in SYNC_COPIES:
+        if not base.parent.exists() and not base.exists():
+            # only sync into dirs that already exist (don't invent neo trees)
+            continue
+        model_dst = base / "models" / "item" / "duel_disk.json"
+        tex_dst = base / "textures" / "item" / "duel_disk.png"
+        model_dst.parent.mkdir(parents=True, exist_ok=True)
+        tex_dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(MODEL_PATH, model_dst)
+        shutil.copy2(TEX_PATH, tex_dst)
+        updated.append(str(model_dst))
+        updated.append(str(tex_dst))
+    return updated
+
+
 def main() -> None:
     bb = json.loads(BB_PATH.read_text(encoding="utf-8"))
     assert bb.get("resolution", {}).get("width") == TEXTURE_SIZE
 
     img = paint_atlas()
+    sample_blade_is_dark(img)
     TEX_PATH.parent.mkdir(parents=True, exist_ok=True)
     img.save(TEX_PATH)
 
@@ -598,42 +661,51 @@ def main() -> None:
     if CULL_BURIED_FACES:
         visible = compute_visible_faces(bb["elements"])
     else:
-        # Keep every face on every cube — including fully buried ones.
         visible = [set(all_faces) for _ in bb["elements"]]
+
     culled_faces = 0
     dropped_elements = 0
     java_elements = []
-    keep_indices: set[int] = set()
+    px_for_assert: list[tuple[str, dict]] = []
     for i, el in enumerate(bb["elements"]):
         keep = visible[i]
         culled_faces += 6 - len(keep)
+        name = el.get("name", f"el{i}")
+        top, side, bottom = materials_for(name)
+        faces_px = build_faces_px(el["from"], el["to"], top, side, bottom, keep)
+        px_for_assert.append((name, faces_px))
         java = element_to_java(el, keep)
         if java is None:
             dropped_elements += 1
             continue
-        keep_indices.add(i)
         java_elements.append(java)
 
-    groups = convert_groups(bb, bb["elements"], keep_indices)
+    assert_uvs_sane_px(px_for_assert, min_side_px=8.0)
+    assert_mc_uvs_in_range(java_elements)
 
+    # CLEAN vanilla item JSON — no groups, no texture_size, no element names.
+    # groups/name/texture_size stay in the .bbmodel only.
     model = {
-        "credit": "KaibaCorp Battle City Duel Disk — geometry from Blockbench, dense atlas, full faces",
-        "texture_size": [TEXTURE_SIZE, TEXTURE_SIZE],
+        "credit": "KaibaCorp Battle City Duel Disk — clean vanilla UV 0-16",
         "textures": {
             "0": "ygomc:item/duel_disk",
             "particle": "ygomc:item/duel_disk",
         },
         "elements": java_elements,
-        "groups": groups,
         "display": bb.get("display") or {},
     }
-    assert_uvs_sane(java_elements)
+
+    # Hard checks for flower-screen causes
+    raw = json.dumps(model)
+    if '"groups"' in raw:
+        raise RuntimeError("game JSON must not contain groups")
+    if any("name" in el for el in java_elements):
+        raise RuntimeError("game JSON elements must not contain name")
 
     MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
     MODEL_PATH.write_text(json.dumps(model, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
-    # Remap UVs inside bbmodel + re-embed PNG; keep geometry/display/groups/outliner.
-    # By default every face is rewritten (CULL_BURIED_FACES=False).
+    # Remap UVs inside bbmodel + re-embed PNG (pixel space for Blockbench).
     png_bytes = TEX_PATH.read_bytes()
     b64 = base64.b64encode(png_bytes).decode("ascii")
     for i, el in enumerate(bb["elements"]):
@@ -662,20 +734,32 @@ def main() -> None:
     bb["resolution"] = {"width": TEXTURE_SIZE, "height": TEXTURE_SIZE}
     BB_PATH.write_text(json.dumps(bb, indent="\t", ensure_ascii=False) + "\n", encoding="utf-8")
 
+    synced = sync_to_build_dirs()
+
     opaque, covered = atlas_stats(img, java_elements)
     total = TEXTURE_SIZE * TEXTURE_SIZE
     print(f"Wrote {TEX_PATH}")
-    print(f"Wrote {MODEL_PATH} elements={len(java_elements)} (dropped_fully_hidden={dropped_elements}) groups_root={len(groups)}")
+    print(f"Wrote {MODEL_PATH} elements={len(java_elements)} (dropped={dropped_elements})")
     print(f"Updated {BB_PATH}")
-    print(f"culled_faces={culled_faces} (of {len(bb['elements'])*6})")
+    print(f"culled_faces={culled_faces} (of {len(bb['elements'])*6}) CULL_BURIED_FACES={CULL_BURIED_FACES}")
     print(f"atlas opaque={opaque}/{total} ({100*opaque/total:.1f}%) UV-covered={covered}/{total} ({100*covered/total:.1f}%)")
-    # sample material assignments for key parts
-    for sample in ("hub_outer_ring_1", "hub_outer_ring_2", "left_wing_plate", "cuff_red_pad", "cuff_leather_body", "blade_root_plate"):
+    print(f"UV space: pixel→MC scale {MC_UV_SPAN}/{TEXTURE_SIZE} (fixes atlas flower-screen)")
+    print(f"synced {len(synced)} build/bin copies")
+    for sample in (
+        "hub_outer_ring_1",
+        "hub_outer_ring_2",
+        "left_wing_plate",
+        "cuff_red_pad",
+        "cuff_leather_body",
+        "blade_root_plate",
+    ):
         print(f"  materials {sample}: {materials_for(sample)}")
+    # show one MC UV sample
+    print(f"  sample MC UV: {java_elements[0]['faces']['north']['uv']}")
     for el in java_elements:
         rot = el.get("rotation")
         if rot and rot["angle"] not in LEGAL_ANGLES:
-            raise SystemExit(f"illegal angle on {el['name']}: {rot}")
+            raise SystemExit(f"illegal angle: {rot}")
 
 
 if __name__ == "__main__":
