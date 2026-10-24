@@ -1,185 +1,525 @@
 # -*- coding: utf-8 -*-
-"""Generate KaibaCorp Battle City Duel Disk texture + item model.
+"""Generate the anime Battle City Duel Disk item model and texture atlas.
 
-Geometry/display based on user-provided Gemini JSON:
-  C:\\Users\\Administrator\\Downloads\\gemini-code-1792809622875.json
-("KaibaCorp Battle City Duel Disk - Custom Minecraft Model").
-
-Textures namespaced to ygomc:item/duel_disk. texture_size [64,64] keeps
-Gemini UV coordinates (0-64 pixel space). DuelDiskItem logic unchanged.
+The model is vanilla Minecraft JSON only. Geometry stays in the item-model
+coordinate range, while the 128x128 atlas gives the hub, five wing panels,
+leather cuff, and metal trim separate readable details.
 """
 from PIL import Image, ImageDraw
 import json
+import math
 import os
-import shutil
+
 
 ROOT = r"E:\miemod\ygo\Yu-Gi-Oh in Minecraft"
-BASE = os.path.join(ROOT, r"common\src\main\resources\assets\ygomc")
-TEX_PATH = os.path.join(BASE, "textures", "item", "duel_disk.png")
-MODEL_PATH = os.path.join(BASE, "models", "item", "duel_disk.json")
+ASSETS = os.path.join(ROOT, r"common\src\main\resources\assets\ygomc")
+TEX_PATH = os.path.join(ASSETS, "textures", "item", "duel_disk.png")
+MODEL_PATH = os.path.join(ASSETS, "models", "item", "duel_disk.json")
 NOTE_PATH = os.path.join(ROOT, r".agent\duel_disk_model.md")
-GEMINI_SRC = r"C:\Users\Administrator\Downloads\gemini-code-1792809622875.json"
-GEMINI_COPY = os.path.join(ROOT, r".agent\previews\gemini-duel-disk-source.json")
 
-# Palette (anime Battle City / Standard Duel Disk)
-C_SILVER = (175, 182, 192, 255)
-C_SILVER_LT = (220, 225, 232, 255)
-C_SILVER_DK = (115, 122, 132, 255)
-C_WHITE = (245, 247, 250, 255)
-C_BLUE = (45, 95, 215, 255)
-C_BLUE_DK = (28, 60, 155, 255)
-C_RED = (205, 38, 42, 255)
-C_RED_DK = (145, 22, 28, 255)
-C_BROWN = (125, 78, 42, 255)
-C_BROWN_DK = (85, 52, 28, 255)
-C_CUFF = (55, 60, 70, 255)
-C_CUFF_LT = (85, 92, 105, 255)
-C_BLACK = (18, 20, 26, 255)
-C_TRANS = (0, 0, 0, 0)
+TEXTURE_SIZE = 128
 
-W = 64
-img = Image.new("RGBA", (W, W), C_TRANS)
+TRANSPARENT = (0, 0, 0, 0)
+BLACK = (17, 21, 28, 255)
+BLACK_SOFT = (32, 38, 48, 255)
+METAL = (70, 82, 98, 255)
+METAL_LIGHT = (116, 132, 151, 255)
+SILVER_DARK = (103, 116, 134, 255)
+SILVER = (172, 184, 201, 255)
+SILVER_LIGHT = (216, 224, 234, 255)
+WHITE = (242, 246, 250, 255)
+WHITE_SHADE = (204, 215, 228, 255)
+BLUE_DARK = (20, 55, 124, 255)
+BLUE = (40, 98, 188, 255)
+BLUE_LIGHT = (92, 157, 230, 255)
+CYAN = (153, 214, 250, 255)
+RED_DARK = (91, 24, 31, 255)
+RED = (158, 43, 45, 255)
+RED_LIGHT = (211, 80, 70, 255)
+BROWN_DARK = (66, 38, 23, 255)
+BROWN = (111, 67, 40, 255)
+BROWN_LIGHT = (151, 99, 62, 255)
+GOLD = (190, 158, 82, 255)
+
+REGIONS = {
+    "white": (0, 0, 12, 12),
+    "white_shade": (12, 0, 24, 12),
+    "silver": (24, 0, 36, 12),
+    "silver_dark": (36, 0, 48, 12),
+    "metal": (48, 0, 60, 12),
+    "metal_light": (60, 0, 72, 12),
+    "blue": (72, 0, 84, 12),
+    "blue_dark": (84, 0, 96, 12),
+    "blue_light": (96, 0, 108, 12),
+    "red": (108, 0, 120, 12),
+    "red_dark": (120, 0, 128, 12),
+    "brown": (0, 12, 16, 28),
+    "brown_dark": (16, 12, 32, 28),
+    "black": (32, 12, 48, 28),
+    "gold": (48, 12, 64, 28),
+    "hub_face": (0, 32, 48, 80),
+    "blade_top": (48, 32, 80, 48),
+    "zone_a": (48, 48, 64, 64),
+    "zone_b": (64, 48, 80, 64),
+    "tip_top": (80, 32, 96, 48),
+    "cuff_top": (96, 32, 128, 48),
+    "cuff_side": (96, 48, 128, 64),
+    "metal_panel": (0, 80, 32, 96),
+    "red_panel": (32, 80, 48, 96),
+    "blue_panel": (48, 80, 64, 96),
+    "white_panel": (64, 80, 80, 96),
+    "hub_core": (80, 80, 104, 104),
+    "edge": (80, 64, 96, 80),
+    "bolt": (96, 64, 104, 72),
+}
+
+img = Image.new("RGBA", (TEXTURE_SIZE, TEXTURE_SIZE), TRANSPARENT)
 draw = ImageDraw.Draw(img)
 
 
-def fill(x0, y0, x1, y1, c):
-    x0, x1 = int(round(x0)), int(round(x1))
-    y0, y1 = int(round(y0)), int(round(y1))
-    if x1 <= x0 or y1 <= y0:
-        return
-    draw.rectangle([x0, y0, x1 - 1, y1 - 1], fill=c)
+def rect(region, color):
+    x0, y0, x1, y1 = REGIONS[region]
+    draw.rectangle((x0, y0, x1 - 1, y1 - 1), fill=color)
 
 
-def outline(x0, y0, x1, y1, c):
-    x0, x1 = int(round(x0)), int(round(x1))
-    y0, y1 = int(round(y0)), int(round(y1))
-    if x1 <= x0 or y1 <= y0:
-        return
-    draw.rectangle([x0, y0, x1 - 1, y1 - 1], outline=c)
+def outline_rect(region, color, inset=0):
+    x0, y0, x1, y1 = REGIONS[region]
+    draw.rectangle((x0 + inset, y0 + inset, x1 - 1 - inset, y1 - 1 - inset), outline=color)
 
 
-# --- Atlas regions matching Gemini UVs (texture_size 64) ---
-# core_base sides [0,0,6,2.5], up [0,0,6,6], down [0,6,6,12]
-fill(0, 0, 6, 6, C_SILVER)
-outline(0, 0, 6, 6, C_SILVER_DK)
-fill(1, 1, 5, 5, C_SILVER_LT)
-fill(0, 6, 6, 12, C_SILVER_DK)
-outline(0, 6, 6, 12, C_BLACK)
+def octagon(cx, cy, radius):
+    cut = radius * 0.42
+    return [
+        (cx - radius + cut, cy - radius),
+        (cx + radius - cut, cy - radius),
+        (cx + radius, cy - radius + cut),
+        (cx + radius, cy + radius - cut),
+        (cx + radius - cut, cy + radius),
+        (cx - radius + cut, cy + radius),
+        (cx - radius, cy + radius - cut),
+        (cx - radius, cy - radius + cut),
+    ]
 
-# lp_counter: north [6,0,11,2.5] red, east/west [6,2.5,10,5], south [11,0,16,2.5], up [6,5,11,9]
-fill(6, 0, 11, 3, C_RED)
-fill(6, 1, 11, 2, C_RED_DK)
-fill(7, 1, 10, 2, C_BLACK)  # LP display hint
-fill(11, 0, 16, 3, C_RED_DK)
-fill(6, 3, 10, 5, C_RED)
-fill(6, 5, 11, 9, C_RED)
-outline(6, 5, 11, 9, C_RED_DK)
-fill(7, 6, 10, 8, C_BLACK)
 
-# deck_holder brown [12,6,16,13]
-fill(12, 6, 16, 9, C_BROWN)
-fill(12, 9, 16, 13, C_BROWN_DK)
-outline(12, 6, 16, 13, C_BLACK)
-fill(13, 10, 15, 12, C_BLACK)
+def local_octagon(region, cx, cy, radius):
+    x0, y0, _, _ = REGIONS[region]
+    return [(x0 + x, y0 + y) for x, y in octagon(cx, cy, radius)]
 
-# graveyard [0,12,6,14]
-fill(0, 12, 3, 14, C_SILVER_DK)
-fill(3, 12, 6, 14, C_SILVER)
-outline(0, 12, 6, 14, C_BLACK)
 
-# blade strip / faces: edges [0,16,16,17] [0,17,4,18], up [0,18,16,22], down [0,22,16,26]
-fill(0, 16, 16, 17, C_SILVER_LT)
-fill(0, 17, 4, 18, C_SILVER)
-fill(0, 18, 16, 22, C_WHITE)
-outline(0, 18, 16, 22, C_SILVER)
-# subtle zone guide lines on blade top
-for gx in (3, 6, 9, 12):
-    fill(gx, 18, gx + 1, 22, C_SILVER_LT)
-fill(0, 22, 16, 26, C_SILVER)
-outline(0, 22, 16, 26, C_SILVER_DK)
+# Material swatches. The small edge highlights keep the pixel texture crisp
+# when Minecraft samples it at GUI scale.
+swatch_colors = {
+    "white": WHITE,
+    "white_shade": WHITE_SHADE,
+    "silver": SILVER,
+    "silver_dark": SILVER_DARK,
+    "metal": METAL,
+    "metal_light": METAL_LIGHT,
+    "blue": BLUE,
+    "blue_dark": BLUE_DARK,
+    "blue_light": BLUE_LIGHT,
+    "red": RED,
+    "red_dark": RED_DARK,
+    "brown": BROWN,
+    "brown_dark": BROWN_DARK,
+    "black": BLACK,
+    "gold": GOLD,
+}
+for name, color in swatch_colors.items():
+    rect(name, color)
+    x0, y0, x1, y1 = REGIONS[name]
+    draw.line((x0, y0, x1 - 1, y0), fill=tuple(min(255, c + 18) for c in color[:3]) + (255,))
+    draw.line((x0, y1 - 1, x1 - 1, y1 - 1), fill=tuple(max(0, c - 20) for c in color[:3]) + (255,))
 
-# blade tip [0,26,3.5,27] [4,26,7.5,29.5]
-fill(0, 26, 4, 27, C_WHITE)
-fill(4, 26, 8, 30, C_WHITE)
-outline(4, 26, 8, 30, C_SILVER)
 
-# monster zones: edge [16,0,20,0.5], up [16,1,19,5]
-fill(16, 0, 20, 1, C_BLUE_DK)
-fill(16, 1, 19, 5, C_BLUE)
-outline(16, 1, 19, 5, C_BLUE_DK)
-# red triangle hint near bottom of zone face
-fill(17, 4, 18, 5, C_RED)
-fill(16, 3, 19, 4, C_RED)
+# Hub face: a layered octagonal ring with blue sectors, silver spokes, and the
+# dark red mechanical core visible in the Battle City anime design.
+hub_x, hub_y, _, _ = REGIONS["hub_face"]
+hub_layers = [
+    (23, BLACK),
+    (21, SILVER_DARK),
+    (19, SILVER_LIGHT),
+    (17, WHITE),
+    (15, BLUE_DARK),
+    (13, BLUE),
+    (10, SILVER),
+    (8, RED_DARK),
+    (6, RED),
+    (4, BLACK),
+]
+for radius, color in hub_layers:
+    draw.polygon(local_octagon("hub_face", 24, 24, radius), fill=color)
 
-# arm cuff dark [20,0,24,3.5] [20,4,26,7.5] [20,8,24,14]
-fill(20, 0, 24, 4, C_CUFF)
-outline(20, 0, 24, 4, C_BLACK)
-fill(20, 4, 26, 8, C_CUFF_LT)
-outline(20, 4, 26, 8, C_CUFF)
-fill(20, 8, 24, 14, C_CUFF)
-outline(20, 8, 24, 14, C_BLACK)
-# gear-ish stripes
-for gy in range(8, 14, 2):
-    fill(21, gy, 23, gy + 1, C_BLACK)
+for angle in (0, 45, 90, 135, 180, 225, 270, 315):
+    rad = math.radians(angle)
+    inner = (hub_x + 24 + math.cos(rad) * 8, hub_y + 24 + math.sin(rad) * 8)
+    outer = (hub_x + 24 + math.cos(rad) * 19, hub_y + 24 + math.sin(rad) * 19)
+    draw.line((inner, outer), fill=WHITE, width=2)
 
-os.makedirs(os.path.dirname(TEX_PATH), exist_ok=True)
-img.save(TEX_PATH, "PNG")
-print("Wrote texture", TEX_PATH, img.size)
+for angle in (22.5, 112.5, 202.5, 292.5):
+    rad = math.radians(angle)
+    bx = round(hub_x + 24 + math.cos(rad) * 15)
+    by = round(hub_y + 24 + math.sin(rad) * 15)
+    draw.rectangle((bx - 1, by - 1, bx + 1, by + 1), fill=SILVER_LIGHT)
 
-# Load Gemini geometry/display, namespace textures
-with open(GEMINI_SRC, "r", encoding="utf-8") as f:
-    model = json.load(f)
+draw.line((hub_x + 14, hub_y + 12, hub_x + 31, hub_y + 12), fill=WHITE, width=1)
+draw.line((hub_x + 11, hub_y + 15, hub_x + 11, hub_y + 31), fill=SILVER_LIGHT, width=1)
+draw.rectangle((hub_x + 21, hub_y + 20, hub_x + 27, hub_y + 23), fill=RED_LIGHT)
+draw.rectangle((hub_x + 22, hub_y + 22, hub_x + 26, hub_y + 27), fill=BLACK_SOFT)
 
-os.makedirs(os.path.dirname(GEMINI_COPY), exist_ok=True)
-shutil.copy2(GEMINI_SRC, GEMINI_COPY)
+# Raised inner hub. It is a separate octagonal face so the ring remains
+# readable after the mechanical ring segments are assembled around it.
+core_x, core_y, _, _ = REGIONS["hub_core"]
+core_layers = [
+    (11, BLACK),
+    (9, SILVER_LIGHT),
+    (7, BLUE_DARK),
+    (5, RED),
+    (3, BLACK),
+]
+for radius, color in core_layers:
+    draw.polygon(local_octagon("hub_core", 12, 12, radius), fill=color)
+draw.rectangle((core_x + 10, core_y + 10, core_x + 13, core_y + 13), fill=BLUE_LIGHT)
+draw.point((core_x + 11, core_y + 11), fill=WHITE)
 
-model["credit"] = (
-    "KaibaCorp Battle City Duel Disk - Custom Minecraft Model "
-    "(from user Gemini JSON; textures ygomc)"
+
+# Main blade plate: white armor with a brushed silver spine.
+rect("blade_top", SILVER_DARK)
+x0, y0, x1, y1 = REGIONS["blade_top"]
+draw.rectangle((x0 + 1, y0 + 2, x1 - 2, y1 - 3), fill=WHITE)
+draw.rectangle((x0 + 2, y0 + 3, x1 - 3, y1 - 4), fill=WHITE_SHADE)
+draw.rectangle((x0 + 2, y0 + 5, x1 - 3, y1 - 7), fill=WHITE)
+draw.line((x0 + 3, y0 + 4, x1 - 4, y0 + 4), fill=SILVER_LIGHT)
+draw.line((x0 + 3, y1 - 5, x1 - 4, y1 - 5), fill=SILVER)
+for line_y in range(y0 + 6, y1 - 5, 3):
+    draw.line((x0 + 4, line_y, x1 - 5, line_y), fill=(228, 235, 242, 255))
+
+
+def draw_zone(region, accent):
+    rect(region, BLACK)
+    x0, y0, x1, y1 = REGIONS[region]
+    draw.rectangle((x0 + 1, y0 + 1, x1 - 2, y1 - 2), fill=SILVER_LIGHT)
+    draw.rectangle((x0 + 2, y0 + 2, x1 - 3, y1 - 3), fill=BLUE)
+    draw.rectangle((x0 + 2, y0 + 2, x1 - 3, y0 + 5), fill=BLUE_LIGHT)
+    draw.rectangle((x0 + 2, y1 - 5, x1 - 3, y1 - 3), fill=BLUE_DARK)
+    draw.polygon(
+        [
+            (x0 + 3, y0 + 4),
+            (x0 + 9, y0 + 2),
+            (x0 + 5, y0 + 10),
+            (x0 + 2, y0 + 11),
+        ],
+        fill=accent,
+    )
+    draw.line((x0 + 4, y0 + 12, x0 + 11, y0 + 5), fill=CYAN)
+    draw.rectangle((x0 + 7, y0 + 7, x0 + 9, y0 + 9), fill=WHITE)
+    draw.point((x0 + 8, y0 + 8), fill=BLUE_DARK)
+
+
+draw_zone("zone_a", (76, 145, 221, 255))
+draw_zone("zone_b", (58, 127, 207, 255))
+
+# Outer spearhead plate.
+rect("tip_top", SILVER)
+x0, y0, x1, y1 = REGIONS["tip_top"]
+draw.polygon(
+    [(x0 + 1, y0 + 3), (x1 - 4, y0 + 3), (x1 - 1, y0 + 7), (x1 - 1, y1 - 7), (x1 - 4, y1 - 3), (x0 + 1, y1 - 3)],
+    fill=WHITE,
 )
-model["texture_size"] = [64, 64]
-model["textures"] = {
-    "0": "ygomc:item/duel_disk",
-    "particle": "ygomc:item/duel_disk",
+draw.line((x0 + 2, y0 + 4, x1 - 4, y0 + 4), fill=SILVER_LIGHT)
+draw.line((x0 + 2, y1 - 4, x1 - 4, y1 - 4), fill=SILVER_DARK)
+draw.rectangle((x0 + 5, y0 + 6, x0 + 8, y0 + 10), fill=BLUE_LIGHT)
+
+# Leather cuff and strap.
+rect("cuff_top", BROWN_DARK)
+x0, y0, x1, y1 = REGIONS["cuff_top"]
+draw.rectangle((x0 + 1, y0 + 1, x1 - 2, y1 - 2), fill=BROWN)
+for stitch_y in (y0 + 3, y1 - 4):
+    for stitch_x in range(x0 + 3, x1 - 2, 4):
+        draw.rectangle((stitch_x, stitch_y, stitch_x + 1, stitch_y + 1), fill=BROWN_LIGHT)
+draw.rectangle((x0 + 8, y0 + 4, x1 - 9, y1 - 5), fill=BROWN_DARK)
+draw.rectangle((x0 + 9, y0 + 5, x1 - 10, y1 - 6), fill=BROWN_LIGHT)
+
+rect("cuff_side", BROWN_DARK)
+x0, y0, x1, y1 = REGIONS["cuff_side"]
+draw.rectangle((x0 + 1, y0 + 2, x1 - 2, y1 - 3), fill=BROWN)
+draw.line((x0 + 2, y0 + 4, x1 - 3, y0 + 4), fill=BROWN_LIGHT)
+draw.line((x0 + 2, y1 - 5, x1 - 3, y1 - 5), fill=BROWN_DARK)
+
+# Reusable mechanical panels.
+rect("metal_panel", METAL)
+x0, y0, x1, y1 = REGIONS["metal_panel"]
+draw.rectangle((x0 + 2, y0 + 2, x1 - 3, y1 - 3), fill=METAL_LIGHT)
+draw.rectangle((x0 + 4, y0 + 4, x1 - 5, y1 - 5), fill=METAL)
+draw.line((x0 + 4, y0 + 5, x1 - 6, y1 - 5), fill=BLACK_SOFT)
+for bx in (x0 + 3, x1 - 4):
+    for by in (y0 + 3, y1 - 4):
+        draw.rectangle((bx, by, bx + 1, by + 1), fill=SILVER_LIGHT)
+
+rect("red_panel", RED_DARK)
+x0, y0, x1, y1 = REGIONS["red_panel"]
+draw.rectangle((x0 + 1, y0 + 1, x1 - 2, y1 - 2), fill=RED)
+draw.rectangle((x0 + 3, y0 + 3, x1 - 4, y1 - 4), fill=RED_DARK)
+draw.line((x0 + 3, y0 + 3, x1 - 5, y0 + 3), fill=RED_LIGHT)
+
+rect("blue_panel", BLUE_DARK)
+x0, y0, x1, y1 = REGIONS["blue_panel"]
+draw.rectangle((x0 + 1, y0 + 1, x1 - 2, y1 - 2), fill=BLUE)
+draw.polygon([(x0 + 2, y0 + 2), (x0 + 9, y0 + 2), (x0 + 5, y0 + 10)], fill=BLUE_LIGHT)
+draw.line((x0 + 3, y1 - 4, x1 - 4, y0 + 4), fill=CYAN)
+
+rect("white_panel", SILVER)
+x0, y0, x1, y1 = REGIONS["white_panel"]
+draw.rectangle((x0 + 1, y0 + 1, x1 - 2, y1 - 2), fill=WHITE)
+draw.line((x0 + 2, y0 + 3, x1 - 3, y0 + 3), fill=SILVER_LIGHT)
+draw.line((x0 + 2, y1 - 4, x1 - 3, y1 - 4), fill=SILVER_DARK)
+
+rect("edge", SILVER_DARK)
+x0, y0, x1, y1 = REGIONS["edge"]
+draw.rectangle((x0, y0 + 2, x1 - 1, y1 - 3), fill=SILVER)
+draw.line((x0, y0 + 3, x1 - 1, y0 + 3), fill=SILVER_LIGHT)
+draw.line((x0, y1 - 4, x1 - 1, y1 - 4), fill=BLACK_SOFT)
+
+rect("bolt", BLACK)
+x0, y0, x1, y1 = REGIONS["bolt"]
+draw.rectangle((x0 + 1, y0 + 1, x1 - 2, y1 - 2), fill=SILVER_LIGHT)
+draw.rectangle((x0 + 2, y0 + 2, x1 - 3, y1 - 3), fill=GOLD)
+
+
+def uv(region):
+    return list(REGIONS[region])
+
+
+def faces(top, side, bottom=None):
+    bottom = bottom or side
+    return {
+        "north": {"uv": uv(side), "texture": "#0"},
+        "east": {"uv": uv(side), "texture": "#0"},
+        "south": {"uv": uv(side), "texture": "#0"},
+        "west": {"uv": uv(side), "texture": "#0"},
+        "up": {"uv": uv(top), "texture": "#0"},
+        "down": {"uv": uv(bottom), "texture": "#0"},
+    }
+
+
+elements = []
+
+
+def box(name, frm, to, top, side, bottom=None, rotation=None):
+    element = {
+        "name": name,
+        "from": [round(v, 3) for v in frm],
+        "to": [round(v, 3) for v in to],
+        "faces": faces(top, side, bottom),
+    }
+    if rotation:
+        angle, axis, origin = rotation
+        element["rotation"] = {
+            "angle": angle,
+            "axis": axis,
+            "origin": [round(v, 3) for v in origin],
+        }
+    elements.append(element)
+
+
+# Forearm mount and leather cuff sit below the visible disk face.
+box("cuff_black_core", (3.9, 4.3, 4.2), (10.5, 7.5, 11.9), "black", "metal")
+box("cuff_leather_body", (4.2, 5.0, 3.7), (10.7, 6.5, 12.2), "cuff_top", "cuff_side", "brown_dark")
+box("cuff_upper_strap", (4.0, 6.4, 3.6), (10.8, 7.6, 6.1), "cuff_top", "cuff_side")
+box("cuff_lower_strap", (4.0, 6.4, 9.9), (10.8, 7.6, 12.4), "cuff_top", "cuff_side")
+box("cuff_silver_buckle", (5.1, 6.5, 4.1), (9.7, 7.85, 5.9), "metal_panel", "metal_light", "metal")
+box("cuff_buckle_inset", (6.0, 7.85, 4.55), (8.8, 8.0, 5.45), "black", "black")
+box("cuff_red_pad", (5.4, 6.5, 8.9), (9.5, 7.7, 11.4), "red_panel", "red_dark", "black")
+box("cuff_rear_hinge", (5.1, 5.2, 11.5), (9.9, 7.4, 12.9), "metal_panel", "metal")
+box("cuff_front_hinge", (5.1, 5.2, 3.1), (9.9, 7.4, 4.4), "metal_panel", "metal")
+
+# The blade is a stepped white wing: broad at the cuff, then progressively
+# narrower toward the spearhead.
+blade_sections = (
+    ("root", 9.8, 15.2, 2.45, 10.75),
+    ("mid", 15.2, 20.8, 2.85, 10.35),
+    ("outer", 20.8, 25.4, 3.35, 9.85),
+)
+for name, x0, x1, z0, z1 in blade_sections:
+    box(f"blade_{name}_plate", (x0, 7.55, z0), (x1, 8.95, z1), "blade_top", "silver_dark", "metal")
+    box(f"blade_{name}_upper_rail", (x0, 7.7, z0 - 0.55), (x1, 9.16, z0 + 0.15), "white_panel", "edge")
+    box(f"blade_{name}_lower_rail", (x0, 7.7, z1 - 0.15), (x1, 9.16, z1 + 0.55), "white_panel", "edge")
+
+box("blade_outer_rib", (25.0, 7.7, 3.15), (26.3, 9.16, 10.05), "white_panel", "edge")
+
+panel_starts = (10.65, 13.45, 16.25, 19.05, 21.85)
+panel_angles = (-4.0, 3.0, -2.0, 2.0, -3.0)
+for index, (start, angle) in enumerate(zip(panel_starts, panel_angles), start=1):
+    end = start + 2.55
+    center_x = (start + end) / 2
+    zone_region = "zone_a" if index % 2 else "zone_b"
+    box(
+        f"monster_zone_{index}",
+        (start, 8.9, 3.35),
+        (end, 9.16, 9.85),
+        zone_region,
+        "blue_dark",
+        "blue_dark",
+        (angle, "y", (center_x, 9.0, 6.6)),
+    )
+
+for index, boundary in enumerate((13.2, 16.0, 18.8, 21.6), start=1):
+    box(f"zone_divider_{index}", (boundary, 8.98, 3.0), (boundary + 0.34, 9.28, 10.2), "white_panel", "edge")
+
+box("blade_center_spine", (10.0, 9.05, 6.42), (25.5, 9.32, 6.92), "white_panel", "silver_dark")
+box("blade_tip_core", (25.2, 7.65, 4.2), (29.4, 8.95, 8.9), "tip_top", "white_panel", "silver_dark")
+box(
+    "blade_tip_upper",
+    (24.8, 7.72, 2.8),
+    (28.7, 9.05, 4.5),
+    "tip_top",
+    "white_panel",
+    "silver_dark",
+    (-11.0, "y", (25.0, 8.3, 4.2)),
+)
+box(
+    "blade_tip_lower",
+    (24.8, 7.72, 8.7),
+    (28.7, 9.05, 10.4),
+    "tip_top",
+    "white_panel",
+    "silver_dark",
+    (11.0, "y", (25.0, 8.3, 9.0)),
+)
+
+# Shorter shoulder wing on the hub side; it gives the disk the asymmetric
+# white fan silhouette seen in the reference.
+box("left_wing_plate", (1.4, 7.55, 3.3), (5.5, 8.95, 10.1), "white_panel", "silver_dark", "metal")
+box("left_wing_tip", (-0.4, 7.65, 4.8), (1.8, 8.95, 8.8), "tip_top", "white_panel", "silver_dark")
+box("left_wing_inset", (2.0, 8.9, 4.15), (4.8, 9.14, 9.25), "blue_panel", "blue_dark", "blue_dark")
+box("left_wing_upper_rail", (1.3, 7.75, 2.8), (5.5, 9.18, 3.6), "white_panel", "edge")
+box("left_wing_lower_rail", (1.3, 7.75, 9.8), (5.5, 9.18, 10.6), "white_panel", "edge")
+
+# Hub mount struts, octagonal ring, and blue sectors.
+box("hub_left_strut", (2.2, 7.4, 5.4), (5.2, 8.2, 10.8), "metal_panel", "metal")
+box("hub_right_strut", (10.6, 7.4, 4.6), (13.5, 8.2, 11.5), "metal_panel", "metal")
+box("hub_inner_core", (5.45, 7.85, 5.45), (10.55, 9.05, 10.55), "hub_core", "red_dark", "black")
+
+for index, angle in enumerate(range(0, 360, 45), start=1):
+    ring_region = "white_panel" if index % 2 else "silver"
+    box(
+        f"hub_outer_ring_{index}",
+        (10.8, 7.9, 6.2),
+        (13.2, 9.18, 9.8),
+        ring_region,
+        "silver_dark",
+        "black",
+        (angle, "y", (8.0, 8.5, 8.0)),
+    )
+
+for index, angle in enumerate((0, 90, 180, 270), start=1):
+    box(
+        f"hub_blue_sector_{index}",
+        (9.55, 9.02, 6.65),
+        (11.35, 9.32, 9.35),
+        "blue_panel",
+        "blue_dark",
+        "blue_dark",
+        (angle, "y", (8.0, 9.1, 8.0)),
+    )
+
+for index, (bx, bz) in enumerate(((4.35, 4.35), (11.65, 4.35), (4.35, 11.65), (11.65, 11.65)), start=1):
+    box(f"hub_bolt_{index}", (bx - 0.35, 9.03, bz - 0.35), (bx + 0.35, 9.28, bz + 0.35), "bolt", "metal")
+
+model = {
+    "credit": "KaibaCorp Battle City Duel Disk - anime-inspired vanilla item model",
+    "texture_size": [TEXTURE_SIZE, TEXTURE_SIZE],
+    "textures": {
+        "0": "ygomc:item/duel_disk",
+        "particle": "ygomc:item/duel_disk",
+    },
+    "elements": elements,
+    "display": {
+        "thirdperson_righthand": {
+            "rotation": [0, 0, -90],
+            "translation": [-1.5, 1.0, 2.5],
+            "scale": [0.7, 0.7, 0.7],
+        },
+        "thirdperson_lefthand": {
+            "rotation": [0, 0, 90],
+            "translation": [1.5, 1.0, 2.5],
+            "scale": [0.7, 0.7, 0.7],
+        },
+        "firstperson_righthand": {
+            "rotation": [12, -28, -10],
+            "translation": [1.0, 2.2, 0.0],
+            "scale": [0.62, 0.62, 0.62],
+        },
+        "firstperson_lefthand": {
+            "rotation": [12, 28, 10],
+            "translation": [-1.0, 2.2, 0.0],
+            "scale": [0.62, 0.62, 0.62],
+        },
+        "ground": {
+            "translation": [0, 2, 0],
+            "scale": [0.48, 0.48, 0.48],
+        },
+        "gui": {
+            "rotation": [30, 135, 0],
+            "translation": [0, 0.5, 0],
+            "scale": [0.58, 0.58, 0.58],
+        },
+        "fixed": {
+            "rotation": [-90, 0, 0],
+            "translation": [0, 0, -1],
+            "scale": [0.75, 0.75, 0.75],
+        },
+    },
 }
 
-# Keep Gemini elements + display (arm-mount thirdperson)
-assert len(model["elements"]) == 12, len(model["elements"])
-tp = model["display"]["thirdperson_righthand"]
-assert tp["rotation"] == [90, 0, -90]
-assert tp["translation"] == [-2, -1, 2.5]
 
+def validate():
+    assert 40 <= len(elements) <= 80, len(elements)
+    names = [element["name"] for element in elements]
+    assert len(names) == len(set(names)), "duplicate element names"
+    for element in elements:
+        assert all(element["from"][i] < element["to"][i] for i in range(3)), element["name"]
+        assert all(-16 <= value <= 32 for value in element["from"] + element["to"]), element["name"]
+        assert set(element["faces"]) == {"north", "east", "south", "west", "up", "down"}
+        for face in element["faces"].values():
+            assert face["texture"] == "#0"
+            u0, v0, u1, v1 = face["uv"]
+            assert 0 <= u0 < u1 <= TEXTURE_SIZE, (element["name"], face["uv"])
+            assert 0 <= v0 < v1 <= TEXTURE_SIZE, (element["name"], face["uv"])
+
+
+validate()
+os.makedirs(os.path.dirname(TEX_PATH), exist_ok=True)
 os.makedirs(os.path.dirname(MODEL_PATH), exist_ok=True)
-with open(MODEL_PATH, "w", encoding="utf-8") as f:
-    json.dump(model, f, indent="\t", ensure_ascii=False)
-    f.write("\n")
-print("Wrote model elements=", len(model["elements"]))
-
-for e in model["elements"]:
-    fr, to = e["from"], e["to"]
-    assert all(fr[i] < to[i] for i in range(3)), e["name"]
-print("Bounds OK")
+img.save(TEX_PATH, "PNG")
+with open(MODEL_PATH, "w", encoding="utf-8") as handle:
+    json.dump(model, handle, indent="\t", ensure_ascii=False)
+    handle.write("\n")
 
 note = """# Duel Disk item model
 
-**KaibaCorp Battle City / Standard Duel Disk** — geometry from user-provided Gemini JSON
-(`Downloads/gemini-code-1792809622875.json`, credit: "KaibaCorp Battle City Duel Disk - Custom Minecraft Model").
+Anime-inspired KaibaCorp Battle City Duel Disk, rebuilt from the supplied GIF.
 
-- Model: `assets/ygomc/models/item/duel_disk.json` — vanilla JSON `elements` (no GeckoLib).
-- Texture: `assets/ygomc/textures/item/duel_disk.png` — 64×64 atlas; `texture_size: [64,64]` (Gemini UV pixel space).
-- Textures namespaced: `ygomc:item/duel_disk`.
-- 12 elements: `core_base`, `lp_counter_housing` (22.5° x), `deck_holder_right`, `graveyard_slot_front`,
-  `blade_main_wing`, `blade_left_tip` (-22.5° y), `monster_zone_1..5`, `arm_cuff_mount`.
-- Display: thirdperson_righthand arm-mount `[90,0,-90]` / `[-2,-1,2.5]` / `0.85` (kept from Gemini).
-- Behavior of `DuelDiskItem` unchanged — visuals only.
-- Regen: `python tools/gen_duel_disk_model.py` (reads Gemini source path above).
+- Model: `assets/ygomc/models/item/duel_disk.json` (vanilla JSON, no GeckoLib).
+- Texture: `assets/ygomc/textures/item/duel_disk.png` (128x128 atlas).
+- Silhouette: octagonal blue/silver hub, red mechanical core, leather forearm cuff,
+  white shoulder wing, five blue monster-zone insets, silver dividers, and a pointed
+  outer spearhead.
+- Display transforms keep the disk readable in the GUI and align the cuff with the
+  right/left forearm in third person.
+- Behavior of `DuelDiskItem` is unchanged; this is a visual-only resource update.
+- Regenerate with `python tools/gen_duel_disk_model.py`.
 
 ## Verify in-game
-1. `/give @s ygomc:duel_disk` (or creative inventory)
-2. Check inventory icon (gui display) shows hub + blade + cuff
-3. Hold in hand — blade should extend along the forearm (arm-mount style)
+
+1. `/give @s ygomc:duel_disk`
+2. Check the inventory icon shows the hub, five wing panels, and pointed tip.
+3. Hold it in both hands and confirm the cuff aligns with the forearm.
+4. Inspect the hub from the side; the layered ring and red core should remain legible.
 """
-with open(NOTE_PATH, "w", encoding="utf-8") as f:
-    f.write(note)
-print("Wrote note", NOTE_PATH)
-print("DONE")
+with open(NOTE_PATH, "w", encoding="utf-8") as handle:
+    handle.write(note)
+
+print(f"Wrote {TEX_PATH} ({TEXTURE_SIZE}x{TEXTURE_SIZE})")
+print(f"Wrote {MODEL_PATH} ({len(elements)} elements)")
+print(f"Wrote {NOTE_PATH}")

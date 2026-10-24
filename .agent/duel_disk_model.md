@@ -1,18 +1,20 @@
 # Duel Disk item model
 
-**KaibaCorp Battle City / Standard Duel Disk** — geometry from user-provided Gemini JSON
-(`Downloads/gemini-code-1792809622875.json`, credit: "KaibaCorp Battle City Duel Disk - Custom Minecraft Model").
+Anime-inspired KaibaCorp Battle City Duel Disk, rebuilt from the supplied GIF.
 
-- Model: `assets/ygomc/models/item/duel_disk.json` — vanilla JSON `elements` (no GeckoLib).
-- Texture: `assets/ygomc/textures/item/duel_disk.png` — 64×64 atlas; `texture_size: [64,64]` (Gemini UV pixel space).
-- Textures namespaced: `ygomc:item/duel_disk`.
-- 12 elements: `core_base`, `lp_counter_housing` (22.5° x), `deck_holder_right`, `graveyard_slot_front`,
-  `blade_main_wing`, `blade_left_tip` (-22.5° y), `monster_zone_1..5`, `arm_cuff_mount`.
-- Display: thirdperson_righthand arm-mount `[90,0,-90]` / `[-2,-1,2.5]` / `0.85` (kept from Gemini).
-- Behavior of `DuelDiskItem` unchanged — visuals only.
-- Regen: `python tools/gen_duel_disk_model.py` (reads Gemini source path above).
+- Model: `assets/ygomc/models/item/duel_disk.json` (vanilla JSON, no GeckoLib).
+- Texture: `assets/ygomc/textures/item/duel_disk.png` (128x128 atlas).
+- Silhouette: octagonal blue/silver hub, red mechanical core, leather forearm cuff,
+  white shoulder wing, five blue monster-zone insets, silver dividers, and a pointed
+  outer spearhead.
+- Display transforms keep the disk readable in the GUI and align the cuff with the
+  right/left forearm in third person.
+- Behavior of `DuelDiskItem` is unchanged; this is a visual-only resource update.
+- Regenerate with `python tools/gen_duel_disk_model.py`.
 
 ## Verify in-game
-1. `/give @s ygomc:duel_disk` (or creative inventory)
-2. Check inventory icon (gui display) shows hub + blade + cuff
-3. Hold in hand — blade should extend along the forearm (arm-mount style)
+
+1. `/give @s ygomc:duel_disk`
+2. Check the inventory icon shows the hub, five wing panels, and pointed tip.
+3. Hold it in both hands and confirm the cuff aligns with the forearm.
+4. Inspect the hub from the side; the layered ring and red core should remain legible.

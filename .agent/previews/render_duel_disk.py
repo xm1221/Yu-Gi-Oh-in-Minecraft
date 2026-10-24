@@ -247,21 +247,21 @@ def render_view(display_key, out_name, elev, azim):
 
 
 paths = []
-paths.append(render_view("firstperson_righthand", "duel_disk_fp.png", elev=18, azim=50))
-paths.append(render_view("thirdperson_righthand", "duel_disk_tp.png", elev=12, azim=95))
-paths.append(render_view("gui", "duel_disk_gui.png", elev=32, azim=40))
+paths.append(render_view("firstperson_righthand", "duel_disk_v3_fp.png", elev=18, azim=50))
+paths.append(render_view("thirdperson_righthand", "duel_disk_v3_tp.png", elev=12, azim=95))
+paths.append(render_view("gui", "duel_disk_v3_gui.png", elev=32, azim=40))
 pivot.rotation_euler = (0, 0, 0)
 pivot.location = (8, 8, 8)
 pivot.scale = (1, 1, 1)
 aim_camera(28, 38)
-paths.append(save_both("duel_disk_rest.png"))
+paths.append(save_both("duel_disk_v3_rest.png"))
 pivot.rotation_euler = (0, 0, 0)
 pivot.location = (8, 8, 8)
 pivot.scale = (1, 1, 1)
 aim_camera(70, 20)
-paths.append(save_both("duel_disk_top.png"))
+paths.append(save_both("duel_disk_v3_top.png"))
 
-blend_path = os.path.join(OUT_DIR, "duel_disk_preview.blend")
+blend_path = os.path.join(OUT_DIR, "duel_disk_v3_preview.blend")
 bpy.ops.wm.save_as_mainfile(filepath=blend_path)
 print("DONE", paths)
 print("BLEND", blend_path)
