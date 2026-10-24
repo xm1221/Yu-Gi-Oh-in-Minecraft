@@ -7,7 +7,7 @@ import json
 import uuid
 from pathlib import Path
 
-ROOT = Path(r"E:\miemod\ygo\Yu-Gi-Oh in Minecraft")
+ROOT = Path(__file__).resolve().parents[2]
 ASSETS = ROOT / "common" / "src" / "main" / "resources" / "assets" / "ygomc"
 MODEL_PATH = ASSETS / "models" / "item" / "duel_disk.json"
 TEX_PATH = ASSETS / "textures" / "item" / "duel_disk.png"

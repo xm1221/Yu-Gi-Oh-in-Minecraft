@@ -61,3 +61,7 @@ local-data/
 *.cdb
 # 单元测试夹具是虚构卡文的小库，要入库。真实 cards.cdb 仍被上面的规则挡住。
 !common/src/test/resources/sync/fixture.cdb
+
+# Python
+__pycache__/
+*.py[cod]

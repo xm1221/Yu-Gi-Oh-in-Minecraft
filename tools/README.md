@@ -62,3 +62,12 @@ python tools/mkplaceholdertextures.py
 ```
 
 随机种子是固定的，重跑结果不变。需要 Pillow（`pip install Pillow`）。`mkpics.py` 也需要 Pillow。
+
+## Duel Disk 模型 / 贴图
+
+决斗盘的 Blockbench 工程、密集图集安装和预览脚本在 **.agent/tools/**（.agent/ 已纳入 git）：
+
+- 主流程：python .agent/tools/install_duel_disk_from_bbmodel.py
+- 说明：.agent/duel_disk_model.md
+
+本目录的 mk* 脚本只管卡包数据 / 卡图 / 占位贴图，不管决斗盘网格。

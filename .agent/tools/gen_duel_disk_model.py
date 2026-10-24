@@ -1,17 +1,20 @@
 # -*- coding: utf-8 -*-
-"""Generate the anime Battle City Duel Disk item model and texture atlas.
+"""LEGACY geometry generator for the Battle City Duel Disk.
 
-The model is vanilla Minecraft JSON only. Geometry stays in the item-model
-coordinate range, while the 128x128 atlas gives the hub, five wing panels,
-leather cuff, and metal trim separate readable details.
+Prefer .agent/tools/install_duel_disk_from_bbmodel.py for shipping assets.
+Blockbench (.agent/blockbench/duel_disk.bbmodel) is the geometry source of
+truth after manual fine-tuning. This script can still rebuild a dense atlas +
+JSON from scratch if the bbmodel is lost, but running it will overwrite the
+game JSON geometry — do not use it to discard BB edits.
 """
+from pathlib import Path
 from PIL import Image, ImageDraw
 import json
 import math
 import os
 
 
-ROOT = r"E:\miemod\ygo\Yu-Gi-Oh in Minecraft"
+ROOT = str(Path(__file__).resolve().parents[2])  # prefer install_duel_disk_from_bbmodel.py for shipping
 ASSETS = os.path.join(ROOT, r"common\src\main\resources\assets\ygomc")
 TEX_PATH = os.path.join(ASSETS, "textures", "item", "duel_disk.png")
 MODEL_PATH = os.path.join(ASSETS, "models", "item", "duel_disk.json")

@@ -23,3 +23,5 @@ Minecraft 1.21.1，公共代码在 `common`，Fabric 和 NeoForge 只做各自�
 ## 常见坑
 
 GUI 灰蒙蒙、双层压暗等复发问题见同目录 [常见错误](./常见错误)。
+
+决斗盘模型与 .agent/tools/ 脚本说明见 [duel_disk_model.md](./duel_disk_model.md)。
