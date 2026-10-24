@@ -6,9 +6,10 @@ Source of truth for geometry/display/hierarchy:
 
 This script:
   1) paints a dense 128x128 atlas (minimal empty waste)
-  2) remaps every element UV to the packed material regions
-  3) writes common/.../models/item/duel_disk.json + textures/item/duel_disk.png
-  4) re-embeds the same PNG into the bbmodel (keeps user geometry/display/groups)
+  2) remaps every *visible* element UV to the packed material regions
+  3) omits fully buried / zero-area faces (no pointless UV islands)
+  4) writes common/.../models/item/duel_disk.json + textures/item/duel_disk.png
+  5) re-embeds the same PNG into the bbmodel (keeps user geometry/display/groups)
 """
 from __future__ import annotations
 
@@ -28,6 +29,8 @@ TEX_PATH = ASSETS / "textures" / "item" / "duel_disk.png"
 
 TEXTURE_SIZE = 128
 LEGAL_ANGLES = (-45.0, -22.5, 0.0, 22.5, 45.0)
+OCCLUDE_EPS = 0.05
+OCCLUDE_PROBE = 0.01
 
 TRANSPARENT = (0, 0, 0, 0)
 BLACK = (17, 21, 28, 255)
@@ -85,7 +88,7 @@ REGIONS = {
     "red_panel": (0, 112, 32, 128),      # 32x16
     "blue_panel": (32, 112, 64, 128),    # 32x16
     "silver_panel": (64, 112, 112, 128), # 48x16
-    "metal_light_panel": (112, 104, 128, 128),  # 16x24 — map hinges/rails side fallback
+    "metal_light_panel": (112, 104, 128, 128),  # 16x24
 }
 
 
@@ -148,7 +151,7 @@ def paint_atlas() -> Image.Image:
         draw.line((x0, y0, x1 - 1, y0), fill=tuple(min(255, c + 18) for c in color[:3]) + (255,))
         draw.line((x0, y1 - 1, x1 - 1, y1 - 1), fill=tuple(max(0, c - 20) for c in color[:3]) + (255,))
 
-    # Hub core
+    # Hub core — silver rim, blue sectors, red mechanical center (old Battle City look)
     hx, hy, _, _ = REGIONS["hub_core"]
     for radius, color in (
         (22, BLACK),
@@ -171,7 +174,7 @@ def paint_atlas() -> Image.Image:
     draw.rectangle((hx + 22, hy + 22, hx + 26, hy + 28), fill=BLACK_SOFT)
     draw.point((hx + 24, hy + 24), fill=BLUE_LIGHT)
 
-    # Blade plate
+    # Blade plate — white armor with brushed silver (matches pre-dense good look)
     fill("blade_top", SILVER_DARK)
     x0, y0, x1, y1 = REGIONS["blade_top"]
     draw.rectangle((x0 + 1, y0 + 1, x1 - 2, y1 - 2), fill=WHITE)
@@ -305,7 +308,12 @@ def aspect_uv(region: str, face_w: float, face_h: float) -> list[float]:
 
 
 def materials_for(name: str) -> tuple[str, str, str]:
-    """Return (top, side, bottom) region names from element name."""
+    """Return (top, side, bottom) region names — restored to pre-dense good mapping.
+
+    Dense-atlas regression had remapped hub_outer_ring → metal_panel (dark grey)
+    instead of the old white_panel / silver alternation. left_wing_plate was also
+    forced onto blade_top; restore white_panel like the old generator.
+    """
     n = name or ""
     m = re.match(r"monster_zone_(\d+)", n)
     if m:
@@ -317,7 +325,9 @@ def materials_for(name: str) -> tuple[str, str, str]:
         return "tip_top", "white_panel", "silver_dark"
     if "left_wing_inset" in n:
         return "blue_panel", "blue_dark", "blue_dark"
-    if "left_wing_plate" in n or re.search(r"blade_.*_plate", n):
+    if n.startswith("left_wing_plate"):
+        return "white_panel", "silver_dark", "metal"
+    if re.search(r"blade_.*_plate", n):
         return "blade_top", "silver_dark", "metal"
     if n == "cuff_black_core":
         return "black", "metal", "black"
@@ -332,23 +342,113 @@ def materials_for(name: str) -> tuple[str, str, str]:
     if "hinge" in n or "strut" in n:
         return "metal_panel", "metal", "metal"
     if n.startswith("hub_outer_ring"):
-        return "metal_panel", "metal", "metal"
+        # Old gen: odd → white_panel, even → silver (NOT metal)
+        mm = re.search(r"(\d+)$", n)
+        idx = int(mm.group(1)) if mm else 1
+        if idx % 2:
+            return "white_panel", "silver_dark", "metal"
+        return "silver", "silver_dark", "metal"
     if n.startswith("hub_blue_sector"):
         return "blue_panel", "blue_dark", "blue"
     if n == "hub_inner_core":
         return "hub_core", "red_dark", "black"
+    if "bolt" in n:
+        return "bolt", "metal", "metal"
     if "spine" in n:
         return "white_panel", "silver_dark", "metal"
-    # fallback
     return "metal_panel", "metal", "black"
 
 
-def build_faces(frm, to, top: str, side: str, bottom: str | None = None) -> dict:
+FACE_AXES = {
+    "east": (0, 1),
+    "west": (0, -1),
+    "up": (1, 1),
+    "down": (1, -1),
+    "south": (2, 1),
+    "north": (2, -1),
+}
+
+
+def _norm_box(el: dict) -> dict:
+    f = [float(v) for v in el["from"]]
+    t = [float(v) for v in el["to"]]
+    frm = [min(f[0], t[0]), min(f[1], t[1]), min(f[2], t[2])]
+    to = [max(f[0], t[0]), max(f[1], t[1]), max(f[2], t[2])]
+    rot = el.get("rotation") or [0, 0, 0]
+    has_rot = any(abs(float(a)) > 1e-6 for a in rot)
+    return {"frm": frm, "to": to, "has_rot": has_rot, "name": el.get("name", "")}
+
+
+def _point_in(box: dict, p: list[float]) -> bool:
+    return (
+        box["frm"][0] - OCCLUDE_EPS <= p[0] <= box["to"][0] + OCCLUDE_EPS
+        and box["frm"][1] - OCCLUDE_EPS <= p[1] <= box["to"][1] + OCCLUDE_EPS
+        and box["frm"][2] - OCCLUDE_EPS <= p[2] <= box["to"][2] + OCCLUDE_EPS
+    )
+
+
+def _face_samples(box: dict, face: str) -> list[list[float]]:
+    axis, direction = FACE_AXES[face]
+    pos = box["to"][axis] if direction > 0 else box["frm"][axis]
+    axes = [0, 1, 2]
+    axes.remove(axis)
+    u, v = axes
+    u0, u1 = box["frm"][u], box["to"][u]
+    v0, v1 = box["frm"][v], box["to"][v]
+    inset_u = min(0.05, (u1 - u0) * 0.2) if u1 > u0 else 0.0
+    inset_v = min(0.05, (v1 - v0) * 0.2) if v1 > v0 else 0.0
+    us = [u0 + inset_u, (u0 + u1) / 2, u1 - inset_u] if u1 - u0 > 1e-6 else [u0]
+    vs = [v0 + inset_v, (v0 + v1) / 2, v1 - inset_v] if v1 - v0 > 1e-6 else [v0]
+    pts = []
+    for uu in us:
+        for vv in vs:
+            p = [0.0, 0.0, 0.0]
+            p[axis] = pos + direction * OCCLUDE_PROBE
+            p[u] = uu
+            p[v] = vv
+            pts.append(p)
+    return pts
+
+
+def _face_area(box: dict, face: str) -> float:
+    axis, _ = FACE_AXES[face]
+    axes = [0, 1, 2]
+    axes.remove(axis)
+    return (box["to"][axes[0]] - box["frm"][axes[0]]) * (box["to"][axes[1]] - box["frm"][axes[1]])
+
+
+def compute_visible_faces(elements: list[dict]) -> list[set[str]]:
+    """Per-element set of face names that are not zero-area and not fully buried."""
+    boxes = [_norm_box(el) for el in elements]
+    visible: list[set[str]] = []
+    for i, box in enumerate(boxes):
+        keep: set[str] = set()
+        for face in FACE_AXES:
+            if _face_area(box, face) < 1e-6:
+                continue
+            if box["has_rot"]:
+                keep.add(face)
+                continue
+            samples = _face_samples(box, face)
+            buried = False
+            for j, other in enumerate(boxes):
+                if i == j or other["has_rot"]:
+                    continue
+                if samples and all(_point_in(other, p) for p in samples):
+                    buried = True
+                    break
+            if not buried:
+                keep.add(face)
+        visible.append(keep)
+    return visible
+
+
+def build_faces(frm, to, top: str, side: str, bottom: str | None, keep: set[str] | None) -> dict:
     bottom = bottom or side
     dx = abs(to[0] - frm[0])
     dy = abs(to[1] - frm[1])
     dz = abs(to[2] - frm[2])
-    return {
+    all_faces = {
         "north": {"uv": aspect_uv(side, dx, dy), "texture": "#0"},
         "east": {"uv": aspect_uv(side, dz, dy), "texture": "#0"},
         "south": {"uv": aspect_uv(side, dx, dy), "texture": "#0"},
@@ -356,6 +456,9 @@ def build_faces(frm, to, top: str, side: str, bottom: str | None = None) -> dict
         "up": {"uv": aspect_uv(top, dx, dz), "texture": "#0"},
         "down": {"uv": aspect_uv(bottom, dx, dz), "texture": "#0"},
     }
+    if keep is None:
+        return all_faces
+    return {k: v for k, v in all_faces.items() if k in keep}
 
 
 def snap_angle(angle: float) -> float:
@@ -375,28 +478,38 @@ def bb_rotation_to_java(el: dict) -> dict | None:
     return {"angle": angle, "axis": "xyz"[axis_i], "origin": [round(v, 3) for v in origin]}
 
 
-def remap_bb_faces(el: dict) -> dict:
+def remap_bb_faces(el: dict, keep: set[str]) -> dict:
     top, side, bottom = materials_for(el.get("name", ""))
-    frm, to = el["from"], el["to"]
-    java_faces = build_faces(frm, to, top, side, bottom)
-    # BB faces use numeric texture id
+    java_faces = build_faces(el["from"], el["to"], top, side, bottom, keep)
     out = {}
     for side_name, face in java_faces.items():
         out[side_name] = {"uv": face["uv"], "texture": 0}
     return out
 
 
-def convert_groups(bb: dict, elements: list[dict]) -> list:
-    uuid_to_idx = {el["uuid"]: i for i, el in enumerate(elements)}
+def convert_groups(bb: dict, elements: list[dict], keep_indices: set[int]) -> list:
+    """Convert outliner → Java groups, remapping element indices after drops."""
+    old_to_new = {}
+    new_i = 0
+    for old_i, el in enumerate(elements):
+        if old_i in keep_indices:
+            old_to_new[el["uuid"]] = new_i
+            new_i += 1
     groups_by_uuid = {g["uuid"]: g for g in bb.get("groups") or []}
 
     def convert_node(node):
         if isinstance(node, str):
-            if node not in uuid_to_idx:
-                raise KeyError(f"element uuid missing from model: {node}")
-            return uuid_to_idx[node]
+            if node not in old_to_new:
+                return None  # dropped invisible element
+            return old_to_new[node]
         meta = groups_by_uuid.get(node.get("uuid"), {})
-        children = [convert_node(c) for c in node.get("children") or []]
+        children = []
+        for c in node.get("children") or []:
+            converted = convert_node(c)
+            if converted is not None:
+                children.append(converted)
+        if not children and not meta.get("name"):
+            return None
         return {
             "name": meta.get("name") or node.get("name") or "group",
             "origin": [float(v) for v in (meta.get("origin") or node.get("origin") or [8, 8, 8])],
@@ -404,16 +517,23 @@ def convert_groups(bb: dict, elements: list[dict]) -> list:
             "children": children,
         }
 
-    return [convert_node(n) for n in (bb.get("outliner") or [])]
+    out = []
+    for n in bb.get("outliner") or []:
+        converted = convert_node(n)
+        if converted is not None:
+            out.append(converted)
+    return out
 
 
-def element_to_java(el: dict) -> dict:
+def element_to_java(el: dict, keep: set[str]) -> dict | None:
+    if not keep:
+        return None
     top, side, bottom = materials_for(el.get("name", ""))
     out = {
         "name": el.get("name", "cube"),
         "from": [round(float(v), 3) for v in el["from"]],
         "to": [round(float(v), 3) for v in el["to"]],
-        "faces": build_faces(el["from"], el["to"], top, side, bottom),
+        "faces": build_faces(el["from"], el["to"], top, side, bottom, keep),
     }
     rot = bb_rotation_to_java(el)
     if rot:
@@ -445,11 +565,25 @@ def main() -> None:
     TEX_PATH.parent.mkdir(parents=True, exist_ok=True)
     img.save(TEX_PATH)
 
-    java_elements = [element_to_java(el) for el in bb["elements"]]
-    groups = convert_groups(bb, bb["elements"])
+    visible = compute_visible_faces(bb["elements"])
+    culled_faces = 0
+    dropped_elements = 0
+    java_elements = []
+    keep_indices: set[int] = set()
+    for i, el in enumerate(bb["elements"]):
+        keep = visible[i]
+        culled_faces += 6 - len(keep)
+        java = element_to_java(el, keep)
+        if java is None:
+            dropped_elements += 1
+            continue
+        keep_indices.add(i)
+        java_elements.append(java)
+
+    groups = convert_groups(bb, bb["elements"], keep_indices)
 
     model = {
-        "credit": "KaibaCorp Battle City Duel Disk — geometry from Blockbench, dense atlas",
+        "credit": "KaibaCorp Battle City Duel Disk — geometry from Blockbench, dense atlas, culled hidden faces",
         "texture_size": [TEXTURE_SIZE, TEXTURE_SIZE],
         "textures": {
             "0": "ygomc:item/duel_disk",
@@ -463,10 +597,11 @@ def main() -> None:
     MODEL_PATH.write_text(json.dumps(model, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
     # Remap UVs inside bbmodel + re-embed PNG; keep geometry/display/groups/outliner.
+    # Culled faces are omitted from the cube (Blockbench: face disabled).
     png_bytes = TEX_PATH.read_bytes()
     b64 = base64.b64encode(png_bytes).decode("ascii")
-    for el in bb["elements"]:
-        el["faces"] = remap_bb_faces(el)
+    for i, el in enumerate(bb["elements"]):
+        el["faces"] = remap_bb_faces(el, visible[i])
         el["autouv"] = 0
         el["box_uv"] = False
     if not bb.get("textures"):
@@ -494,10 +629,13 @@ def main() -> None:
     opaque, covered = atlas_stats(img, java_elements)
     total = TEXTURE_SIZE * TEXTURE_SIZE
     print(f"Wrote {TEX_PATH}")
-    print(f"Wrote {MODEL_PATH} elements={len(java_elements)} groups_root={len(groups)}")
+    print(f"Wrote {MODEL_PATH} elements={len(java_elements)} (dropped_fully_hidden={dropped_elements}) groups_root={len(groups)}")
     print(f"Updated {BB_PATH}")
+    print(f"culled_faces={culled_faces} (of {len(bb['elements'])*6})")
     print(f"atlas opaque={opaque}/{total} ({100*opaque/total:.1f}%) UV-covered={covered}/{total} ({100*covered/total:.1f}%)")
-    # ensure no illegal rotations
+    # sample material assignments for key parts
+    for sample in ("hub_outer_ring_1", "hub_outer_ring_2", "left_wing_plate", "cuff_red_pad", "cuff_leather_body", "blade_root_plate"):
+        print(f"  materials {sample}: {materials_for(sample)}")
     for el in java_elements:
         rot = el.get("rotation")
         if rot and rot["angle"] not in LEGAL_ANGLES:
