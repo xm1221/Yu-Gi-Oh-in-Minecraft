@@ -1,270 +1,185 @@
 # -*- coding: utf-8 -*-
-"""Generate classic anime Duel Disk Minecraft item texture + JSON model.
-UVs use vanilla 0-16 space (full texture = 16 units) so a 64x64 atlas works without texture_size.
-"""
-from PIL import Image
-import json, os
+"""Generate KaibaCorp Battle City Duel Disk texture + item model.
 
-BASE = r"E:\miemod\ygo\Yu-Gi-Oh in Minecraft\common\src\main\resources\assets\ygomc"
+Geometry/display based on user-provided Gemini JSON:
+  C:\\Users\\Administrator\\Downloads\\gemini-code-1792809622875.json
+("KaibaCorp Battle City Duel Disk - Custom Minecraft Model").
+
+Textures namespaced to ygomc:item/duel_disk. texture_size [64,64] keeps
+Gemini UV coordinates (0-64 pixel space). DuelDiskItem logic unchanged.
+"""
+from PIL import Image, ImageDraw
+import json
+import os
+import shutil
+
+ROOT = r"E:\miemod\ygo\Yu-Gi-Oh in Minecraft"
+BASE = os.path.join(ROOT, r"common\src\main\resources\assets\ygomc")
 TEX_PATH = os.path.join(BASE, "textures", "item", "duel_disk.png")
 MODEL_PATH = os.path.join(BASE, "models", "item", "duel_disk.json")
-NOTE_PATH = r"E:\miemod\ygo\Yu-Gi-Oh in Minecraft\.agent\duel_disk_model.md"
+NOTE_PATH = os.path.join(ROOT, r".agent\duel_disk_model.md")
+GEMINI_SRC = r"C:\Users\Administrator\Downloads\gemini-code-1792809622875.json"
+GEMINI_COPY = os.path.join(ROOT, r".agent\previews\gemini-duel-disk-source.json")
 
-C_WHITE = (245, 245, 250, 255)
-C_SILVER = (168, 175, 185, 255)
-C_SILVER_DK = (110, 118, 128, 255)
-C_SILVER_LT = (210, 215, 222, 255)
-C_RED = (200, 35, 40, 255)
-C_RED_DK = (140, 20, 25, 255)
-C_BLUE = (40, 90, 210, 255)
-C_BLUE_DK = (25, 55, 150, 255)
-C_BROWN = (120, 75, 40, 255)
-C_BROWN_DK = (80, 50, 25, 255)
-C_CUFF = (70, 85, 105, 255)
-C_CUFF_LT = (95, 110, 130, 255)
-C_BLACK = (20, 22, 28, 255)
+# Palette (anime Battle City / Standard Duel Disk)
+C_SILVER = (175, 182, 192, 255)
+C_SILVER_LT = (220, 225, 232, 255)
+C_SILVER_DK = (115, 122, 132, 255)
+C_WHITE = (245, 247, 250, 255)
+C_BLUE = (45, 95, 215, 255)
+C_BLUE_DK = (28, 60, 155, 255)
+C_RED = (205, 38, 42, 255)
+C_RED_DK = (145, 22, 28, 255)
+C_BROWN = (125, 78, 42, 255)
+C_BROWN_DK = (85, 52, 28, 255)
+C_CUFF = (55, 60, 70, 255)
+C_CUFF_LT = (85, 92, 105, 255)
+C_BLACK = (18, 20, 26, 255)
 C_TRANS = (0, 0, 0, 0)
 
 W = 64
 img = Image.new("RGBA", (W, W), C_TRANS)
-px = img.load()
+draw = ImageDraw.Draw(img)
+
 
 def fill(x0, y0, x1, y1, c):
-    for y in range(y0, y1):
-        for x in range(x0, x1):
-            px[x, y] = c
+    x0, x1 = int(round(x0)), int(round(x1))
+    y0, y1 = int(round(y0)), int(round(y1))
+    if x1 <= x0 or y1 <= y0:
+        return
+    draw.rectangle([x0, y0, x1 - 1, y1 - 1], fill=c)
 
-def rect_outline(x0, y0, x1, y1, c):
-    for x in range(x0, x1):
-        px[x, y0] = c
-        px[x, y1 - 1] = c
-    for y in range(y0, y1):
-        px[x0, y] = c
-        px[x1 - 1, y] = c
 
-# Swatches 8x8
-fill(0, 0, 8, 8, C_SILVER)
-fill(0, 0, 8, 1, C_SILVER_LT)
-fill(0, 7, 8, 8, C_SILVER_DK)
-fill(8, 0, 16, 8, C_WHITE)
-fill(8, 0, 16, 1, C_SILVER_LT)
-fill(16, 0, 24, 8, C_BLUE)
-fill(16, 0, 24, 1, C_BLUE_DK)
-fill(16, 7, 24, 8, C_BLUE_DK)
-fill(24, 0, 32, 8, C_RED)
-fill(24, 0, 32, 1, C_RED_DK)
-fill(32, 0, 40, 8, C_BROWN)
-fill(32, 7, 40, 8, C_BROWN_DK)
-fill(40, 0, 48, 8, C_CUFF)
-fill(40, 0, 48, 1, C_CUFF_LT)
-fill(48, 0, 56, 8, C_SILVER_DK)
-fill(56, 0, 64, 8, C_SILVER_LT)
+def outline(x0, y0, x1, y1, c):
+    x0, x1 = int(round(x0)), int(round(x1))
+    y0, y1 = int(round(y0)), int(round(y1))
+    if x1 <= x0 or y1 <= y0:
+        return
+    draw.rectangle([x0, y0, x1 - 1, y1 - 1], outline=c)
 
-# Hub face 16x16 at (0,16)
-fill(0, 16, 16, 32, C_SILVER)
-rect_outline(0, 16, 16, 32, C_SILVER_DK)
-rect_outline(1, 17, 15, 31, C_SILVER_LT)
-fill(4, 19, 12, 29, C_RED)
-fill(5, 20, 11, 28, C_RED)
-fill(6, 21, 10, 24, C_RED_DK)
-fill(7, 22, 9, 23, C_BLACK)
 
-# Zone face 8x8 at (16,16)
-fill(16, 16, 24, 24, C_BLUE)
-for dy, xs in [(0, range(19, 20)), (1, range(18, 21)), (2, range(17, 22))]:
-    for x in xs:
-        px[x, 17 + dy] = C_RED
+# --- Atlas regions matching Gemini UVs (texture_size 64) ---
+# core_base sides [0,0,6,2.5], up [0,0,6,6], down [0,6,6,12]
+fill(0, 0, 6, 6, C_SILVER)
+outline(0, 0, 6, 6, C_SILVER_DK)
+fill(1, 1, 5, 5, C_SILVER_LT)
+fill(0, 6, 6, 12, C_SILVER_DK)
+outline(0, 6, 6, 12, C_BLACK)
 
-# Trim strip
-fill(24, 16, 40, 20, C_SILVER_LT)
-fill(24, 19, 40, 20, C_SILVER_DK)
+# lp_counter: north [6,0,11,2.5] red, east/west [6,2.5,10,5], south [11,0,16,2.5], up [6,5,11,9]
+fill(6, 0, 11, 3, C_RED)
+fill(6, 1, 11, 2, C_RED_DK)
+fill(7, 1, 10, 2, C_BLACK)  # LP display hint
+fill(11, 0, 16, 3, C_RED_DK)
+fill(6, 3, 10, 5, C_RED)
+fill(6, 5, 11, 9, C_RED)
+outline(6, 5, 11, 9, C_RED_DK)
+fill(7, 6, 10, 8, C_BLACK)
 
-# Deck slot face
-fill(40, 16, 48, 28, C_BROWN)
-fill(41, 17, 47, 27, C_BROWN_DK)
-fill(42, 18, 46, 20, C_BLACK)
+# deck_holder brown [12,6,16,13]
+fill(12, 6, 16, 9, C_BROWN)
+fill(12, 9, 16, 13, C_BROWN_DK)
+outline(12, 6, 16, 13, C_BLACK)
+fill(13, 10, 15, 12, C_BLACK)
 
+# graveyard [0,12,6,14]
+fill(0, 12, 3, 14, C_SILVER_DK)
+fill(3, 12, 6, 14, C_SILVER)
+outline(0, 12, 6, 14, C_BLACK)
+
+# blade strip / faces: edges [0,16,16,17] [0,17,4,18], up [0,18,16,22], down [0,22,16,26]
+fill(0, 16, 16, 17, C_SILVER_LT)
+fill(0, 17, 4, 18, C_SILVER)
+fill(0, 18, 16, 22, C_WHITE)
+outline(0, 18, 16, 22, C_SILVER)
+# subtle zone guide lines on blade top
+for gx in (3, 6, 9, 12):
+    fill(gx, 18, gx + 1, 22, C_SILVER_LT)
+fill(0, 22, 16, 26, C_SILVER)
+outline(0, 22, 16, 26, C_SILVER_DK)
+
+# blade tip [0,26,3.5,27] [4,26,7.5,29.5]
+fill(0, 26, 4, 27, C_WHITE)
+fill(4, 26, 8, 30, C_WHITE)
+outline(4, 26, 8, 30, C_SILVER)
+
+# monster zones: edge [16,0,20,0.5], up [16,1,19,5]
+fill(16, 0, 20, 1, C_BLUE_DK)
+fill(16, 1, 19, 5, C_BLUE)
+outline(16, 1, 19, 5, C_BLUE_DK)
+# red triangle hint near bottom of zone face
+fill(17, 4, 18, 5, C_RED)
+fill(16, 3, 19, 4, C_RED)
+
+# arm cuff dark [20,0,24,3.5] [20,4,26,7.5] [20,8,24,14]
+fill(20, 0, 24, 4, C_CUFF)
+outline(20, 0, 24, 4, C_BLACK)
+fill(20, 4, 26, 8, C_CUFF_LT)
+outline(20, 4, 26, 8, C_CUFF)
+fill(20, 8, 24, 14, C_CUFF)
+outline(20, 8, 24, 14, C_BLACK)
+# gear-ish stripes
+for gy in range(8, 14, 2):
+    fill(21, gy, 23, gy + 1, C_BLACK)
+
+os.makedirs(os.path.dirname(TEX_PATH), exist_ok=True)
 img.save(TEX_PATH, "PNG")
-print("Wrote texture", TEX_PATH)
+print("Wrote texture", TEX_PATH, img.size)
 
-def uvp(x0, y0, x1, y1):
-    """Pixel rect on 64x64 -> vanilla UV 0-16 (full tex = 16)."""
-    s = 16.0 / 64.0
-    return [round(x0 * s, 4), round(y0 * s, 4), round(x1 * s, 4), round(y1 * s, 4)]
+# Load Gemini geometry/display, namespace textures
+with open(GEMINI_SRC, "r", encoding="utf-8") as f:
+    model = json.load(f)
 
-UV_SILVER = uvp(0, 0, 8, 8)
-UV_WHITE = uvp(8, 0, 16, 8)
-UV_BLUE = uvp(16, 0, 24, 8)
-UV_RED = uvp(24, 0, 32, 8)
-UV_BROWN = uvp(32, 0, 40, 8)
-UV_CUFF = uvp(40, 0, 48, 8)
-UV_SILVER_DK = uvp(48, 0, 56, 8)
-UV_SILVER_LT = uvp(56, 0, 64, 8)
-UV_HUB = uvp(0, 16, 16, 32)
-UV_ZONE = uvp(16, 16, 24, 24)
-UV_TRIM = uvp(24, 16, 40, 20)
-UV_DECK = uvp(40, 16, 48, 28)
+os.makedirs(os.path.dirname(GEMINI_COPY), exist_ok=True)
+shutil.copy2(GEMINI_SRC, GEMINI_COPY)
 
-def faces_solid(u):
-    return {s: {"uv": u, "texture": "#0"} for s in ("north", "east", "south", "west", "up", "down")}
-
-def faces_hub_top():
-    return {
-        "north": {"uv": UV_SILVER, "texture": "#0"},
-        "south": {"uv": UV_SILVER, "texture": "#0"},
-        "east": {"uv": UV_SILVER, "texture": "#0"},
-        "west": {"uv": UV_SILVER, "texture": "#0"},
-        "up": {"uv": UV_HUB, "texture": "#0"},
-        "down": {"uv": UV_SILVER_DK, "texture": "#0"},
-    }
-
-def faces_zone():
-    return {
-        "north": {"uv": UV_BLUE, "texture": "#0"},
-        "south": {"uv": UV_BLUE, "texture": "#0"},
-        "east": {"uv": UV_BLUE, "texture": "#0"},
-        "west": {"uv": UV_BLUE, "texture": "#0"},
-        "up": {"uv": UV_ZONE, "texture": "#0"},
-        "down": {"uv": UV_BLUE, "texture": "#0"},
-    }
-
-def faces_deck():
-    return {
-        "north": {"uv": UV_DECK, "texture": "#0"},
-        "south": {"uv": UV_DECK, "texture": "#0"},
-        "east": {"uv": UV_BROWN, "texture": "#0"},
-        "west": {"uv": UV_BROWN, "texture": "#0"},
-        "up": {"uv": UV_BROWN, "texture": "#0"},
-        "down": {"uv": UV_BROWN, "texture": "#0"},
-    }
-
-def faces_blade():
-    return {
-        "north": {"uv": UV_TRIM, "texture": "#0"},
-        "south": {"uv": UV_TRIM, "texture": "#0"},
-        "east": {"uv": UV_WHITE, "texture": "#0"},
-        "west": {"uv": UV_WHITE, "texture": "#0"},
-        "up": {"uv": UV_WHITE, "texture": "#0"},
-        "down": {"uv": UV_SILVER_LT, "texture": "#0"},
-    }
-
-elements = []
-
-elements.append({"name": "cuff", "from": [2.5, 5.5, 5.0], "to": [6.5, 7.0, 11.0], "faces": faces_solid(UV_CUFF)})
-elements.append({"name": "hub_core", "from": [1.5, 7.0, 4.5], "to": [7.5, 9.0, 11.5], "faces": faces_hub_top()})
-elements.append({"name": "hub_n", "from": [2.5, 7.15, 3.5], "to": [6.5, 8.85, 4.5], "faces": faces_solid(UV_SILVER)})
-elements.append({"name": "hub_s", "from": [2.5, 7.15, 11.5], "to": [6.5, 8.85, 12.5], "faces": faces_solid(UV_SILVER)})
-elements.append({"name": "hub_w", "from": [0.5, 7.15, 5.5], "to": [1.5, 8.85, 10.5], "faces": faces_solid(UV_SILVER)})
-elements.append({"name": "hub_e_ring", "from": [7.5, 7.15, 5.5], "to": [8.0, 8.85, 10.5], "faces": faces_solid(UV_SILVER_LT)})
-elements.append({"name": "hub_red_plate", "from": [3.0, 9.0, 6.0], "to": [6.0, 9.35, 10.0], "faces": faces_solid(UV_RED)})
-elements.append({"name": "hub_sensor", "from": [4.0, 9.35, 7.5], "to": [5.0, 9.5, 8.5], "faces": faces_solid(UV_SILVER_DK)})
-elements.append({"name": "deck_slot", "from": [2.5, 7.3, 12.0], "to": [6.5, 9.2, 14.0], "faces": faces_deck()})
-elements.append({"name": "blade_main", "from": [7.5, 7.4, 3.0], "to": [20.5, 8.9, 13.0], "faces": faces_blade()})
-elements.append({"name": "blade_under", "from": [8.0, 7.0, 4.0], "to": [19.5, 7.4, 12.0], "faces": faces_solid(UV_SILVER)})
-elements.append({"name": "blade_trim_n", "from": [7.5, 8.7, 2.7], "to": [20.5, 9.05, 3.0], "faces": faces_solid(UV_SILVER_LT)})
-elements.append({"name": "blade_trim_s", "from": [7.5, 8.7, 13.0], "to": [20.5, 9.05, 13.3], "faces": faces_solid(UV_SILVER_LT)})
-elements.append({"name": "tip_n", "from": [20.5, 7.5, 3.2], "to": [22.5, 8.85, 7.0], "faces": faces_blade()})
-elements.append({"name": "tip_s", "from": [20.5, 7.5, 9.0], "to": [22.5, 8.85, 12.8], "faces": faces_blade()})
-elements.append({"name": "tip_n_point", "from": [22.5, 7.6, 3.8], "to": [23.5, 8.7, 6.5], "faces": faces_solid(UV_WHITE)})
-elements.append({"name": "tip_s_point", "from": [22.5, 7.6, 9.5], "to": [23.5, 8.7, 12.2], "faces": faces_solid(UV_WHITE)})
-
-zone_w, zone_gap = 1.9, 0.35
-zone_z0, zone_z1 = 4.2, 11.8
-start_x = 8.6
-for i in range(5):
-    x0 = start_x + i * (zone_w + zone_gap)
-    x1 = x0 + zone_w
-    elements.append({
-        "name": f"zone_{i+1}",
-        "from": [round(x0, 2), 8.55, zone_z0],
-        "to": [round(x1, 2), 8.95, zone_z1],
-        "faces": faces_zone(),
-    })
-    elements.append({
-        "name": f"zone_{i+1}_tri",
-        "from": [round(x0 + 0.15, 2), 8.95, 7.5],
-        "to": [round(x0 + 0.55, 2), 9.1, 8.5],
-        "faces": faces_solid(UV_RED),
-    })
-
-elements.append({"name": "arm_mount", "from": [3.0, 4.8, 6.5], "to": [6.0, 5.5, 9.5], "faces": faces_solid(UV_CUFF)})
-
-model = {
-    "credit": "ygomc — classic Standard Duel Disk (hub + 5-zone white blade)",
-    "textures": {
-        "0": "ygomc:item/duel_disk",
-        "particle": "ygomc:item/duel_disk",
-    },
-    "elements": elements,
-    "display": {
-        "gui": {
-            "rotation": [60, 45, 0],
-            "translation": [0.5, -1.0, 0],
-            "scale": [0.55, 0.55, 0.55],
-        },
-        "ground": {
-            "rotation": [0, 0, 0],
-            "translation": [0, 3, 0],
-            "scale": [0.35, 0.35, 0.35],
-        },
-        "fixed": {
-            "rotation": [0, 90, 0],
-            "translation": [0, 0, -1],
-            "scale": [0.5, 0.5, 0.5],
-        },
-        "thirdperson_righthand": {
-            "rotation": [90, 0, 0],
-            "translation": [0, -2.0, 2.5],
-            "scale": [0.55, 0.55, 0.55],
-        },
-        "thirdperson_lefthand": {
-            "rotation": [90, 0, 0],
-            "translation": [0, -2.0, 2.5],
-            "scale": [0.55, 0.55, 0.55],
-        },
-        "firstperson_righthand": {
-            "rotation": [75, 5, -10],
-            "translation": [1.5, 2.5, 0.5],
-            "scale": [0.5, 0.5, 0.5],
-        },
-        "firstperson_lefthand": {
-            "rotation": [75, 5, 10],
-            "translation": [1.5, 2.5, 0.5],
-            "scale": [0.5, 0.5, 0.5],
-        },
-        "head": {
-            "rotation": [0, 90, 0],
-            "translation": [0, 8, 0],
-            "scale": [0.4, 0.4, 0.4],
-        },
-    },
+model["credit"] = (
+    "KaibaCorp Battle City Duel Disk - Custom Minecraft Model "
+    "(from user Gemini JSON; textures ygomc)"
+)
+model["texture_size"] = [64, 64]
+model["textures"] = {
+    "0": "ygomc:item/duel_disk",
+    "particle": "ygomc:item/duel_disk",
 }
 
-with open(MODEL_PATH, "w", encoding="utf-8") as f:
-    json.dump(model, f, indent=2, ensure_ascii=False)
-    f.write("\n")
-print("Wrote model elements=", len(elements))
+# Keep Gemini elements + display (arm-mount thirdperson)
+assert len(model["elements"]) == 12, len(model["elements"])
+tp = model["display"]["thirdperson_righthand"]
+assert tp["rotation"] == [90, 0, -90]
+assert tp["translation"] == [-2, -1, 2.5]
 
-# Validate element bounds / from < to
-for e in elements:
+os.makedirs(os.path.dirname(MODEL_PATH), exist_ok=True)
+with open(MODEL_PATH, "w", encoding="utf-8") as f:
+    json.dump(model, f, indent="\t", ensure_ascii=False)
+    f.write("\n")
+print("Wrote model elements=", len(model["elements"]))
+
+for e in model["elements"]:
     fr, to = e["from"], e["to"]
     assert all(fr[i] < to[i] for i in range(3)), e["name"]
 print("Bounds OK")
 
 note = """# Duel Disk item model
 
-Classic anime **Standard Duel Disk** (Yugi): silver forearm hub + white blade with five blue monster zones.
+**KaibaCorp Battle City / Standard Duel Disk** — geometry from user-provided Gemini JSON
+(`Downloads/gemini-code-1792809622875.json`, credit: "KaibaCorp Battle City Duel Disk - Custom Minecraft Model").
 
 - Model: `assets/ygomc/models/item/duel_disk.json` — vanilla JSON `elements` (no GeckoLib).
-- Texture: `assets/ygomc/textures/item/duel_disk.png` — 64×64 atlas; UVs in vanilla 0–16 space.
-- Silhouette: octagonal hub (red center plate, brown deck slot) → long white blade → V-notch tip; five recessed blue zones with tiny red triangle hints.
+- Texture: `assets/ygomc/textures/item/duel_disk.png` — 64×64 atlas; `texture_size: [64,64]` (Gemini UV pixel space).
+- Textures namespaced: `ygomc:item/duel_disk`.
+- 12 elements: `core_base`, `lp_counter_housing` (22.5° x), `deck_holder_right`, `graveyard_slot_front`,
+  `blade_main_wing`, `blade_left_tip` (-22.5° y), `monster_zone_1..5`, `arm_cuff_mount`.
+- Display: thirdperson_righthand arm-mount `[90,0,-90]` / `[-2,-1,2.5]` / `0.85` (kept from Gemini).
 - Behavior of `DuelDiskItem` unchanged — visuals only.
+- Regen: `python tools/gen_duel_disk_model.py` (reads Gemini source path above).
 
 ## Verify in-game
 1. `/give @s ygomc:duel_disk` (or creative inventory)
-2. Check inventory icon (gui display) shows hub + blade
-3. Hold in hand — blade should extend along the arm / outward
+2. Check inventory icon (gui display) shows hub + blade + cuff
+3. Hold in hand — blade should extend along the forearm (arm-mount style)
 """
 with open(NOTE_PATH, "w", encoding="utf-8") as f:
     f.write(note)
+print("Wrote note", NOTE_PATH)
 print("DONE")
