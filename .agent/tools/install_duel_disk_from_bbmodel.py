@@ -6,7 +6,7 @@ Source of truth for geometry/display/hierarchy:
 
 This script:
   1) paints a dense 128x128 atlas (minimal empty waste)
-  2) remaps every element UV to the packed material regions
+  2) remaps every element UV to FULL packed regions (1px inset; no sub-pixel aspect-fit)
   3) exports EVERY element and EVERY face by default (no buried-face cull;
      vanishing cubes are worse than wasted UV on hidden faces)
   4) writes common/.../models/item/duel_disk.json + textures/item/duel_disk.png
@@ -114,9 +114,9 @@ def paint_atlas() -> Image.Image:
     img = Image.new("RGBA", (TEXTURE_SIZE, TEXTURE_SIZE), TRANSPARENT)
     draw = ImageDraw.Draw(img)
 
-    def fill(region, color):
+    def fill(region, color, gutter: int = 0):
         x0, y0, x1, y1 = REGIONS[region]
-        draw.rectangle((x0, y0, x1 - 1, y1 - 1), fill=color)
+        draw.rectangle((x0 + gutter, y0 + gutter, x1 - 1 - gutter, y1 - 1 - gutter), fill=color)
 
     def local_octagon(region, cx, cy, radius):
         x0, y0, _, _ = REGIONS[region]
@@ -152,10 +152,11 @@ def paint_atlas() -> Image.Image:
         "gold": GOLD,
     }
     for name, color in swatches.items():
-        fill(name, color)
+        # 1px transparent gutter between edge-packed 8x8 swatches (stops MC bleed)
+        fill(name, color, gutter=1)
         x0, y0, x1, y1 = REGIONS[name]
-        draw.line((x0, y0, x1 - 1, y0), fill=tuple(min(255, c + 18) for c in color[:3]) + (255,))
-        draw.line((x0, y1 - 1, x1 - 1, y1 - 1), fill=tuple(max(0, c - 20) for c in color[:3]) + (255,))
+        draw.line((x0 + 1, y0 + 1, x1 - 2, y0 + 1), fill=tuple(min(255, c + 18) for c in color[:3]) + (255,))
+        draw.line((x0 + 1, y1 - 2, x1 - 2, y1 - 2), fill=tuple(max(0, c - 20) for c in color[:3]) + (255,))
 
     # Hub core — silver rim, blue sectors, red mechanical center (old Battle City look)
     hx, hy, _, _ = REGIONS["hub_core"]
@@ -293,23 +294,28 @@ def paint_atlas() -> Image.Image:
 
 
 def aspect_uv(region: str, face_w: float, face_h: float) -> list[float]:
+    """Map a face onto its atlas region.
+
+    Always cover nearly the full region (1px inset). The previous aspect-fit
+    path shrank flat faces to sub-pixel UV rectangles inside 8x8 swatches;
+    Minecraft bilinear filtering / mipmaps then bled neighboring materials
+    and the in-game duel disk looked completely scrambled.
+    face_w/face_h kept for call-site compatibility.
+    """
+    del face_w, face_h  # unused; full-region mapping is intentional
     rx0, ry0, rx1, ry1 = REGIONS[region]
     rw = float(rx1 - rx0)
     rh = float(ry1 - ry0)
-    fw = max(abs(float(face_w)), 0.05)
-    fh = max(abs(float(face_h)), 0.05)
-    scale = min(rw / fw, rh / fh)
-    uw = fw * scale
-    uh = fh * scale
-    inset = 0.02 if min(uw, uh) > 0.2 else 0.0
+    # 1px inset stops bleed into edge-packed neighbor regions.
+    inset = 1.0 if rw >= 4.0 and rh >= 4.0 else 0.02
     u0 = rx0 + inset
     v0 = ry0 + inset
-    u1 = min(rx0 + uw, rx1) - inset
-    v1 = min(ry0 + uh, ry1) - inset
+    u1 = rx1 - inset
+    v1 = ry1 - inset
     if u1 <= u0:
-        u0, u1 = rx0, min(rx0 + max(uw, 0.25), rx1)
+        u0, u1 = float(rx0), float(rx1)
     if v1 <= v0:
-        v0, v1 = ry0, min(ry0 + max(uh, 0.25), ry1)
+        v0, v1 = float(ry0), float(ry1)
     return [round(u0, 3), round(v0, 3), round(u1, 3), round(v1, 3)]
 
 
@@ -547,6 +553,23 @@ def element_to_java(el: dict, keep: set[str]) -> dict | None:
     return out
 
 
+
+def assert_uvs_sane(model_elements: list[dict], min_side: float = 2.0) -> None:
+    """Fail install if any face UV is too small to survive MC filtering."""
+    bad = []
+    for el in model_elements:
+        for face, fd in el.get("faces", {}).items():
+            u0, v0, u1, v1 = fd["uv"]
+            w, h = abs(u1 - u0), abs(v1 - v0)
+            if min(w, h) < min_side:
+                bad.append((el.get("name"), face, w, h, fd["uv"]))
+    if bad:
+        preview = ", ".join(f"{n}.{f}={w:.3f}x{h:.3f}" for n, f, w, h, _ in bad[:8])
+        raise RuntimeError(
+            f"{len(bad)} face UVs smaller than {min_side}px (MC will scramble): {preview}"
+        )
+
+
 def atlas_stats(img: Image.Image, model_elements: list[dict]) -> tuple[int, int]:
     px = img.load()
     opaque = sum(1 for y in range(TEXTURE_SIZE) for x in range(TEXTURE_SIZE) if px[x, y][3] > 10)
@@ -604,6 +627,8 @@ def main() -> None:
         "groups": groups,
         "display": bb.get("display") or {},
     }
+    assert_uvs_sane(java_elements)
+
     MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
     MODEL_PATH.write_text(json.dumps(model, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
