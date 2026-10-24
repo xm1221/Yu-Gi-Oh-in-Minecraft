@@ -348,10 +348,9 @@ for name, x0, x1, z0, z1 in blade_sections:
 box("blade_outer_rib", (25.0, 7.7, 3.15), (26.3, 9.16, 10.05), "white_panel", "edge")
 
 panel_starts = (10.65, 13.45, 16.25, 19.05, 21.85)
-panel_angles = (-4.0, 3.0, -2.0, 2.0, -3.0)
-for index, (start, angle) in enumerate(zip(panel_starts, panel_angles), start=1):
+# Vanilla/Blockbench only allow ±22.5/±45. Tiny zone angles were invalid; keep flat.
+for index, start in enumerate(panel_starts, start=1):
     end = start + 2.55
-    center_x = (start + end) / 2
     zone_region = "zone_a" if index % 2 else "zone_b"
     box(
         f"monster_zone_{index}",
@@ -360,7 +359,6 @@ for index, (start, angle) in enumerate(zip(panel_starts, panel_angles), start=1)
         zone_region,
         "blue_dark",
         "blue_dark",
-        (angle, "y", (center_x, 9.0, 6.6)),
     )
 
 for index, boundary in enumerate((13.2, 16.0, 18.8, 21.6), start=1):
@@ -368,6 +366,7 @@ for index, boundary in enumerate((13.2, 16.0, 18.8, 21.6), start=1):
 
 box("blade_center_spine", (10.0, 9.05, 6.42), (25.5, 9.32, 6.92), "white_panel", "silver_dark")
 box("blade_tip_core", (25.2, 7.65, 4.2), (29.4, 8.95, 8.9), "tip_top", "white_panel", "silver_dark")
+# Tip flanks: ±11 was invalid in vanilla; keep silhouette without rotation.
 box(
     "blade_tip_upper",
     (24.8, 7.72, 2.8),
@@ -375,7 +374,6 @@ box(
     "tip_top",
     "white_panel",
     "silver_dark",
-    (-11.0, "y", (25.0, 8.3, 4.2)),
 )
 box(
     "blade_tip_lower",
@@ -384,7 +382,6 @@ box(
     "tip_top",
     "white_panel",
     "silver_dark",
-    (11.0, "y", (25.0, 8.3, 9.0)),
 )
 
 # Shorter shoulder wing on the hub side; it gives the disk the asymmetric
@@ -400,31 +397,211 @@ box("hub_left_strut", (2.2, 7.4, 5.4), (5.2, 8.2, 10.8), "metal_panel", "metal")
 box("hub_right_strut", (10.6, 7.4, 4.6), (13.5, 8.2, 11.5), "metal_panel", "metal")
 box("hub_inner_core", (5.45, 7.85, 5.45), (10.55, 9.05, 10.55), "hub_core", "red_dark", "black")
 
+def bake_y_aabb(frm, to, angle_deg, origin):
+    """AABB after Y rotation — used to bake angles outside {-45,-22.5,0,22.5,45}."""
+    import math as _math
+    x0, y0, z0 = frm
+    x1, y1, z1 = to
+    ox, oy, oz = origin
+    rad = _math.radians(angle_deg)
+    c, s = _math.cos(rad), _math.sin(rad)
+    xs, ys, zs = [], [], []
+    for x in (x0, x1):
+        for y in (y0, y1):
+            for z in (z0, z1):
+                dx, dz = x - ox, z - oz
+                xs.append(ox + dx * c - dz * s)
+                ys.append(y)
+                zs.append(oz + dx * s + dz * c)
+    return (
+        (round(min(xs), 3), round(min(ys), 3), round(min(zs), 3)),
+        (round(max(xs), 3), round(max(ys), 3), round(max(zs), 3)),
+    )
+
+
+# Octagon ring: vanilla cannot store 90/135/180/... so bake k*90 into from/to
+# and keep only a leftover 0 or 45 rotation (both legal).
+_ring_origin = (8.0, 8.5, 8.0)
+_ring_base_from = (10.8, 7.9, 6.2)
+_ring_base_to = (13.2, 9.18, 9.8)
 for index, angle in enumerate(range(0, 360, 45), start=1):
     ring_region = "white_panel" if index % 2 else "silver"
+    bake = (angle // 90) * 90
+    leftover = angle - bake
+    if leftover == 315:  # shouldn't happen with this loop
+        bake, leftover = 270, 45
+    # normalize leftover into {0, 45}
+    if leftover not in (0, 45):
+        # 135->90+45, 225->180+45, 315->270+45 already covered by angle//90
+        raise AssertionError(f"unexpected ring leftover {leftover} for {angle}")
+    frm, to = _ring_base_from, _ring_base_to
+    if bake:
+        frm, to = bake_y_aabb(frm, to, bake, _ring_origin)
+    rot = (leftover, "y", _ring_origin) if leftover else None
     box(
         f"hub_outer_ring_{index}",
-        (10.8, 7.9, 6.2),
-        (13.2, 9.18, 9.8),
+        frm,
+        to,
         ring_region,
         "silver_dark",
         "black",
-        (angle, "y", (8.0, 8.5, 8.0)),
+        rot,
     )
 
+_sec_origin = (8.0, 9.1, 8.0)
+_sec_from = (9.55, 9.02, 6.65)
+_sec_to = (11.35, 9.32, 9.35)
 for index, angle in enumerate((0, 90, 180, 270), start=1):
+    frm, to = _sec_from, _sec_to
+    rot = None
+    if angle:
+        frm, to = bake_y_aabb(frm, to, angle, _sec_origin)
     box(
         f"hub_blue_sector_{index}",
-        (9.55, 9.02, 6.65),
-        (11.35, 9.32, 9.35),
+        frm,
+        to,
         "blue_panel",
         "blue_dark",
         "blue_dark",
-        (angle, "y", (8.0, 9.1, 8.0)),
+        rot,
     )
 
 for index, (bx, bz) in enumerate(((4.35, 4.35), (11.65, 4.35), (4.35, 11.65), (11.65, 11.65)), start=1):
     box(f"hub_bolt_{index}", (bx - 0.35, 9.03, bz - 0.35), (bx + 0.35, 9.28, bz + 0.35), "bolt", "metal")
+
+
+def build_groups(elements):
+    """Blockbench Java item groups starting at root/."""
+    by_name = {e["name"]: i for i, e in enumerate(elements)}
+
+    def idxs(*names):
+        return [by_name[n] for n in names if n in by_name]
+
+    def grp(name, children, color=0, origin=None):
+        return {
+            "name": name,
+            "origin": origin or [8, 8, 8],
+            "color": color,
+            "children": children,
+        }
+
+    cuff = grp(
+        "cuff",
+        idxs(
+            "cuff_black_core",
+            "cuff_leather_body",
+            "cuff_upper_strap",
+            "cuff_lower_strap",
+            "cuff_silver_buckle",
+            "cuff_buckle_inset",
+            "cuff_red_pad",
+            "cuff_rear_hinge",
+            "cuff_front_hinge",
+        ),
+        color=1,
+        origin=[7.2, 5.9, 8.0],
+    )
+    root_seg = grp(
+        "root_seg",
+        idxs("blade_root_plate", "blade_root_upper_rail", "blade_root_lower_rail"),
+        color=2,
+        origin=[12.5, 8.3, 6.6],
+    )
+    mid_seg = grp(
+        "mid_seg",
+        idxs("blade_mid_plate", "blade_mid_upper_rail", "blade_mid_lower_rail"),
+        color=3,
+        origin=[18.0, 8.3, 6.6],
+    )
+    outer_seg = grp(
+        "outer_seg",
+        idxs(
+            "blade_outer_plate",
+            "blade_outer_upper_rail",
+            "blade_outer_lower_rail",
+            "blade_outer_rib",
+        ),
+        color=4,
+        origin=[23.1, 8.3, 6.6],
+    )
+    zones = grp(
+        "zones",
+        idxs(
+            "monster_zone_1",
+            "monster_zone_2",
+            "monster_zone_3",
+            "monster_zone_4",
+            "monster_zone_5",
+            "zone_divider_1",
+            "zone_divider_2",
+            "zone_divider_3",
+            "zone_divider_4",
+        ),
+        color=5,
+        origin=[17.5, 9.1, 6.6],
+    )
+    spine = grp("spine", idxs("blade_center_spine"), color=6, origin=[17.75, 9.2, 6.67])
+    tip = grp(
+        "tip",
+        idxs("blade_tip_core", "blade_tip_upper", "blade_tip_lower"),
+        color=7,
+        origin=[27.0, 8.3, 6.55],
+    )
+    blade = grp(
+        "blade",
+        [root_seg, mid_seg, outer_seg, zones, spine, tip],
+        color=8,
+        origin=[18.0, 8.4, 6.6],
+    )
+    left_wing = grp(
+        "left_wing",
+        idxs(
+            "left_wing_plate",
+            "left_wing_tip",
+            "left_wing_inset",
+            "left_wing_upper_rail",
+            "left_wing_lower_rail",
+        ),
+        color=9,
+        origin=[2.5, 8.4, 6.7],
+    )
+    struts = grp("struts", idxs("hub_left_strut", "hub_right_strut"), color=1, origin=[8.0, 7.8, 8.0])
+    core = grp("core", idxs("hub_inner_core"), color=2, origin=[8.0, 8.45, 8.0])
+    ring = grp(
+        "ring",
+        idxs(
+            "hub_outer_ring_1",
+            "hub_outer_ring_2",
+            "hub_outer_ring_3",
+            "hub_outer_ring_4",
+            "hub_outer_ring_5",
+            "hub_outer_ring_6",
+            "hub_outer_ring_7",
+            "hub_outer_ring_8",
+        ),
+        color=3,
+        origin=[8.0, 8.5, 8.0],
+    )
+    sectors = grp(
+        "sectors",
+        idxs(
+            "hub_blue_sector_1",
+            "hub_blue_sector_2",
+            "hub_blue_sector_3",
+            "hub_blue_sector_4",
+        ),
+        color=4,
+        origin=[8.0, 9.1, 8.0],
+    )
+    bolts = grp(
+        "bolts",
+        idxs("hub_bolt_1", "hub_bolt_2", "hub_bolt_3", "hub_bolt_4"),
+        color=5,
+        origin=[8.0, 9.15, 8.0],
+    )
+    hub = grp("hub", [struts, core, ring, sectors, bolts], color=6, origin=[8.0, 8.5, 8.0])
+    return [grp("root", [cuff, blade, left_wing, hub], color=0, origin=[8.0, 8.0, 8.0])]
+
 
 model = {
     "credit": "KaibaCorp Battle City Duel Disk - anime-inspired vanilla item model",
@@ -434,6 +611,7 @@ model = {
         "particle": "ygomc:item/duel_disk",
     },
     "elements": elements,
+    "groups": build_groups(elements),
     "display": {
         "thirdperson_righthand": {
             "rotation": [0, 0, -90],
@@ -473,6 +651,9 @@ model = {
 }
 
 
+VALID_ROTATION_ANGLES = {-45.0, -22.5, 0.0, 22.5, 45.0}
+
+
 def validate():
     assert 40 <= len(elements) <= 80, len(elements)
     names = [element["name"] for element in elements]
@@ -481,6 +662,12 @@ def validate():
         assert all(element["from"][i] < element["to"][i] for i in range(3)), element["name"]
         assert all(-16 <= value <= 32 for value in element["from"] + element["to"]), element["name"]
         assert set(element["faces"]) == {"north", "east", "south", "west", "up", "down"}
+        rot = element.get("rotation")
+        if rot:
+            assert float(rot["angle"]) in VALID_ROTATION_ANGLES, (
+                element["name"],
+                rot["angle"],
+            )
         for face in element["faces"].values():
             assert face["texture"] == "#0"
             u0, v0, u1, v1 = face["uv"]
@@ -498,24 +685,57 @@ with open(MODEL_PATH, "w", encoding="utf-8") as handle:
 
 note = """# Duel Disk item model
 
-Anime-inspired KaibaCorp Battle City Duel Disk, rebuilt from the supplied GIF.
+Anime-inspired KaibaCorp Battle City Duel Disk (vanilla JSON item model).
 
-- Model: `assets/ygomc/models/item/duel_disk.json` (vanilla JSON, no GeckoLib).
-- Texture: `assets/ygomc/textures/item/duel_disk.png` (128x128 atlas).
-- Silhouette: octagonal blue/silver hub, red mechanical core, leather forearm cuff,
-  white shoulder wing, five blue monster-zone insets, silver dividers, and a pointed
-  outer spearhead.
-- Display transforms keep the disk readable in the GUI and align the cuff with the
-  right/left forearm in third person.
-- Behavior of `DuelDiskItem` is unchanged; this is a visual-only resource update.
-- Regenerate with `python tools/gen_duel_disk_model.py`.
+- Model: `assets/ygomc/models/item/duel_disk.json`
+- Texture: `assets/ygomc/textures/item/duel_disk.png` (128x128 atlas)
+- Regenerate: `python tools/gen_duel_disk_model.py`
+
+## Group tree (Blockbench)
+
+```
+root/
+  cuff/           # leather mount + buckles + hinges
+  blade/
+    root_seg/     # blade_root_*
+    mid_seg/      # blade_mid_*
+    outer_seg/    # blade_outer_*
+    zones/        # monster_zone_* + zone_divider_*
+    spine/        # blade_center_spine
+    tip/          # blade_tip_*
+  left_wing/      # left_wing_*
+  hub/
+    struts/       # hub_left_strut, hub_right_strut
+    core/         # hub_inner_core
+    ring/         # hub_outer_ring_1..8
+    sectors/      # hub_blue_sector_1..4
+    bolts/        # hub_bolt_1..4
+```
+
+Groups are written in Blockbench Java Block/Item format (`groups` array with
+nested objects + element indices). Open the JSON in Blockbench as a **Java
+Block/Item** model. Texture path stays `ygomc:item/duel_disk` for in-game use;
+in Blockbench, File → Import → Texture and point at
+`assets/ygomc/textures/item/duel_disk.png` (or set the resource pack root).
+
+## Vanilla / Blockbench rotation limits
+
+Minecraft (and Blockbench's Java format) only allow element rotations of
+**-45, -22.5, 0, 22.5, 45** degrees. Earlier Codex geometry used:
+
+- monster zones ±2..4 and tip ±11 → snapped to **0** (removed)
+- hub rings 90/135/180/225/270/315 and blue sectors 90/180/270 → **baked**
+  into distinct `from`/`to` AABBs (Y rotation around each origin), with a
+  leftover **0** or **45** kept only when legal
+
+That bake keeps an octagonal hub silhouette without illegal JSON.
 
 ## Verify in-game
 
 1. `/give @s ygomc:duel_disk`
-2. Check the inventory icon shows the hub, five wing panels, and pointed tip.
-3. Hold it in both hands and confirm the cuff aligns with the forearm.
-4. Inspect the hub from the side; the layered ring and red core should remain legible.
+2. Inventory icon: hub, five wing panels, pointed tip
+3. Third-person: cuff along the forearm
+4. Blockbench: open model → Outliner shows `root/` tree; no rotation warnings
 """
 with open(NOTE_PATH, "w", encoding="utf-8") as handle:
     handle.write(note)
