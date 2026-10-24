@@ -6,10 +6,13 @@ Source of truth for geometry/display/hierarchy:
 
 This script:
   1) paints a dense 128x128 atlas (minimal empty waste)
-  2) remaps every *visible* element UV to the packed material regions
-  3) omits fully buried / zero-area faces (no pointless UV islands)
+  2) remaps every element UV to the packed material regions
+  3) exports EVERY element and EVERY face by default (no buried-face cull;
+     vanishing cubes are worse than wasted UV on hidden faces)
   4) writes common/.../models/item/duel_disk.json + textures/item/duel_disk.png
   5) re-embeds the same PNG into the bbmodel (keeps user geometry/display/groups)
+
+Set CULL_BURIED_FACES=True only for experimental atlas experiments — never default.
 """
 from __future__ import annotations
 
@@ -31,6 +34,9 @@ TEXTURE_SIZE = 128
 LEGAL_ANGLES = (-45.0, -22.5, 0.0, 22.5, 45.0)
 OCCLUDE_EPS = 0.05
 OCCLUDE_PROBE = 0.01
+# Off by default: AABB buried-face probes wrongly culled exterior faces
+# (247e34e dropped left_wing_inset + 34 faces; user saw vanishing cubes).
+CULL_BURIED_FACES = False
 
 TRANSPARENT = (0, 0, 0, 0)
 BLACK = (17, 21, 28, 255)
@@ -565,7 +571,12 @@ def main() -> None:
     TEX_PATH.parent.mkdir(parents=True, exist_ok=True)
     img.save(TEX_PATH)
 
-    visible = compute_visible_faces(bb["elements"])
+    all_faces = set(FACE_AXES)
+    if CULL_BURIED_FACES:
+        visible = compute_visible_faces(bb["elements"])
+    else:
+        # Keep every face on every cube — including fully buried ones.
+        visible = [set(all_faces) for _ in bb["elements"]]
     culled_faces = 0
     dropped_elements = 0
     java_elements = []
@@ -583,7 +594,7 @@ def main() -> None:
     groups = convert_groups(bb, bb["elements"], keep_indices)
 
     model = {
-        "credit": "KaibaCorp Battle City Duel Disk — geometry from Blockbench, dense atlas, culled hidden faces",
+        "credit": "KaibaCorp Battle City Duel Disk — geometry from Blockbench, dense atlas, full faces",
         "texture_size": [TEXTURE_SIZE, TEXTURE_SIZE],
         "textures": {
             "0": "ygomc:item/duel_disk",
@@ -597,7 +608,7 @@ def main() -> None:
     MODEL_PATH.write_text(json.dumps(model, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
     # Remap UVs inside bbmodel + re-embed PNG; keep geometry/display/groups/outliner.
-    # Culled faces are omitted from the cube (Blockbench: face disabled).
+    # By default every face is rewritten (CULL_BURIED_FACES=False).
     png_bytes = TEX_PATH.read_bytes()
     b64 = base64.b64encode(png_bytes).decode("ascii")
     for i, el in enumerate(bb["elements"]):
